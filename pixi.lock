@@ -880,8 +880,8 @@ packages:
   timestamp: 1773314012590
 - pypi: ./
   name: homericintelligence-hephaestus
-  version: 0.4.0
-  sha256: 5cf27ab367bce8879d509b9e81064a5994b7ca673e2d221add2fe462530dab5e
+  version: 0.5.0
+  sha256: c15ce6ac360ce72f2bcadb68a97b5af1122f1996064803ca36e4c6bbd3adb484
   requires_dist:
   - pyyaml>=6.0,<7
   - pytest>=9.0,<10 ; extra == 'dev'
@@ -891,6 +891,10 @@ packages:
   - mypy>=1.8.0,<2 ; extra == 'dev'
   - build>=1.0,<2 ; extra == 'dev'
   - pygithub>=1.55,<3 ; extra == 'github'
+  - tomli>=2.0,<3 ; python_full_version < '3.11' and extra == 'toml'
+  - defusedxml>=0.7,<1 ; extra == 'xml'
+  - jsonschema>=4.0,<5 ; extra == 'schema'
+  - homericintelligence-hephaestus[github,toml,xml,schema] ; extra == 'all'
   requires_python: '>=3.10'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/icu-78.2-h33c6efd_0.conda
   sha256: 142a722072fa96cf16ff98eaaf641f54ab84744af81754c292cb81e0881c0329

@@ -25,6 +25,7 @@ classifiers = [
 ]
 keywords = ["utilities", "helpers", "tooling", "homericintelligence"]
 dependencies = [
+    "packaging>=21.0",
     "pyyaml>=6.0,<7",
 ]
 

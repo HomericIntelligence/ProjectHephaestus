@@ -172,8 +172,8 @@ class TestMergeWithEnv:
     """Tests for merge_with_env."""
 
     def test_env_variable_overrides(self, monkeypatch):
-        """Environment variable overrides config value."""
-        monkeypatch.setenv("HEPHAESTUS_DATABASE_HOST", "envhost")
+        """Environment variable with __ nesting overrides config value."""
+        monkeypatch.setenv("HEPHAESTUS_DATABASE__HOST", "envhost")
         config = {"database": {"host": "localhost"}}
         result = merge_with_env(config)
         assert result["database"]["host"] == "envhost"
@@ -202,6 +202,36 @@ class TestMergeWithEnv:
         config = {"a": 1}
         result = merge_with_env(config)
         assert result == {"a": 1}
+
+    def test_single_underscore_preserved(self, monkeypatch):
+        """Single underscore is preserved as literal in the key name."""
+        monkeypatch.setenv("HEPHAESTUS_MAX_CONNECTIONS", "100")
+        result = merge_with_env({})
+        assert result["max_connections"] == 100
+
+    def test_double_underscore_nesting(self, monkeypatch):
+        """Double underscore creates nested config keys."""
+        monkeypatch.setenv("HEPHAESTUS_DATABASE__HOST", "dbhost")
+        result = merge_with_env({})
+        assert result == {"database": {"host": "dbhost"}}
+
+    def test_mixed_nesting_and_underscore(self, monkeypatch):
+        """Double underscore nests, single underscore preserved in segment."""
+        monkeypatch.setenv("HEPHAESTUS_DATABASE__MAX_CONNECTIONS", "50")
+        result = merge_with_env({})
+        assert result == {"database": {"max_connections": 50}}
+
+    def test_deep_double_underscore_nesting(self, monkeypatch):
+        """Multiple double underscores create deeply nested keys."""
+        monkeypatch.setenv("HEPHAESTUS_A__B__C", "deep")
+        result = merge_with_env({})
+        assert result == {"a": {"b": {"c": "deep"}}}
+
+    def test_triple_underscore_edge_case(self, monkeypatch):
+        """Triple underscore splits as __ + _, preserving leading _ in segment."""
+        monkeypatch.setenv("HEPHAESTUS_A___B", "val")
+        result = merge_with_env({})
+        assert result == {"a": {"_b": "val"}}
 
 
 class TestLoadYamlConfig:

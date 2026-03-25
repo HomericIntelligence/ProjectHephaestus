@@ -217,3 +217,46 @@ class TestInstallPackage:
         install_package("some-package", upgrade=True)
         cmd = mock_run.call_args[0][0]
         assert "--upgrade" in cmd
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "requests",
+            "my-package",
+            "my_package",
+            "pkg.name",
+            "pkg[extra1]",
+            "pkg[extra1,extra2]",
+            "pkg>=1.0",
+            "pkg>=1.0,<2",
+            "pkg==1.2.3",
+            "pkg!=1.3",
+        ],
+    )
+    @patch("hephaestus.utils.helpers.run_subprocess")
+    def test_valid_requirement_accepted(self, mock_run, name):
+        """Accepts valid PEP 508 requirement strings."""
+        mock_run.return_value = MagicMock(returncode=0)
+        assert install_package(name) is True
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "pkg1 pkg2",
+            "pkg; rm -rf /",
+            "",
+            "   ",
+            "pkg && echo pwned",
+            "pkg | cat /etc/passwd",
+            "pkg\nnewline",
+        ],
+    )
+    def test_invalid_requirement_rejected(self, name):
+        """Rejects invalid or dangerous requirement strings."""
+        with pytest.raises(ValueError, match="Invalid package requirement"):
+            install_package(name)
+
+    def test_url_requirement_rejected(self):
+        """Rejects URL-based requirements for security."""
+        with pytest.raises(ValueError, match="URL-based requirements are not supported"):
+            install_package("pkg @ https://evil.com/malware.tar.gz")

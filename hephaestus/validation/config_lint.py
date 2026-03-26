@@ -94,6 +94,39 @@ class ConfigLinter:
 
         return len(self.errors) == 0
 
+    @staticmethod
+    def _strip_inline_comment(line: str) -> str:
+        """Strip inline YAML comments while preserving # inside quoted strings.
+
+        Per YAML spec, # is a comment delimiter only when:
+        - It is preceded by whitespace (or is the first character)
+        - It is NOT inside a single-quoted or double-quoted scalar
+
+        Args:
+            line: A single line of YAML text
+
+        Returns:
+            The line with any inline comment removed
+
+        """
+        in_single_quote = False
+        in_double_quote = False
+
+        for i, char in enumerate(line):
+            if char == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+            elif char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+            elif (
+                char == "#"
+                and not in_single_quote
+                and not in_double_quote
+                and (i == 0 or line[i - 1] in (" ", "\t"))
+            ):
+                return line[:i]
+
+        return line
+
     def _check_yaml_syntax(self, content: str, filepath: Path) -> bool:
         """Check if YAML syntax is valid.
 
@@ -112,7 +145,7 @@ class ConfigLinter:
 
             for i, line in enumerate(lines):
                 # Skip comments
-                stripped = line.split("#")[0]
+                stripped = self._strip_inline_comment(line)
 
                 # Count braces and brackets
                 brace_count += stripped.count("{") - stripped.count("}")

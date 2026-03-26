@@ -20,23 +20,24 @@ ProjectHephaestus is the shared utilities and tooling repository of the HomericI
 
 ```text
 ProjectHephaestus/
-├── hephaestus/                 # Python source code
-│   ├── utils/                  # General utility functions (slugify, retry, subprocess)
-│   ├── config/                 # Configuration management
-│   ├── logging/                # Logging utilities
-│   ├── io/                     # Input/output utilities
-│   ├── cli/                    # Command-line interface tools
-│   ├── system/                 # System information collection
-│   ├── git/                    # Git utilities (changelog, commit parsing)
-│   ├── github/                 # GitHub automation (PR merging)
-│   ├── datasets/               # Dataset downloading utilities
-│   ├── markdown/               # Markdown linting and link fixing
-│   ├── benchmarks/             # Benchmark comparison utilities
-│   ├── version/                # Version management
-│   └── validation/             # README and config validation
+├── src/
+│   └── hephaestus/             # Python source code (src-layout)
+│       ├── utils/              # General utility functions (slugify, retry, subprocess)
+│       ├── config/             # Configuration management
+│       ├── logging/            # Logging utilities
+│       ├── io/                 # Input/output utilities
+│       ├── cli/                # Command-line interface tools
+│       ├── system/             # System information collection
+│       ├── git/                # Git utilities (changelog, commit parsing)
+│       ├── github/             # GitHub automation (PR merging)
+│       ├── datasets/           # Dataset downloading utilities
+│       ├── markdown/           # Markdown linting and link fixing
+│       ├── benchmarks/         # Benchmark comparison utilities
+│       ├── version/            # Version management
+│       └── validation/         # README and config validation
 ├── scripts/                    # Automation and maintenance scripts
 ├── tests/                      # Unit and integration tests
-│   ├── unit/                   # Unit tests (mirrors hephaestus/ structure)
+│   ├── unit/                   # Unit tests (mirrors src/hephaestus/ structure)
 │   └── integration/            # Integration tests
 ├── docs/                       # Documentation
 └── .claude/                    # Claude Code configurations
@@ -209,7 +210,7 @@ Is the task well-defined with predictable steps?
 **DO**: Use repo-relative file paths with line numbers:
 
 ```markdown
-Updated hephaestus/utils/helpers.py:45-52
+Updated src/hephaestus/utils/helpers.py:45-52
 ```
 
 #### GitHub Issue Integration
@@ -275,7 +276,7 @@ pixi run pytest tests/unit -v
 pixi run pytest tests/unit/utils/test_general_utils.py -v
 
 # Run with coverage
-pixi run pytest tests/unit --cov=hephaestus --cov-report=html
+pixi run pytest tests/unit --cov=src/hephaestus --cov-report=html
 ```
 
 ## Environment Setup
@@ -299,13 +300,13 @@ pre-commit install
 pixi run pytest tests/unit
 
 # Run linter
-pixi run ruff check hephaestus/ tests/
+pixi run ruff check src/hephaestus/ tests/
 
 # Run formatter
-pixi run ruff format hephaestus/ tests/
+pixi run ruff format src/hephaestus/ tests/
 
 # Run type checking
-pixi run mypy hephaestus/
+pixi run mypy src/hephaestus/
 ```
 
 ### Pre-commit Hooks
@@ -329,7 +330,7 @@ pre-commit run --all-files
 1. **Import Errors**: Check that `pixi install` has been run
 2. **Dependency Conflicts**: Update `pixi.toml` and run `pixi install`
 3. **Test Failures**: Run tests with verbose output for details
-4. **Formatting Issues**: Run `pixi run ruff format hephaestus/ tests/`
+4. **Formatting Issues**: Run `pixi run ruff format src/hephaestus/ tests/`
 
 ### Getting Help
 
@@ -340,15 +341,15 @@ pre-commit run --all-files
 
 ## Key Files and Directories
 
-- `hephaestus/utils/` - Core utility functions (slugify, retry, subprocess helpers)
-- `hephaestus/config/` - Configuration loading (YAML, JSON, env vars)
-- `hephaestus/io/` - File I/O (read, write, safe_write, load/save data)
-- `hephaestus/logging/` - Enhanced logging (ContextLogger, setup_logging)
-- `hephaestus/cli/` - CLI utilities (argument parsing, output formatting)
-- `hephaestus/system/` - System information collection
-- `hephaestus/git/` - Git utilities (changelog generation)
-- `hephaestus/github/` - GitHub automation (PR merging)
-- `tests/unit/` - Unit test suite (mirrors hephaestus/ package structure)
+- `src/hephaestus/utils/` - Core utility functions (slugify, retry, subprocess helpers)
+- `src/hephaestus/config/` - Configuration loading (YAML, JSON, env vars)
+- `src/hephaestus/io/` - File I/O (read, write, safe_write, load/save data)
+- `src/hephaestus/logging/` - Enhanced logging (ContextLogger, setup_logging)
+- `src/hephaestus/cli/` - CLI utilities (argument parsing, output formatting)
+- `src/hephaestus/system/` - System information collection
+- `src/hephaestus/git/` - Git utilities (changelog generation)
+- `src/hephaestus/github/` - GitHub automation (PR merging)
+- `tests/unit/` - Unit test suite (mirrors src/hephaestus/ package structure)
 - `tests/integration/` - Integration tests (package importability, smoke tests)
 - `scripts/` - Automation and maintenance tools
 - `docs/` - Documentation and guides

@@ -11,6 +11,6 @@ pixi.toml @mvillmow
 .github/ @mvillmow
 
 # Core source
-hephaestus/ @mvillmow
+src/hephaestus/ @mvillmow
 tests/ @mvillmow
 scripts/ @mvillmow

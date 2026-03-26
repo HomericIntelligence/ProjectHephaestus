@@ -15,7 +15,8 @@ Currently consolidating utilities from:
 
 ```
 ProjectHephaestus/
-├── hephaestus/       # Python package (13 subpackages)
+├── src/
+│   └── hephaestus/   # Python package (src-layout, 13 subpackages)
 ├── tests/            # Unit and integration tests
 ├── scripts/          # Automation scripts
 ├── docs/             # Documentation

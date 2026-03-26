@@ -17,21 +17,22 @@ ProjectHephaestus provides standardized utility functions and tools that can be 
 ProjectHephaestus/
 ├── pixi.toml          # Pixi configuration
 ├── pyproject.toml     # Python package configuration
-├── hephaestus/        # Main package
-│   ├── __init__.py
-│   ├── utils/         # General utility functions (slugify, retry, subprocess)
-│   ├── config/        # Configuration utilities (YAML, JSON, env vars)
-│   ├── io/            # I/O utilities (read, write, safe_write, load/save data)
-│   ├── cli/           # CLI helpers (argument parsing, output formatting)
-│   ├── logging/       # Logging utilities (ContextLogger, setup_logging)
-│   ├── system/        # System information collection
-│   ├── git/           # Git utilities (changelog generation)
-│   ├── github/        # GitHub automation (PR merging)
-│   ├── datasets/      # Dataset downloading utilities
-│   ├── markdown/      # Markdown linting and link fixing
-│   ├── benchmarks/    # Benchmark comparison utilities
-│   ├── version/       # Version management
-│   └── validation/    # README and config validation
+├── src/
+│   └── hephaestus/    # Main package (src-layout)
+│       ├── __init__.py
+│       ├── utils/     # General utility functions (slugify, retry, subprocess)
+│       ├── config/    # Configuration utilities (YAML, JSON, env vars)
+│       ├── io/        # I/O utilities (read, write, safe_write, load/save data)
+│       ├── cli/       # CLI helpers (argument parsing, output formatting)
+│       ├── logging/   # Logging utilities (ContextLogger, setup_logging)
+│       ├── system/    # System information collection
+│       ├── git/       # Git utilities (changelog generation)
+│       ├── github/    # GitHub automation (PR merging)
+│       ├── datasets/  # Dataset downloading utilities
+│       ├── markdown/  # Markdown linting and link fixing
+│       ├── benchmarks/ # Benchmark comparison utilities
+│       ├── version/   # Version management
+│       └── validation/ # README and config validation
 ├── tests/             # Unit tests
 ├── docs/              # Documentation
 ├── scripts/           # Utility scripts

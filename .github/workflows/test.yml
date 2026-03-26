@@ -14,7 +14,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         python-version: ["3.12"]
-        test-type: [unit, integration]
+        test-type: [unit, integration, mypy]
 
     steps:
       - uses: actions/checkout@v6
@@ -55,6 +55,10 @@ jobs:
         if: matrix.test-type == 'integration'
         run: |
           pixi run pytest tests/integration --override-ini="addopts=" -v --strict-markers
+
+      - name: Run mypy type checking
+        if: matrix.test-type == 'mypy'
+        run: pixi run mypy
 
       - name: Build wheel smoke test
         if: matrix.test-type == 'integration'

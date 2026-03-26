@@ -19,6 +19,10 @@ from typing import Any
 
 from hephaestus.constants import LOG_FORMAT
 
+# Registry tracking which handler keys have been configured for each logger name.
+# Maps logger name -> set of handler keys (e.g. {"console", "/path/to/file.log"}).
+_configured_loggers: dict[str, set[str]] = {}
+
 
 class ContextLogger(logging.LoggerAdapter):  # type: ignore[type-arg]
     """Logger adapter that adds context information to log messages."""
@@ -73,20 +77,25 @@ def get_logger(
     logger = logging.getLogger(name)
     logger.setLevel(level or logging.INFO)
 
-    # Prevent adding handlers multiple times
-    if not logger.handlers:
-        formatter = logging.Formatter(LOG_FORMAT)
+    configured = _configured_loggers.setdefault(name, set())
+    formatter = logging.Formatter(LOG_FORMAT)
 
-        # Console handler
+    # Console handler — add once per logger name
+    if "console" not in configured:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
+        configured.add("console")
 
-        # File handler (optional)
-        if log_file:
-            file_handler = logging.FileHandler(log_file)
-            file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
+    # File handler — add if a new file path is requested
+    if log_file and log_file not in configured:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+        configured.add(log_file)
+
+    # Prevent duplicate messages from parent loggers
+    logger.propagate = False
 
     return ContextLogger(logger, context)
 

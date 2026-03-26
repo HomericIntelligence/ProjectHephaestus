@@ -88,6 +88,10 @@ def get_logger(
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)
 
+        # Prevent duplicate output when root logger also has handlers
+        # (e.g., from setup_logging() or logging.basicConfig())
+        logger.propagate = False
+
     return ContextLogger(logger, context)
 
 

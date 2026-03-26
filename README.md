@@ -1,6 +1,6 @@
 # ProjectHephaestus
 
-Shared utilities and tooling for the HomericIntelligence ecosystem, powered by [Pixi](https://pixi.sh) for environment management.
+Shared utilities and tooling for the HomericIntelligence ecosystem, powered by [Pixi](https://pixi.sh) for environment management and [just](https://github.com/casey/just) for a consistent developer experience.
 
 ## Overview
 
@@ -15,6 +15,7 @@ ProjectHephaestus provides standardized utility functions and tools that can be 
 
 ```
 ProjectHephaestus/
+├── justfile           # One-command developer workflows
 ├── pixi.toml          # Pixi configuration
 ├── pyproject.toml     # Python package configuration
 ├── hephaestus/        # Main package
@@ -38,43 +39,50 @@ ProjectHephaestus/
 └── README.md          # This file
 ```
 
-## Getting Started with Pixi
+## Getting Started
 
-This project uses [Pixi](https://pixi.sh) for environment management, which automatically handles dependencies and creates isolated environments.
+This project uses [just](https://github.com/casey/just) for one-command workflows and [Pixi](https://pixi.sh) for environment management.
 
 ### Prerequisites
 
-Install Pixi by following the [official installation guide](https://pixi.sh/install/).
+- Install [just](https://github.com/casey/just#installation)
+- Install [Pixi](https://pixi.sh/install/)
 
 ### Setup Development Environment
 
 ```bash
-# Install dependencies and create environment
-pixi install
-
-# Activate the environment (optional, as pixi runs commands in the environment automatically)
-pixi shell
+# One-command bootstrap: installs dependencies and configures pre-commit hooks
+just bootstrap
 ```
 
 ### Running Tests
 
 ```bash
-# Run tests using the test feature
-pixi run test
+# Run unit tests
+just test
 
-# Or run tests directly with pytest
-pixi run pytest
+# Run with extra flags
+just test -v
+just test -k test_slugify
 ```
 
 ### Development Commands
 
 ```bash
-# Format code with ruff
-pixi run format
+# Format code
+just format
 
-# Lint code with ruff
-pixi run lint
+# Lint code
+just lint
+
+# Type check
+just typecheck
+
+# Run all checks (lint + typecheck + test)
+just check
 ```
+
+> **Note:** All `just` recipes wrap `pixi run` commands. If you don't have `just` installed, you can use `pixi run` directly (see `pixi.toml` for available tasks).
 
 ## Usage
 
@@ -173,6 +181,7 @@ hephaestus-merge-prs --help
 3. Document all public functions with Google-style docstrings
 4. Use type hints for all function parameters and return values
 5. Keep functions small and focused (single responsibility principle)
+6. Use `just` recipes for all common workflows (run `just` to see available recipes)
 
 ## Contributing
 

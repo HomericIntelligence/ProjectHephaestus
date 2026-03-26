@@ -52,6 +52,28 @@ class ContextLogger(logging.LoggerAdapter):  # type: ignore[type-arg]
         return ContextLogger(self.logger, new_context)
 
 
+def _close_handlers(logger: logging.Logger) -> None:
+    """Close and remove all handlers from a logger.
+
+    Prevents file descriptor leaks when reconfiguring logging by explicitly
+    closing each handler before removal.
+
+    Args:
+        logger: Logger whose handlers should be closed and removed.
+
+    """
+    for handler in logger.handlers[:]:
+        try:
+            handler.close()
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "Failed to close handler %r during logging reconfiguration",
+                handler,
+                exc_info=True,
+            )
+        logger.removeHandler(handler)
+
+
 def get_logger(
     name: str,
     level: int | None = None,
@@ -108,14 +130,17 @@ def setup_logging(
     """
     format_string = format_string or LOG_FORMAT
 
-    handlers = [logging.StreamHandler(sys.stdout)]
+    # Close existing handlers to prevent file descriptor leaks (#124)
+    _close_handlers(logging.getLogger())
+
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
 
     if log_to_stderr:
         handlers.append(logging.StreamHandler(sys.stderr))
 
-    logging.basicConfig(level=level, format=format_string, handlers=handlers)
-
     if log_file:
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(logging.Formatter(format_string))
-        logging.getLogger().addHandler(file_handler)
+        handlers.append(file_handler)
+
+    logging.basicConfig(level=level, format=format_string, handlers=handlers, force=True)

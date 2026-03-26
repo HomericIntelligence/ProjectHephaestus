@@ -4,9 +4,11 @@
 import logging
 import threading
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from hephaestus.logging.utils import (
     ContextLogger,
+    _close_handlers,
     get_logger,
     setup_logging,
 )
@@ -115,7 +117,6 @@ class TestSetupLogging:
         import sys
 
         root = logging.getLogger()
-        # basicConfig is a no-op if handlers already exist; clear them first.
         saved = list(root.handlers)
         root.handlers.clear()
         try:
@@ -129,3 +130,115 @@ class TestSetupLogging:
         finally:
             root.handlers.clear()
             root.handlers.extend(saved)
+
+    def test_repeated_calls_close_file_handlers(self, tmp_path: Path) -> None:
+        """Repeated setup_logging calls close previous FileHandlers."""
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        try:
+            file1 = str(tmp_path / "first.log")
+            file2 = str(tmp_path / "second.log")
+
+            setup_logging(log_file=file1)
+            # Grab the file handler from the first call
+            first_file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
+            assert len(first_file_handlers) == 1
+            first_handler = first_file_handlers[0]
+
+            # Save the stream reference before it gets closed
+            first_stream = first_handler.stream
+
+            setup_logging(log_file=file2)
+            # The first file handler's stream should be closed
+            assert first_stream.closed
+            # Only the second file handler should remain
+            current_file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
+            assert len(current_file_handlers) == 1
+            assert current_file_handlers[0].baseFilename == file2
+        finally:
+            for h in root.handlers[:]:
+                h.close()
+            root.handlers.clear()
+            root.handlers.extend(saved)
+
+    def test_repeated_calls_no_handler_accumulation(self) -> None:
+        """Repeated setup_logging calls do not accumulate handlers."""
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        try:
+            setup_logging()
+            count_after_first = len(root.handlers)
+
+            setup_logging()
+            count_after_second = len(root.handlers)
+
+            assert count_after_second == count_after_first
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved)
+
+    def test_force_reconfigures_level(self) -> None:
+        """Repeated setup_logging calls actually change the log level."""
+        root = logging.getLogger()
+        saved_handlers = list(root.handlers)
+        saved_level = root.level
+        root.handlers.clear()
+        try:
+            setup_logging(level=logging.WARNING)
+            assert root.level == logging.WARNING
+
+            setup_logging(level=logging.DEBUG)
+            assert root.level == logging.DEBUG
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved_handlers)
+            root.setLevel(saved_level)
+
+    def test_handler_close_failure_does_not_raise(self) -> None:
+        """setup_logging completes even if a handler's close() raises."""
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        try:
+            # Add a mock handler whose close() raises
+            bad_handler = MagicMock(spec=logging.Handler)
+            bad_handler.close.side_effect = OSError("disk error")
+            root.addHandler(bad_handler)
+
+            # Should not raise
+            setup_logging()
+            bad_handler.close.assert_called_once()
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved)
+
+
+class TestCloseHandlers:
+    """Tests for _close_handlers helper."""
+
+    def test_closes_and_removes_all_handlers(self) -> None:
+        """_close_handlers closes and removes every handler."""
+        logger = logging.getLogger("test._close_handlers")
+        h1 = logging.StreamHandler()
+        h2 = logging.StreamHandler()
+        logger.addHandler(h1)
+        logger.addHandler(h2)
+
+        _close_handlers(logger)
+
+        assert len(logger.handlers) == 0
+
+    def test_closes_file_handler_stream(self, tmp_path: Path) -> None:
+        """_close_handlers closes the underlying file stream."""
+        logger = logging.getLogger("test._close_handlers_file")
+        fh = logging.FileHandler(str(tmp_path / "test.log"))
+        logger.addHandler(fh)
+        # Save stream reference before close() sets it to None
+        stream = fh.stream
+
+        _close_handlers(logger)
+
+        assert stream.closed
+        assert len(logger.handlers) == 0

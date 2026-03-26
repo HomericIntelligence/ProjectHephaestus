@@ -18,6 +18,7 @@ import threading
 from typing import Any
 
 from hephaestus.constants import LOG_FORMAT
+from hephaestus.logging.formatters import JsonFormatter
 
 
 class ContextLogger(logging.LoggerAdapter):  # type: ignore[type-arg]
@@ -57,6 +58,7 @@ def get_logger(
     level: int | None = None,
     log_file: str | None = None,
     context: dict[str, Any] | None = None,
+    json_format: bool = False,
 ) -> ContextLogger:
     """Get a configured logger instance with optional context.
 
@@ -65,6 +67,7 @@ def get_logger(
         level: Logging level (defaults to INFO)
         log_file: Optional file to log to
         context: Optional context dictionary to include in logs
+        json_format: If True, use structured JSON output instead of plain text
 
     Returns:
         Configured ContextLogger instance
@@ -75,7 +78,9 @@ def get_logger(
 
     # Prevent adding handlers multiple times
     if not logger.handlers:
-        formatter = logging.Formatter(LOG_FORMAT)
+        formatter: logging.Formatter = (
+            JsonFormatter() if json_format else logging.Formatter(LOG_FORMAT)
+        )
 
         # Console handler
         console_handler = logging.StreamHandler(sys.stdout)
@@ -96,26 +101,37 @@ def setup_logging(
     log_file: str | None = None,
     format_string: str | None = None,
     log_to_stderr: bool = False,
+    json_format: bool = False,
 ) -> None:
     """Set up global logging configuration.
 
     Args:
         level: Default logging level
         log_file: Optional file to log to
-        format_string: Custom log format
+        format_string: Custom log format (ignored when *json_format* is True)
         log_to_stderr: Whether to also log to stderr
+        json_format: If True, use structured JSON output instead of plain text
 
     """
-    format_string = format_string or LOG_FORMAT
+    formatter: logging.Formatter
+    if json_format:
+        formatter = JsonFormatter()
+    else:
+        format_string = format_string or LOG_FORMAT
+        formatter = logging.Formatter(format_string)
 
-    handlers = [logging.StreamHandler(sys.stdout)]
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(formatter)
+    handlers: list[logging.Handler] = [stdout_handler]
 
     if log_to_stderr:
-        handlers.append(logging.StreamHandler(sys.stderr))
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setFormatter(formatter)
+        handlers.append(stderr_handler)
 
-    logging.basicConfig(level=level, format=format_string, handlers=handlers)
+    logging.basicConfig(level=level, handlers=handlers)
 
     if log_file:
         file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(logging.Formatter(format_string))
+        file_handler.setFormatter(formatter)
         logging.getLogger().addHandler(file_handler)

@@ -129,3 +129,133 @@ class TestSetupLogging:
         finally:
             root.handlers.clear()
             root.handlers.extend(saved)
+
+    def test_change_log_to_stderr_on(self) -> None:
+        """Calling setup_logging again with log_to_stderr=True adds a stderr handler."""
+        import sys
+
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        try:
+            setup_logging(log_to_stderr=False)
+            stderr_handlers = [
+                h
+                for h in root.handlers
+                if isinstance(h, logging.StreamHandler) and h.stream is sys.stderr
+            ]
+            assert len(stderr_handlers) == 0
+
+            setup_logging(log_to_stderr=True)
+            stderr_handlers = [
+                h
+                for h in root.handlers
+                if isinstance(h, logging.StreamHandler) and h.stream is sys.stderr
+            ]
+            assert len(stderr_handlers) == 1
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved)
+
+    def test_change_log_to_stderr_off(self) -> None:
+        """Calling setup_logging again without log_to_stderr removes stderr handler."""
+        import sys
+
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        try:
+            setup_logging(log_to_stderr=True)
+            stderr_handlers = [
+                h
+                for h in root.handlers
+                if isinstance(h, logging.StreamHandler) and h.stream is sys.stderr
+            ]
+            assert len(stderr_handlers) == 1
+
+            setup_logging(log_to_stderr=False)
+            stderr_handlers = [
+                h
+                for h in root.handlers
+                if isinstance(h, logging.StreamHandler) and h.stream is sys.stderr
+            ]
+            assert len(stderr_handlers) == 0
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved)
+
+    def test_change_log_level(self) -> None:
+        """Calling setup_logging again with a different level updates root level."""
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        try:
+            setup_logging(level=logging.INFO)
+            assert root.level == logging.INFO
+
+            setup_logging(level=logging.DEBUG)
+            assert root.level == logging.DEBUG
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved)
+
+    def test_change_log_file(self, tmp_path: Path) -> None:
+        """Calling setup_logging with log_file adds a FileHandler."""
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        try:
+            setup_logging()
+            file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
+            assert len(file_handlers) == 0
+
+            log_file = str(tmp_path / "change.log")
+            setup_logging(log_file=log_file)
+            file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
+            assert len(file_handlers) == 1
+            assert file_handlers[0].baseFilename == log_file
+        finally:
+            for h in root.handlers:
+                if isinstance(h, logging.FileHandler):
+                    h.close()
+            root.handlers.clear()
+            root.handlers.extend(saved)
+
+    def test_change_remove_log_file(self, tmp_path: Path) -> None:
+        """Calling setup_logging without log_file removes FileHandler."""
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        try:
+            log_file = str(tmp_path / "remove.log")
+            setup_logging(log_file=log_file)
+            file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
+            assert len(file_handlers) == 1
+
+            setup_logging()
+            file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
+            assert len(file_handlers) == 0
+        finally:
+            for h in root.handlers:
+                if isinstance(h, logging.FileHandler):
+                    h.close()
+            root.handlers.clear()
+            root.handlers.extend(saved)
+
+    def test_change_format_string(self) -> None:
+        """Calling setup_logging with a new format updates handler formatters."""
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        try:
+            setup_logging(format_string="%(message)s")
+            for h in root.handlers:
+                assert h.formatter._fmt == "%(message)s"  # type: ignore[union-attr]
+
+            custom_fmt = "%(levelname)s - %(message)s"
+            setup_logging(format_string=custom_fmt)
+            for h in root.handlers:
+                assert h.formatter._fmt == custom_fmt  # type: ignore[union-attr]
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved)

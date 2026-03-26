@@ -72,6 +72,24 @@ class TestContextLogger:
         _msg, kwargs = logger.process("hello", {})
         assert kwargs["extra"]["x"] == 42
 
+    def test_process_does_not_mutate_caller_extra(self) -> None:
+        """process() must not mutate the caller-provided extra dict."""
+        logger = get_logger("test.no_mutate", context={"ctx_key": "ctx_val"})
+        caller_extra: dict[str, str] = {"request_id": "abc"}
+        original_extra = caller_extra.copy()
+
+        logger.process("msg", {"extra": caller_extra})
+
+        assert caller_extra == original_extra
+
+    def test_process_includes_bound_context(self, capfd: object) -> None:
+        """Context added via bind() appears in process() output."""
+        base = get_logger("test.bound_context")
+        bound = base.bind(user="alice", session="s1")
+        _msg, kwargs = bound.process("hello", {})
+        assert kwargs["extra"]["user"] == "alice"
+        assert kwargs["extra"]["session"] == "s1"
+
     def test_bind_thread_safe(self) -> None:
         """Concurrent bind() calls do not corrupt context."""
         base = get_logger("test.thread_safe", context={"base": 0})

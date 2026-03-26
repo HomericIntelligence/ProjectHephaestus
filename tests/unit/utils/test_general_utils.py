@@ -217,3 +217,8 @@ class TestInstallPackage:
         install_package("some-package", upgrade=True)
         cmd = mock_run.call_args[0][0]
         assert "--upgrade" in cmd
+
+    def test_empty_string_raises_value_error(self):
+        """Empty string is rejected by package name validation."""
+        with pytest.raises(ValueError, match="Invalid package name"):
+            install_package("")

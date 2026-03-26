@@ -13,6 +13,7 @@ Usage:
 """
 
 import logging
+import os
 import sys
 import threading
 from typing import Any
@@ -73,17 +74,26 @@ def get_logger(
     logger = logging.getLogger(name)
     logger.setLevel(level or logging.INFO)
 
-    # Prevent adding handlers multiple times
-    if not logger.handlers:
-        formatter = logging.Formatter(LOG_FORMAT)
+    formatter = logging.Formatter(LOG_FORMAT)
 
-        # Console handler
+    # Add console handler only if one doesn't already exist
+    has_console = any(
+        isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+        for h in logger.handlers
+    )
+    if not has_console:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
 
-        # File handler (optional)
-        if log_file:
+    # Add file handler if log_file is specified and no handler for this path exists
+    if log_file:
+        resolved = os.path.abspath(log_file)
+        has_file = any(
+            isinstance(h, logging.FileHandler) and h.baseFilename == resolved
+            for h in logger.handlers
+        )
+        if not has_file:
             file_handler = logging.FileHandler(log_file)
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)

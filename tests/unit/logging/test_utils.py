@@ -43,6 +43,41 @@ class TestGetLogger:
         handler_types = [type(h) for h in logger.logger.handlers]
         assert logging.FileHandler in handler_types
 
+    def test_log_file_added_on_subsequent_call(self, tmp_path: Path) -> None:
+        """log_file handler is added even when logger already has handlers."""
+        log_file = str(tmp_path / "subsequent.log")
+        # First call without log_file
+        get_logger("test.subsequent_file")
+        # Second call with log_file
+        logger = get_logger("test.subsequent_file", log_file=log_file)
+        file_handlers = [
+            h for h in logger.logger.handlers if isinstance(h, logging.FileHandler)
+        ]
+        assert len(file_handlers) == 1
+        assert file_handlers[0].baseFilename == str(Path(log_file).resolve())
+
+    def test_no_duplicate_console_handler(self) -> None:
+        """Calling get_logger twice does not duplicate the console handler."""
+        get_logger("test.no_dup_console")
+        logger = get_logger("test.no_dup_console")
+        console_handlers = [
+            h
+            for h in logger.logger.handlers
+            if isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.FileHandler)
+        ]
+        assert len(console_handlers) == 1
+
+    def test_no_duplicate_file_handler_same_path(self, tmp_path: Path) -> None:
+        """Calling get_logger twice with the same log_file does not duplicate the handler."""
+        log_file = str(tmp_path / "dup.log")
+        get_logger("test.dup_file", log_file=log_file)
+        logger = get_logger("test.dup_file", log_file=log_file)
+        file_handlers = [
+            h for h in logger.logger.handlers if isinstance(h, logging.FileHandler)
+        ]
+        assert len(file_handlers) == 1
+
 
 class TestContextLogger:
     """Tests for ContextLogger adapter."""

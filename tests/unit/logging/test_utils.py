@@ -115,7 +115,6 @@ class TestSetupLogging:
         import sys
 
         root = logging.getLogger()
-        # basicConfig is a no-op if handlers already exist; clear them first.
         saved = list(root.handlers)
         root.handlers.clear()
         try:
@@ -127,5 +126,71 @@ class TestSetupLogging:
             ]
             assert len(stderr_handlers) >= 1
         finally:
+            root.handlers.clear()
+            root.handlers.extend(saved)
+
+    def test_idempotent_handler_count(self) -> None:
+        """Calling setup_logging() twice produces the same handler count as once."""
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        try:
+            setup_logging(level=logging.INFO)
+            count_after_first = len(root.handlers)
+
+            setup_logging(level=logging.INFO)
+            count_after_second = len(root.handlers)
+
+            assert count_after_first == count_after_second
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved)
+
+    def test_idempotent_with_log_file(self, tmp_path: Path) -> None:
+        """Repeated calls with log_file do not duplicate file handlers."""
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        log_file = str(tmp_path / "idem.log")
+        try:
+            setup_logging(log_file=log_file)
+            count_first = len(root.handlers)
+
+            setup_logging(log_file=log_file)
+            count_second = len(root.handlers)
+
+            assert count_first == count_second
+            file_handlers = [
+                h for h in root.handlers if isinstance(h, logging.FileHandler)
+            ]
+            assert len(file_handlers) == 1
+        finally:
+            for h in root.handlers:
+                if isinstance(h, logging.FileHandler):
+                    h.close()
+            root.handlers.clear()
+            root.handlers.extend(saved)
+
+    def test_idempotent_no_duplicate_output(self, tmp_path: Path) -> None:
+        """Calling setup_logging() twice does not produce duplicate log lines."""
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        log_file = str(tmp_path / "output.log")
+        try:
+            setup_logging(log_file=log_file)
+            setup_logging(log_file=log_file)
+
+            root.warning("single line test")
+
+            for h in root.handlers:
+                h.flush()
+
+            content = Path(log_file).read_text()
+            assert content.count("single line test") == 1
+        finally:
+            for h in root.handlers:
+                if isinstance(h, logging.FileHandler):
+                    h.close()
             root.handlers.clear()
             root.handlers.extend(saved)

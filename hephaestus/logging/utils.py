@@ -108,14 +108,14 @@ def setup_logging(
     """
     format_string = format_string or LOG_FORMAT
 
-    handlers = [logging.StreamHandler(sys.stdout)]
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
 
     if log_to_stderr:
         handlers.append(logging.StreamHandler(sys.stderr))
 
-    logging.basicConfig(level=level, format=format_string, handlers=handlers)
-
     if log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(logging.Formatter(format_string))
-        logging.getLogger().addHandler(file_handler)
+        handlers.append(logging.FileHandler(log_file))
+
+    # force=True clears existing root handlers before adding new ones,
+    # making repeated calls idempotent instead of accumulating duplicates.
+    logging.basicConfig(level=level, format=format_string, handlers=handlers, force=True)

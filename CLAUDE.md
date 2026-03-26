@@ -34,6 +34,7 @@ ProjectHephaestus/
 │   ├── benchmarks/             # Benchmark comparison utilities
 │   ├── version/                # Version management
 │   └── validation/             # README and config validation
+├── justfile                    # One-command developer workflows (just)
 ├── scripts/                    # Automation and maintenance scripts
 ├── tests/                      # Unit and integration tests
 │   ├── unit/                   # Unit tests (mirrors hephaestus/ structure)
@@ -269,25 +270,22 @@ All utility functions must include comprehensive test coverage:
 
 ```bash
 # Run all unit tests
-pixi run pytest tests/unit -v
+just test -v
 
 # Run specific test file
-pixi run pytest tests/unit/utils/test_general_utils.py -v
+just test tests/unit/utils/test_general_utils.py -v
 
 # Run with coverage
-pixi run pytest tests/unit --cov=hephaestus --cov-report=html
+just test --cov=hephaestus --cov-report=html
 ```
 
 ## Environment Setup
 
-This project uses [Pixi](https://pixi.sh) for environment management:
+This project uses [just](https://github.com/casey/just) for one-command workflows and [Pixi](https://pixi.sh) for environment management:
 
 ```bash
-# Install dependencies and create environment
-pixi install
-
-# Run pre-commit hooks (formatting, linting, etc.)
-pre-commit install
+# One-command bootstrap: installs dependencies and configures pre-commit hooks
+just bootstrap
 ```
 
 ## Common Commands
@@ -296,16 +294,19 @@ pre-commit install
 
 ```bash
 # Run tests
-pixi run pytest tests/unit
+just test
 
 # Run linter
-pixi run ruff check hephaestus/ tests/
+just lint
 
 # Run formatter
-pixi run ruff format hephaestus/ tests/
+just format
 
 # Run type checking
-pixi run mypy hephaestus/
+just typecheck
+
+# Run all checks (lint + typecheck + test)
+just check
 ```
 
 ### Pre-commit Hooks
@@ -313,11 +314,11 @@ pixi run mypy hephaestus/
 Pre-commit hooks automatically check code quality:
 
 ```bash
-# Install pre-commit hooks (one-time setup)
-pre-commit install
+# Install pre-commit hooks (included in bootstrap)
+just bootstrap
 
 # Run hooks manually on all files
-pre-commit run --all-files
+just pre-commit
 
 # NEVER skip hooks with --no-verify
 ```
@@ -329,7 +330,7 @@ pre-commit run --all-files
 1. **Import Errors**: Check that `pixi install` has been run
 2. **Dependency Conflicts**: Update `pixi.toml` and run `pixi install`
 3. **Test Failures**: Run tests with verbose output for details
-4. **Formatting Issues**: Run `pixi run ruff format hephaestus/ tests/`
+4. **Formatting Issues**: Run `just format`
 
 ### Getting Help
 
@@ -352,6 +353,7 @@ pre-commit run --all-files
 - `tests/integration/` - Integration tests (package importability, smoke tests)
 - `scripts/` - Automation and maintenance tools
 - `docs/` - Documentation and guides
+- `justfile` - One-command developer workflows (`just bootstrap`, `just test`, etc.)
 - `pyproject.toml` - Project metadata, dependencies, and tool configuration
 - `pixi.toml` - Pixi environment and task definitions
 - `.claude/` - Claude Code configuration and guidance

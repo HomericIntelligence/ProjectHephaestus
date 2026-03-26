@@ -5,11 +5,26 @@ import logging
 import threading
 from pathlib import Path
 
+import pytest
+
 from hephaestus.logging.utils import (
     ContextLogger,
+    _configured_loggers,
     get_logger,
     setup_logging,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clean_logging_registry() -> None:  # type: ignore[misc]
+    """Reset the handler registry and remove test loggers after each test."""
+    yield  # type: ignore[misc]
+    # Teardown: remove any test loggers we created
+    for name in list(_configured_loggers):
+        if name.startswith("test."):
+            _configured_loggers.pop(name, None)
+            logger = logging.getLogger(name)
+            logger.handlers.clear()
 
 
 class TestGetLogger:
@@ -42,6 +57,42 @@ class TestGetLogger:
         logger = get_logger("test.file_handler", log_file=log_file)
         handler_types = [type(h) for h in logger.logger.handlers]
         assert logging.FileHandler in handler_types
+
+    def test_no_duplicate_handlers_on_repeated_calls(self) -> None:
+        """Calling get_logger twice with the same name adds only one StreamHandler."""
+        get_logger("test.dup")
+        logger2 = get_logger("test.dup")
+        stream_handlers = [
+            h for h in logger2.logger.handlers if isinstance(h, logging.StreamHandler)
+        ]
+        assert len(stream_handlers) == 1
+
+    def test_adds_file_handler_on_second_call(self, tmp_path: Path) -> None:
+        """A file handler is added when requested on a subsequent call."""
+        get_logger("test.lazy_file")
+        log_file = str(tmp_path / "lazy.log")
+        logger2 = get_logger("test.lazy_file", log_file=log_file)
+        file_handlers = [h for h in logger2.logger.handlers if isinstance(h, logging.FileHandler)]
+        assert len(file_handlers) == 1
+
+    def test_does_not_duplicate_same_file_handler(self, tmp_path: Path) -> None:
+        """Requesting the same log_file twice adds only one FileHandler."""
+        log_file = str(tmp_path / "dup_file.log")
+        get_logger("test.dup_file", log_file=log_file)
+        logger2 = get_logger("test.dup_file", log_file=log_file)
+        file_handlers = [h for h in logger2.logger.handlers if isinstance(h, logging.FileHandler)]
+        assert len(file_handlers) == 1
+
+    def test_propagate_false(self) -> None:
+        """get_logger sets propagate=False to prevent duplicate parent output."""
+        logger = get_logger("test.propagate")
+        assert logger.logger.propagate is False
+
+    def test_level_updated_on_second_call(self) -> None:
+        """A second call with a different level updates the logger's level."""
+        get_logger("test.level_update", level=logging.INFO)
+        logger2 = get_logger("test.level_update", level=logging.DEBUG)
+        assert logger2.logger.level == logging.DEBUG
 
 
 class TestContextLogger:

@@ -305,7 +305,7 @@ pixi run ruff check hephaestus/ tests/
 pixi run ruff format hephaestus/ tests/
 
 # Run type checking
-pixi run mypy hephaestus/
+pixi run mypy
 ```
 
 ### Pre-commit Hooks

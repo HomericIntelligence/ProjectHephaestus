@@ -15,10 +15,12 @@ Currently consolidating utilities from:
 
 ```
 ProjectHephaestus/
-├── hephaestus/       # Python package (13 subpackages)
+├── src/
+│   └── hephaestus/   # Python package (13 subpackages, src-layout)
 ├── tests/            # Unit and integration tests
 ├── scripts/          # Automation scripts
 ├── docs/             # Documentation
+├── justfile          # Standard ecosystem task recipes
 └── examples/         # Usage examples
 ```
 

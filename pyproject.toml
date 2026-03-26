@@ -53,7 +53,7 @@ Repository = "https://github.com/HomericIntelligence/ProjectHephaestus"
 Issues = "https://github.com/HomericIntelligence/ProjectHephaestus/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["hephaestus"]
+packages = ["src/hephaestus"]
 
 [tool.ruff]
 line-length = 100
@@ -82,7 +82,7 @@ max-complexity = 10
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]
-pythonpath = [".", "scripts"]
+pythonpath = ["src", "scripts"]
 addopts = [
     "-v",
     "--strict-markers",
@@ -113,7 +113,7 @@ implicit_reexport = false
 
 [tool.coverage.run]
 branch = true
-source = ["hephaestus"]
+source = ["src/hephaestus"]
 omit = [
     "*/tests/*",
     "*/__init__.py",

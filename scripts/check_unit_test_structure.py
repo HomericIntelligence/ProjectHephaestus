@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce that tests/unit/ mirrors the hephaestus/ package structure.
+"""Enforce that tests/unit/ mirrors the src/hephaestus/ package structure.
 
 For every subpackage in hephaestus/ there should be a corresponding
 directory under tests/unit/ containing at least one test file.
@@ -22,9 +22,9 @@ def get_subpackages(root: Path) -> set[str]:
 
 
 def main() -> int:
-    """Check that tests/unit mirrors hephaestus/ subpackage structure."""
+    """Check that tests/unit mirrors src/hephaestus/ subpackage structure."""
     repo_root = Path(__file__).parent.parent
-    src_root = repo_root / "hephaestus"
+    src_root = repo_root / "src" / "hephaestus"
     tests_root = repo_root / "tests" / "unit"
 
     if not src_root.exists():
@@ -46,7 +46,7 @@ def main() -> int:
             file=sys.stderr,
         )
         for name in sorted(missing):
-            print(f"  hephaestus/{name}  →  tests/unit/{name}/ (missing)", file=sys.stderr)
+            print(f"  src/hephaestus/{name}  →  tests/unit/{name}/ (missing)", file=sys.stderr)
         return 1
 
     print(f"OK: All {len(src_packages)} source subpackages have test directories.")

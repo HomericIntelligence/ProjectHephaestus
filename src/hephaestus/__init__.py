@@ -7,7 +7,7 @@ from importlib.metadata import version as _pkg_version
 from typing import Any
 
 try:
-    __version__ = _pkg_version("hephaestus")
+    __version__ = _pkg_version("HomericIntelligence-Hephaestus")
 except PackageNotFoundError:
     __version__ = "unknown"
 

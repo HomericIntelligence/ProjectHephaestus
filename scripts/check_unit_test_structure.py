@@ -24,7 +24,7 @@ def get_subpackages(root: Path) -> set[str]:
 def main() -> int:
     """Check that tests/unit mirrors hephaestus/ subpackage structure."""
     repo_root = Path(__file__).parent.parent
-    src_root = repo_root / "hephaestus"
+    src_root = repo_root / "src" / "hephaestus"
     tests_root = repo_root / "tests" / "unit"
 
     if not src_root.exists():

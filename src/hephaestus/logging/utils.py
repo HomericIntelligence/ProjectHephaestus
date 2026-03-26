@@ -12,12 +12,47 @@ Usage:
     logger.info("This is an info message")
 """
 
+import json
 import logging
 import sys
 import threading
 from typing import Any
 
 from hephaestus.constants import LOG_FORMAT
+
+# Standard LogRecord attribute names (used to filter out extras in JSON output)
+_STANDARD_RECORD_ATTRS = frozenset(
+    logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys()
+    | {"message", "msg", "args"}
+)
+
+
+class JsonFormatter(logging.Formatter):
+    """Formatter that outputs log records as JSON objects."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format a log record as a JSON string.
+
+        Args:
+            record: The log record to format.
+
+        Returns:
+            JSON-encoded string with timestamp, name, level, and message fields.
+
+        """
+        log_entry: dict[str, Any] = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "name": record.name,
+            "level": record.levelname,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[1] is not None:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        # Include extra context fields added by ContextLogger
+        for key, value in record.__dict__.items():
+            if key not in _STANDARD_RECORD_ATTRS:
+                log_entry.setdefault(key, value)
+        return json.dumps(log_entry, default=str)
 
 
 class ContextLogger(logging.LoggerAdapter):  # type: ignore[type-arg]
@@ -96,26 +131,37 @@ def setup_logging(
     log_file: str | None = None,
     format_string: str | None = None,
     log_to_stderr: bool = False,
+    json_format: bool = False,
 ) -> None:
     """Set up global logging configuration.
 
     Args:
         level: Default logging level
         log_file: Optional file to log to
-        format_string: Custom log format
+        format_string: Custom log format (ignored when json_format=True)
         log_to_stderr: Whether to also log to stderr
+        json_format: If True, output logs as JSON objects
 
     """
-    format_string = format_string or LOG_FORMAT
+    formatter: logging.Formatter
+    if json_format:
+        formatter = JsonFormatter()
+    else:
+        format_string = format_string or LOG_FORMAT
+        formatter = logging.Formatter(format_string)
 
-    handlers = [logging.StreamHandler(sys.stdout)]
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(formatter)
+    handlers: list[logging.Handler] = [stdout_handler]
 
     if log_to_stderr:
-        handlers.append(logging.StreamHandler(sys.stderr))
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setFormatter(formatter)
+        handlers.append(stderr_handler)
 
-    logging.basicConfig(level=level, format=format_string, handlers=handlers)
+    logging.basicConfig(level=level, handlers=handlers)
 
     if log_file:
         file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(logging.Formatter(format_string))
+        file_handler.setFormatter(formatter)
         logging.getLogger().addHandler(file_handler)

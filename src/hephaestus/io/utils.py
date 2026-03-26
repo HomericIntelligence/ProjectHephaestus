@@ -47,16 +47,13 @@ def write_file(
     filepath: str | Path,
     content: str | bytes,
     mode: str = "w",
-) -> bool:
+) -> None:
     """Write content to a file.
 
     Args:
         filepath: Path to file
         content: Content to write
         mode: File open mode ('w' for text, 'wb' for binary)
-
-    Returns:
-        True if successful
 
     Raises:
         OSError: If the file cannot be written
@@ -66,40 +63,32 @@ def write_file(
     filepath.parent.mkdir(parents=True, exist_ok=True)
     with open(filepath, mode) as f:
         f.write(content)
-    return True
 
 
-def ensure_directory(path: str | Path) -> bool:
+def ensure_directory(path: str | Path) -> None:
     """Ensure directory exists, creating it if necessary.
 
     Args:
         path: Path to directory
-
-    Returns:
-        True if successful
 
     Raises:
         OSError: If the directory cannot be created
 
     """
     Path(path).mkdir(parents=True, exist_ok=True)
-    return True
 
 
 def safe_write(
     filepath: str | Path,
     content: str | bytes,
     backup: bool = True,
-) -> bool:
+) -> None:
     """Write content to file safely with optional backup.
 
     Args:
         filepath: Path to file
         content: Content to write
         backup: Whether to create backup of existing file
-
-    Returns:
-        True if successful
 
     Raises:
         OSError: If the file cannot be written
@@ -119,7 +108,6 @@ def safe_write(
         filepath.write_text(content)
     else:
         filepath.write_bytes(content)
-    return True
 
 
 def write_secure(
@@ -223,7 +211,7 @@ def save_data(
     filepath: str | Path,
     format_hint: str | None = None,
     allow_unsafe_deserialization: bool = False,
-) -> bool:
+) -> None:
     """Save data to file with automatic format detection.
 
     Args:
@@ -232,9 +220,6 @@ def save_data(
         format_hint: Optional format hint ('json', 'yaml', 'pickle')
         allow_unsafe_deserialization: If False (default), raise ValueError for
             formats that can execute arbitrary code (e.g. pickle).
-
-    Returns:
-        True if successful, False otherwise
 
     Raises:
         ValueError: If format is unsafe and allow_unsafe_deserialization is False.
@@ -260,8 +245,7 @@ def save_data(
         with open(filepath, "w") as f:
             yaml.dump(data, f, default_flow_style=False)
     elif fmt == "pickle":
-        import pickle
+        import pickle  # guarded by allow_unsafe_deserialization check above
 
         with open(filepath, "wb") as f:
             pickle.dump(data, f)
-    return True

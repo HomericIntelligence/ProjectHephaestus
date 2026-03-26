@@ -21,25 +21,25 @@ repos:
       - id: ruff-format-python
         name: Ruff Format Python
         description: Format Python files using ruff format
-        entry: pixi run ruff format hephaestus/ scripts/ tests/
+        entry: pixi run ruff format src/hephaestus/ scripts/ tests/
         language: system
-        files: ^(hephaestus|scripts|tests)/.*\.py$
+        files: ^(src/hephaestus|scripts|tests)/.*\.py$
         types: [python]
         pass_filenames: false
       - id: ruff-check-python
         name: Ruff Check Python
         description: Lint Python files using ruff check
-        entry: pixi run ruff check --fix hephaestus/ scripts/ tests/
+        entry: pixi run ruff check --fix src/hephaestus/ scripts/ tests/
         language: system
-        files: ^(hephaestus|scripts|tests)/.*\.py$
+        files: ^(src/hephaestus|scripts|tests)/.*\.py$
         types: [python]
         pass_filenames: false
       - id: mypy-check-python
         name: Mypy Type Check Python
         description: Type check Python files using mypy
-        entry: pixi run mypy hephaestus/
+        entry: pixi run mypy src/hephaestus/
         language: system
-        files: ^hephaestus/.*\.py$
+        files: ^src/hephaestus/.*\.py$
         types: [python]
         pass_filenames: false
 
@@ -94,7 +94,7 @@ repos:
         entry: python scripts/check_unit_test_structure.py
         language: system
         pass_filenames: false
-        files: ^(hephaestus|tests/unit)/
+        files: ^(src/hephaestus|tests/unit)/
 
   # Complexity check
   - repo: local
@@ -102,9 +102,9 @@ repos:
       - id: ruff-check-complexity
         name: Ruff Complexity Check (C901)
         description: Enforce McCabe complexity limit on hephaestus/
-        entry: pixi run ruff check --select C901 hephaestus/
+        entry: pixi run ruff check --select C901 src/hephaestus/
         language: system
-        files: ^hephaestus/.*\.py$
+        files: ^src/hephaestus/.*\.py$
         types: [python]
         pass_filenames: false
 

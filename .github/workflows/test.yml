@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.12"]
+        python-version: ["3.10", "3.11", "3.12"]
         test-type: [unit, integration]
 
     steps:
@@ -44,7 +44,7 @@ jobs:
 
       - name: Run unit tests
         if: matrix.test-type == 'unit'
-        run: pixi run pytest tests/unit --override-ini="addopts=" -v --strict-markers --cov=hephaestus --cov-report=term-missing --cov-report=xml --cov-fail-under=80
+        run: pixi run pytest tests/unit --override-ini="addopts=" -v --strict-markers --cov=src/hephaestus --cov-report=term-missing --cov-report=xml --cov-fail-under=80
         shell: bash
 
       - name: Check unit test structure
@@ -65,7 +65,7 @@ jobs:
           python -c "from hephaestus import slugify, retry_with_backoff, setup_logging; print('OK')"
 
       - name: Upload coverage
-        if: matrix.test-type == 'unit'
+        if: matrix.test-type == 'unit' && matrix.python-version == '3.12'
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.xml

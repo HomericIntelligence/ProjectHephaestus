@@ -24,17 +24,18 @@ class TestEnsureDirectory:
     def test_creates_nested_directories(self, tmp_path: Path) -> None:
         """Nested directories are created."""
         target = tmp_path / "a" / "b" / "c"
-        assert ensure_directory(target)
+        ensure_directory(target)
         assert target.exists()
 
     def test_existing_directory(self, tmp_path: Path) -> None:
-        """Existing directory returns True without error."""
-        assert ensure_directory(tmp_path)
+        """Existing directory succeeds without error."""
+        ensure_directory(tmp_path)
 
     def test_string_path(self, tmp_path: Path) -> None:
         """Accepts string path."""
         target = str(tmp_path / "str_dir")
-        assert ensure_directory(target)
+        ensure_directory(target)
+        assert Path(target).exists()
 
     def test_raises_on_failure(self, tmp_path: Path) -> None:
         """Raises OSError when directory cannot be created."""
@@ -72,13 +73,13 @@ class TestWriteFile:
     def test_writes_text(self, tmp_path: Path) -> None:
         """Writes text content."""
         f = tmp_path / "out.txt"
-        assert write_file(f, "content")
+        write_file(f, "content")
         assert f.read_text() == "content"
 
     def test_creates_parent_dirs(self, tmp_path: Path) -> None:
         """Creates missing parent directories."""
         f = tmp_path / "sub" / "file.txt"
-        assert write_file(f, "hi")
+        write_file(f, "hi")
         assert f.exists()
 
 
@@ -88,13 +89,13 @@ class TestSafeWrite:
     def test_writes_text_content(self, tmp_path: Path) -> None:
         """Writes text content to file."""
         f = tmp_path / "test.txt"
-        assert safe_write(f, "Hello World")
+        safe_write(f, "Hello World")
         assert f.read_text() == "Hello World"
 
     def test_writes_binary_content(self, tmp_path: Path) -> None:
         """Writes bytes content to file."""
         f = tmp_path / "test.bin"
-        assert safe_write(f, b"\xff\xfe")
+        safe_write(f, b"\xff\xfe")
         assert f.read_bytes() == b"\xff\xfe"
 
     def test_backup_created(self, tmp_path: Path) -> None:
@@ -228,13 +229,13 @@ class TestSaveData:
     def test_save_json(self, tmp_path: Path) -> None:
         """Saves data as JSON."""
         f = tmp_path / "out.json"
-        assert save_data({"k": 1}, f)
+        save_data({"k": 1}, f)
         assert json.loads(f.read_text()) == {"k": 1}
 
     def test_save_yaml(self, tmp_path: Path) -> None:
         """Saves data as YAML."""
         f = tmp_path / "out.yaml"
-        assert save_data({"k": 1}, f)
+        save_data({"k": 1}, f)
         assert "k:" in f.read_text()
 
     def test_unsafe_format_blocked_by_default(self, tmp_path: Path) -> None:
@@ -246,7 +247,7 @@ class TestSaveData:
     def test_default_format_json(self, tmp_path: Path) -> None:
         """Unknown extension defaults to JSON."""
         f = tmp_path / "out.dat"
-        assert save_data({"x": 1}, f)
+        save_data({"x": 1}, f)
         assert json.loads(f.read_text()) == {"x": 1}
 
     def test_raises_on_io_error(self, tmp_path: Path) -> None:

@@ -57,6 +57,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "parse_reset_epoch": ("hephaestus.github.rate_limit", "parse_reset_epoch"),
     "wait_until": ("hephaestus.github.rate_limit", "wait_until"),
     "ContextLogger": ("hephaestus.logging.utils", "ContextLogger"),
+    "JsonFormatter": ("hephaestus.logging.utils", "JsonFormatter"),
     "get_logger": ("hephaestus.logging.utils", "get_logger"),
     "setup_logging": ("hephaestus.logging.utils", "setup_logging"),
     "format_system_info": ("hephaestus.system.info", "format_system_info"),

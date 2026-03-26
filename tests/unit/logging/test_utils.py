@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Tests for logging utilities."""
 
+import json
 import logging
 import threading
 from pathlib import Path
 
 from hephaestus.logging.utils import (
     ContextLogger,
+    JsonFormatter,
     get_logger,
     setup_logging,
 )
@@ -95,6 +97,42 @@ class TestContextLogger:
             assert "val" in ctx
 
 
+class TestJsonFormatter:
+    """Tests for JsonFormatter."""
+
+    def test_output_is_valid_json(self) -> None:
+        """JsonFormatter output can be parsed as JSON."""
+        formatter = JsonFormatter()
+        record = logging.LogRecord(
+            name="test", level=logging.INFO, pathname="", lineno=0,
+            msg="hello %s", args=("world",), exc_info=None,
+        )
+        output = formatter.format(record)
+        parsed = json.loads(output)
+        assert parsed["message"] == "hello world"
+        assert parsed["level"] == "INFO"
+        assert parsed["name"] == "test"
+        assert "timestamp" in parsed
+
+    def test_includes_exception(self) -> None:
+        """JsonFormatter includes exception info when present."""
+        formatter = JsonFormatter()
+        try:
+            raise ValueError("test error")
+        except ValueError:
+            import sys
+            exc_info = sys.exc_info()
+
+        record = logging.LogRecord(
+            name="test", level=logging.ERROR, pathname="", lineno=0,
+            msg="failed", args=(), exc_info=exc_info,
+        )
+        output = formatter.format(record)
+        parsed = json.loads(output)
+        assert "exception" in parsed
+        assert "ValueError" in parsed["exception"]
+
+
 class TestSetupLogging:
     """Tests for setup_logging function."""
 
@@ -126,6 +164,21 @@ class TestSetupLogging:
                 if isinstance(h, logging.StreamHandler) and h.stream is sys.stderr
             ]
             assert len(stderr_handlers) >= 1
+        finally:
+            root.handlers.clear()
+            root.handlers.extend(saved)
+
+    def test_json_format(self) -> None:
+        """setup_logging with json_format=True uses JsonFormatter on handlers."""
+        root = logging.getLogger()
+        saved = list(root.handlers)
+        root.handlers.clear()
+        try:
+            setup_logging(json_format=True)
+            json_handlers = [
+                h for h in root.handlers if isinstance(h.formatter, JsonFormatter)
+            ]
+            assert len(json_handlers) >= 1
         finally:
             root.handlers.clear()
             root.handlers.extend(saved)

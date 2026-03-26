@@ -237,14 +237,13 @@ def save_data(
         True if successful, False otherwise
 
     Raises:
-        ValueError: If format is unsafe and allow_unsafe_deserialization is False.
+        ValueError: If format cannot be determined from the file extension
+            and no format_hint is provided, or if format is unsafe and
+            allow_unsafe_deserialization is False.
 
     """
     filepath = Path(filepath)
-    try:
-        fmt = _detect_format(filepath, format_hint)
-    except ValueError:
-        fmt = "json"  # default for unknown extensions
+    fmt = _detect_format(filepath, format_hint)
 
     if fmt in _UNSAFE_FORMATS and not allow_unsafe_deserialization:
         raise ValueError(

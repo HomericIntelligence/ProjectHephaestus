@@ -243,11 +243,11 @@ class TestSaveData:
         with pytest.raises(ValueError, match="unsafe deserialization"):
             save_data({"x": 1}, f)
 
-    def test_default_format_json(self, tmp_path: Path) -> None:
-        """Unknown extension defaults to JSON."""
+    def test_unknown_extension_raises(self, tmp_path: Path) -> None:
+        """Unknown extension raises ValueError instead of silently defaulting."""
         f = tmp_path / "out.dat"
-        assert save_data({"x": 1}, f)
-        assert json.loads(f.read_text()) == {"x": 1}
+        with pytest.raises(ValueError, match="Could not determine"):
+            save_data({"x": 1}, f)
 
     def test_raises_on_io_error(self, tmp_path: Path) -> None:
         """IOError is raised (not silently swallowed) when write fails."""

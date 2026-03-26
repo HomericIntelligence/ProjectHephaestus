@@ -19,6 +19,9 @@ from typing import Any
 
 from hephaestus.constants import LOG_FORMAT
 
+# Module-level lock protects the check-then-add TOCTOU in get_logger()
+_handler_setup_lock = threading.Lock()
+
 
 class ContextLogger(logging.LoggerAdapter):  # type: ignore[type-arg]
     """Logger adapter that adds context information to log messages."""
@@ -73,20 +76,21 @@ def get_logger(
     logger = logging.getLogger(name)
     logger.setLevel(level or logging.INFO)
 
-    # Prevent adding handlers multiple times
-    if not logger.handlers:
-        formatter = logging.Formatter(LOG_FORMAT)
+    # Prevent adding handlers multiple times (lock protects check-then-add TOCTOU)
+    with _handler_setup_lock:
+        if not logger.handlers:
+            formatter = logging.Formatter(LOG_FORMAT)
 
-        # Console handler
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
+            # Console handler
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setFormatter(formatter)
+            logger.addHandler(console_handler)
 
-        # File handler (optional)
-        if log_file:
-            file_handler = logging.FileHandler(log_file)
-            file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
+            # File handler (optional)
+            if log_file:
+                file_handler = logging.FileHandler(log_file)
+                file_handler.setFormatter(formatter)
+                logger.addHandler(file_handler)
 
     return ContextLogger(logger, context)
 

@@ -1,6 +1,6 @@
 # Pre-commit hooks for ProjectHephaestus
-# Install: pixi run pre-commit install
-# Run manually: pixi run pre-commit run --all-files
+# Install: pre-commit install
+# Run manually: pre-commit run --all-files
 
 repos:
 
@@ -21,7 +21,7 @@ repos:
       - id: ruff-format-python
         name: Ruff Format Python
         description: Format Python files using ruff format
-        entry: pixi run ruff format hephaestus/ scripts/ tests/
+        entry: ruff format hephaestus/ scripts/ tests/
         language: system
         files: ^(hephaestus|scripts|tests)/.*\.py$
         types: [python]
@@ -29,7 +29,7 @@ repos:
       - id: ruff-check-python
         name: Ruff Check Python
         description: Lint Python files using ruff check
-        entry: pixi run ruff check --fix hephaestus/ scripts/ tests/
+        entry: ruff check --fix hephaestus/ scripts/ tests/
         language: system
         files: ^(hephaestus|scripts|tests)/.*\.py$
         types: [python]
@@ -37,7 +37,7 @@ repos:
       - id: mypy-check-python
         name: Mypy Type Check Python
         description: Type check Python files using mypy
-        entry: pixi run mypy hephaestus/
+        entry: mypy hephaestus/
         language: system
         files: ^hephaestus/.*\.py$
         types: [python]
@@ -69,7 +69,7 @@ repos:
       - id: pip-audit
         name: pip-audit (CVE scan)
         description: Scan dependencies for known CVEs
-        entry: pixi run pip-audit
+        entry: pip-audit
         language: system
         pass_filenames: false
         stages: [manual]
@@ -102,7 +102,7 @@ repos:
       - id: ruff-check-complexity
         name: Ruff Complexity Check (C901)
         description: Enforce McCabe complexity limit on hephaestus/
-        entry: pixi run ruff check --select C901 hephaestus/
+        entry: ruff check --select C901 hephaestus/
         language: system
         files: ^hephaestus/.*\.py$
         types: [python]

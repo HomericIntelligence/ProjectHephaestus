@@ -3,8 +3,6 @@ name: Security
 on:
   pull_request:
     paths:
-      - "pixi.toml"
-      - "pixi.lock"
       - "pyproject.toml"
       - "**/*.py"
       - ".github/workflows/security.yml"
@@ -15,29 +13,33 @@ on:
 jobs:
   pip-audit:
     name: Dependency vulnerability scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install pixi
-        uses: prefix-dev/setup-pixi@v0.9.4
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
-          pixi-version: v0.63.2
-          environments: lint
+          python-version: "3.12"
 
-      - name: Cache pixi environments
+      - name: Cache pip packages
         uses: actions/cache@v5
         with:
-          path: |
-            .pixi
-            ~/.cache/rattler/cache
-          key: pixi-lint-${{ runner.os }}-${{ hashFiles('pixi.lock') }}
+          path: ~/.cache/pip
+          key: pip-security-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            pip-security-${{ runner.os }}-
+
+      - name: Install package and pip-audit
+        run: |
+          pip install -e ".[dev]"
+          pip install pip-audit
 
       - name: Run pip-audit
         id: pip-audit
-        run: pixi run --environment lint pip-audit
+        run: pip-audit
 
       - name: Post pip-audit summary
         if: always()

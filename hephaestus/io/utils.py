@@ -13,7 +13,7 @@ Usage:
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from hephaestus.logging.utils import get_logger
 
@@ -43,7 +43,7 @@ def read_file(filepath: str | Path, mode: str = "r") -> str | bytes:
     """
     filepath = Path(filepath)
     with open(filepath, mode) as f:
-        return cast(str | bytes, f.read())
+        return f.read()
 
 
 def write_file(

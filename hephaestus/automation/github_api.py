@@ -549,3 +549,267 @@ def write_secure(path: Path, content: str) -> None:
         with contextlib.suppress(OSError):
             os.unlink(temp_path)
         raise
+
+
+def gh_pr_review_post(
+    pr_number: int,
+    comments: list[dict[str, Any]],
+    summary: str,
+    event: str = "COMMENT",
+    dry_run: bool = False,
+) -> list[str]:
+    """Post a PR review with inline comments via GitHub GraphQL API.
+
+    Args:
+        pr_number: PR number
+        comments: List of dicts with keys: path (str), line (int), side (str), body (str)
+        summary: Overall review summary body
+        event: Review event type: COMMENT, APPROVE, or REQUEST_CHANGES
+        dry_run: If True, log intent and return empty list without posting
+
+    Returns:
+        List of created review thread IDs (empty on dry_run or if no comments)
+
+    """
+    if dry_run:
+        logger.info(
+            f"[dry_run] Would post PR review on #{pr_number} with {len(comments)} inline comments"
+        )
+        return []
+
+    owner, repo = get_repo_info()
+
+    # Fetch the PR node ID via REST
+    pr_info = _gh_call(["api", f"repos/{owner}/{repo}/pulls/{pr_number}", "--jq", ".node_id"])
+    pr_node_id = pr_info.stdout.strip()
+
+    # Build threads list for the mutation
+    thread_items = [
+        {
+            "path": c["path"],
+            "line": c["line"],
+            "side": c.get("side", "RIGHT"),
+            "body": c["body"],
+        }
+        for c in comments
+    ]
+
+    mutation = """
+mutation AddReview(
+  $prId: ID!, $body: String!,
+  $event: PullRequestReviewEvent!,
+  $comments: [DraftPullRequestReviewComment!]
+) {
+  addPullRequestReview(
+    input: {pullRequestId: $prId, body: $body, event: $event, comments: $comments}
+  ) {
+    pullRequestReview {
+      id
+      pullRequest {
+        reviewThreads(last: 50) {
+          nodes { id isResolved }
+        }
+      }
+    }
+  }
+}
+"""
+
+    threads_json = json.dumps(thread_items)
+    result = _gh_call(
+        [
+            "api",
+            "graphql",
+            "-f",
+            f"query={mutation}",
+            "-f",
+            f"prId={pr_node_id}",
+            "-f",
+            f"body={summary}",
+            "-f",
+            f"event={event}",
+            "-f",
+            f"comments={threads_json}",
+        ]
+    )
+
+    data = json.loads(result.stdout)
+    review_data = data.get("data", {}).get("addPullRequestReview", {}).get("pullRequestReview", {})
+    thread_nodes = review_data.get("pullRequest", {}).get("reviewThreads", {}).get("nodes", [])
+    thread_ids: list[str] = [
+        node["id"] for node in thread_nodes if not node.get("isResolved", True)
+    ]
+    logger.info(f"Posted PR review on #{pr_number}; created {len(thread_ids)} thread(s)")
+    return thread_ids
+
+
+def gh_pr_list_unresolved_threads(
+    pr_number: int,
+    dry_run: bool = False,
+) -> list[dict[str, Any]]:
+    """List unresolved review threads for a PR.
+
+    Args:
+        pr_number: PR number
+        dry_run: If True, return empty list
+
+    Returns:
+        List of thread dicts with keys: id (str), path (str), line (int | None), body (str)
+
+    """
+    if dry_run:
+        logger.info(f"[dry_run] Would list unresolved threads for PR #{pr_number}")
+        return []
+
+    owner, repo = get_repo_info()
+
+    # Sanitize owner/repo to prevent injection (same pattern as prefetch_issue_states)
+    if not re.match(r"^[a-zA-Z0-9_-]+$", owner) or not re.match(r"^[a-zA-Z0-9_-]+$", repo):
+        logger.error(f"Invalid owner/repo format: {owner}/{repo}")
+        return []
+
+    query = f"""
+query GetThreads {{
+  repository(owner: "{owner}", name: "{repo}") {{
+    pullRequest(number: {pr_number}) {{
+      reviewThreads(first: 100) {{
+        nodes {{
+          id
+          isResolved
+          path
+          line
+          comments(first: 1) {{
+            nodes {{ body }}
+          }}
+        }}
+      }}
+    }}
+  }}
+}}
+"""
+
+    result = _gh_call(["api", "graphql", "-f", f"query={query}"])
+    data = json.loads(result.stdout)
+
+    nodes = (
+        data.get("data", {})
+        .get("repository", {})
+        .get("pullRequest", {})
+        .get("reviewThreads", {})
+        .get("nodes", [])
+    )
+
+    threads: list[dict[str, Any]] = []
+    for node in nodes:
+        if node.get("isResolved"):
+            continue
+        first_comment_nodes = node.get("comments", {}).get("nodes", [])
+        body = first_comment_nodes[0]["body"] if first_comment_nodes else ""
+        threads.append(
+            {
+                "id": node["id"],
+                "path": node.get("path", ""),
+                "line": node.get("line"),
+                "body": body,
+            }
+        )
+
+    logger.debug(f"Found {len(threads)} unresolved thread(s) on PR #{pr_number}")
+    return threads
+
+
+def gh_pr_resolve_thread(
+    thread_id: str,
+    reply_body: str,
+    dry_run: bool = False,
+) -> None:
+    """Resolve a PR review thread with a reply comment.
+
+    Args:
+        thread_id: GraphQL node ID of the review thread
+        reply_body: Reply comment text
+        dry_run: If True, log intent without posting
+
+    """
+    if dry_run:
+        logger.info(f"[dry_run] Would resolve thread {thread_id!r} with reply: {reply_body!r}")
+        return
+
+    # Step 1: post a reply to the thread via GraphQL addPullRequestReviewComment
+    reply_mutation = """
+mutation AddReply($threadId: ID!, $body: String!) {
+  addPullRequestReviewComment(input: {pullRequestReviewThreadId: $threadId, body: $body}) {
+    comment { id }
+  }
+}
+"""
+    _gh_call(
+        [
+            "api",
+            "graphql",
+            "-f",
+            f"query={reply_mutation}",
+            "-f",
+            f"threadId={thread_id}",
+            "-f",
+            f"body={reply_body}",
+        ]
+    )
+
+    # Step 2: resolve the thread
+    resolve_mutation = """
+mutation ResolveThread($threadId: ID!) {
+  resolveReviewThread(input: {threadId: $threadId}) {
+    thread { id isResolved }
+  }
+}
+"""
+    _gh_call(
+        [
+            "api",
+            "graphql",
+            "-f",
+            f"query={resolve_mutation}",
+            "-f",
+            f"threadId={thread_id}",
+        ]
+    )
+    logger.info(f"Resolved review thread {thread_id!r}")
+
+
+def gh_pr_checks(
+    pr_number: int,
+    dry_run: bool = False,
+) -> list[dict[str, Any]]:
+    """Get CI check results for a PR.
+
+    Args:
+        pr_number: PR number
+        dry_run: If True, return empty list
+
+    Returns:
+        List of check dicts with keys: name (str), status (str), conclusion (str | None),
+        required (bool)
+
+    """
+    if dry_run:
+        logger.info(f"[dry_run] Would fetch CI checks for PR #{pr_number}")
+        return []
+
+    result = _gh_call(
+        ["pr", "checks", str(pr_number), "--json", "name,status,conclusion,workflow,required"]
+    )
+    raw: list[dict[str, Any]] = json.loads(result.stdout)
+
+    checks: list[dict[str, Any]] = [
+        {
+            "name": item.get("name", ""),
+            "status": item.get("status", ""),
+            "conclusion": item.get("conclusion") or None,
+            "required": bool(item.get("required", False)),
+        }
+        for item in raw
+    ]
+
+    logger.debug(f"Fetched {len(checks)} CI check(s) for PR #{pr_number}")
+    return checks

@@ -98,13 +98,22 @@ class AddressReviewer:
         """
         logger.info(f"Starting address review for issues: {self.options.issues}")
 
+        # Pre-discover PRs — only submit workers for issues that have an open PR.
+        # This prevents Claude from being launched for issues with no PR at all.
+        pr_map = self._discover_prs(self.options.issues)
+        if not pr_map:
+            logger.warning("No open PRs found for the specified issues — nothing to address")
+            return {}
+
+        logger.info(f"Found {len(pr_map)} PR(s) to address: {pr_map}")
+
         # Start UI if enabled and not dry run
         if not self.options.dry_run and self.options.enable_ui:
             self.ui = CursesUI(self.status_tracker, self.log_manager)
             self.ui.start()
 
         try:
-            results = self._address_all()
+            results = self._address_all(pr_map)
             return results
         finally:
             if self.ui:
@@ -112,8 +121,30 @@ class AddressReviewer:
             if not self.options.dry_run:
                 self.worktree_manager.cleanup_all()
 
-    def _address_all(self) -> dict[int, WorkerResult]:
+    def _discover_prs(self, issue_numbers: list[int]) -> dict[int, int]:
+        """Pre-discover open PRs for all issues.
+
+        Args:
+            issue_numbers: Issue numbers to check
+
+        Returns:
+            Mapping of issue_number -> pr_number for issues that have an open PR
+
+        """
+        pr_map: dict[int, int] = {}
+        for issue_num in issue_numbers:
+            pr_number = self._find_pr_for_issue(issue_num)
+            if pr_number is not None:
+                pr_map[issue_num] = pr_number
+            else:
+                logger.info(f"Issue #{issue_num}: no open PR found, skipping")
+        return pr_map
+
+    def _address_all(self, pr_map: dict[int, int]) -> dict[int, WorkerResult]:
         """Address all issues in parallel.
+
+        Args:
+            pr_map: Mapping of issue_number -> pr_number (pre-filtered to issues with PRs)
 
         Returns:
             Dictionary mapping issue number to WorkerResult
@@ -124,9 +155,9 @@ class AddressReviewer:
         with ThreadPoolExecutor(max_workers=self.options.max_workers) as executor:
             futures: dict[Future[Any], int] = {}
 
-            for idx, issue_num in enumerate(self.options.issues):
+            for idx, (issue_num, pr_num) in enumerate(pr_map.items()):
                 slot_id = idx % self.options.max_workers
-                future = executor.submit(self._address_issue, issue_num, slot_id)
+                future = executor.submit(self._address_issue, issue_num, pr_num, slot_id)
                 futures[future] = issue_num
 
             while futures:
@@ -158,26 +189,29 @@ class AddressReviewer:
         self._print_summary(results)
         return results
 
-    def _address_issue(self, issue_number: int, slot_id: int) -> WorkerResult:
+    def _address_issue(self, issue_number: int, pr_number: int, slot_id: int) -> WorkerResult:
         """Address unresolved review threads for a single issue.
 
+        The pr_number is pre-discovered by run() — no Claude agent is ever launched
+        for issues that have no open PR.
+
         Flow:
-        1. Find PR for issue
-        2. List unresolved threads
-        3. Load impl session_id from state file
-        4. Load/create review state
-        5. Checkout worktree for the PR branch
-        6. Run Claude fix session
-        7. Parse JSON from Claude output
-        8. DRY-RUN GUARD: return before any writes if dry_run
-        9. Commit changes if any
-        10. Push branch
-        11. Resolve addressed threads
-        12. Update review state
-        13. Return WorkerResult
+        1. List unresolved threads
+        2. Load impl session_id from state file
+        3. Load/create review state
+        4. Checkout worktree for the PR branch
+        5. Run Claude fix session
+        6. Parse JSON from Claude output
+        7. DRY-RUN GUARD: return before any writes if dry_run
+        8. Commit changes if any
+        9. Push branch
+        10. Resolve addressed threads
+        11. Update review state
+        12. Return WorkerResult
 
         Args:
             issue_number: GitHub issue number
+            pr_number: Pre-discovered open PR number for this issue
             slot_id: Worker slot ID for status updates
 
         Returns:
@@ -186,20 +220,12 @@ class AddressReviewer:
         """
         thread_id = threading.get_ident()
         self.status_tracker.update_slot(slot_id, f"#{issue_number}: Starting")
+        self._log("info", f"Addressing PR #{pr_number} for issue #{issue_number}", thread_id)
 
         try:
-            # Step 1: Find PR for issue
-            self.status_tracker.update_slot(slot_id, f"#{issue_number}: Finding PR")
-            pr_number = self._find_pr_for_issue(issue_number)
-            if pr_number is None:
-                return self._fail(
-                    issue_number, f"No open PR found for issue #{issue_number}", slot_id
-                )
-            self._log("info", f"Found PR #{pr_number} for issue #{issue_number}", thread_id)
-
             # Step 2: List unresolved threads
             self.status_tracker.update_slot(slot_id, f"#{issue_number}: Listing threads")
-            threads = gh_pr_list_unresolved_threads(pr_number, dry_run=False)
+            threads = gh_pr_list_unresolved_threads(pr_number, dry_run=self.options.dry_run)
             if not threads:
                 self._log(
                     "info",

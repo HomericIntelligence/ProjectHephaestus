@@ -73,13 +73,22 @@ class CIDriver:
             logger.warning("No issues to process")
             return {}
 
+        # Pre-discover PRs — only submit workers for issues that have an open PR.
+        # This prevents Claude from being launched for issues with no PR at all.
+        pr_map = self._discover_prs(self.options.issues)
+        if not pr_map:
+            logger.warning("No open PRs found for the specified issues — nothing to drive")
+            return {}
+
+        logger.info(f"Found {len(pr_map)} PR(s) to drive to green: {pr_map}")
+
         results: dict[int, WorkerResult] = {}
 
         with ThreadPoolExecutor(max_workers=self.options.max_workers) as executor:
             futures: dict[Future[Any], int] = {}
 
-            for idx, issue_num in enumerate(self.options.issues):
-                future = executor.submit(self._drive_issue, issue_num, idx)
+            for idx, (issue_num, pr_num) in enumerate(pr_map.items()):
+                future = executor.submit(self._drive_issue, issue_num, pr_num, idx)
                 futures[future] = issue_num
 
             while futures:
@@ -111,11 +120,34 @@ class CIDriver:
         self._print_summary(results)
         return results
 
-    def _drive_issue(self, issue_number: int, slot_id: int) -> WorkerResult:
+    def _discover_prs(self, issue_numbers: list[int]) -> dict[int, int]:
+        """Pre-discover open PRs for all issues.
+
+        Args:
+            issue_numbers: Issue numbers to check
+
+        Returns:
+            Mapping of issue_number -> pr_number for issues that have an open PR
+
+        """
+        pr_map: dict[int, int] = {}
+        for issue_num in issue_numbers:
+            pr_number = self._find_pr_for_issue(issue_num)
+            if pr_number is not None:
+                pr_map[issue_num] = pr_number
+            else:
+                logger.info(f"Issue #{issue_num}: no open PR found, skipping")
+        return pr_map
+
+    def _drive_issue(self, issue_number: int, pr_number: int, slot_id: int) -> WorkerResult:
         """Drive a single issue's PR toward green CI.
+
+        The pr_number is pre-discovered by run() — no Claude agent is ever launched
+        for issues that have no open PR.
 
         Args:
             issue_number: GitHub issue number.
+            pr_number: Pre-discovered open PR number for this issue.
             slot_id: Worker slot ID for status tracking.
 
         Returns:
@@ -131,14 +163,6 @@ class CIDriver:
             )
 
         try:
-            self.status_tracker.update_slot(acquired_slot, f"#{issue_number}: finding PR")
-
-            # 1. Find PR for issue
-            pr_number = self._find_pr_for_issue(issue_number)
-            if pr_number is None:
-                logger.info(f"Issue #{issue_number}: no open PR found, skipping")
-                return WorkerResult(issue_number=issue_number, success=True)
-
             self.status_tracker.update_slot(acquired_slot, f"#{issue_number}: fetching checks")
 
             # 2. Get CI checks

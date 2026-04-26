@@ -34,6 +34,7 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any
 
+from hephaestus.automation.github_api import _gh_call
 from hephaestus.github.rate_limit import detect_rate_limit, wait_until
 from hephaestus.logging.utils import get_logger
 
@@ -43,7 +44,10 @@ ORG = "HomericIntelligence"
 
 FLEET_NOREPLY = "4211002+mvillmow@users.noreply.github.com"
 
-RESIGN_EXEC = f"git -c user.email={FLEET_NOREPLY} commit --amend --no-edit -S --reset-author"
+RESIGN_EXEC = (
+    f"git -c user.email={FLEET_NOREPLY} "
+    "commit --amend --no-edit -S --reset-author"
+)
 
 ALL_REPOS: list[str] = [
     "Odysseus",
@@ -67,11 +71,11 @@ ALL_REPOS: list[str] = [
 class PRStatus(Enum):
     """Readiness classification for a pull request."""
 
-    READY = auto()  # CI green, no conflicts → merge
-    OUTDATED = auto()  # CI pending/green, behind base → rebase + re-sign
+    READY = auto()       # CI green, no conflicts → merge
+    OUTDATED = auto()    # CI pending/green, behind base → rebase + re-sign
     CONFLICTED = auto()  # Has merge conflicts → agent resolution
-    FAILING = auto()  # CI failing → skip
-    UNKNOWN = auto()  # Can't determine → skip
+    FAILING = auto()     # CI failing → skip
+    UNKNOWN = auto()     # Can't determine → skip
 
 
 @dataclass
@@ -84,9 +88,9 @@ class PRInfo:
     head_ref: str
     base_ref: str
     head_sha: str
-    mergeable: str  # MERGEABLE | CONFLICTING | UNKNOWN
-    merge_state: str  # CLEAN | BEHIND | DIRTY | BLOCKED | UNKNOWN
-    ci_state: str  # SUCCESS | FAILURE | PENDING | UNKNOWN
+    mergeable: str        # MERGEABLE | CONFLICTING | UNKNOWN
+    merge_state: str      # CLEAN | BEHIND | DIRTY | BLOCKED | UNKNOWN
+    ci_state: str         # SUCCESS | FAILURE | PENDING | UNKNOWN
     status: PRStatus = PRStatus.UNKNOWN
     conflict_files: list[str] = field(default_factory=list)
 
@@ -108,13 +112,7 @@ def _gh(
 
     for attempt in range(4):
         try:
-            return subprocess.run(
-                ["gh", *full_args],
-                check=check,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
+            return _gh_call(full_args, check=check)
         except subprocess.CalledProcessError as e:
             epoch = detect_rate_limit(e.stderr or "")
             if epoch is not None:
@@ -167,17 +165,13 @@ def list_prs(repo: str) -> list[PRInfo]:
     try:
         result = _gh(
             [
-                "pr",
-                "list",
-                "--state",
-                "open",
-                "--json",
-                (
+                "pr", "list",
+                "--state", "open",
+                "--json", (
                     "number,title,headRefName,baseRefName,headRefOid,"
                     "mergeable,mergeStateStatus,statusCheckRollup"
                 ),
-                "--limit",
-                "100",
+                "--limit", "100",
             ],
             repo=repo,
         )
@@ -206,20 +200,18 @@ def list_prs(repo: str) -> list[PRInfo]:
         else:
             status = PRStatus.OUTDATED
 
-        out.append(
-            PRInfo(
-                repo=repo,
-                number=p["number"],
-                title=p["title"],
-                head_ref=p["headRefName"],
-                base_ref=p["baseRefName"],
-                head_sha=p["headRefOid"],
-                mergeable=mergeable,
-                merge_state=merge_state,
-                ci_state=ci,
-                status=status,
-            )
-        )
+        out.append(PRInfo(
+            repo=repo,
+            number=p["number"],
+            title=p["title"],
+            head_ref=p["headRefName"],
+            base_ref=p["baseRefName"],
+            head_sha=p["headRefOid"],
+            mergeable=mergeable,
+            merge_state=merge_state,
+            ci_state=ci,
+            status=status,
+        ))
 
     return out
 
@@ -305,19 +297,13 @@ def resolve_conflict_with_agent(pr: PRInfo, clone_dir: Path, dry_run: bool = Fal
         # Start rebase — will stop at conflicts
         subprocess.run(
             ["git", "rebase", f"origin/{base}"],
-            cwd=work,
-            capture_output=True,
-            text=True,
-            check=False,
+            cwd=work, capture_output=True, text=True, check=False,
         )
 
         # Identify conflicted files
         status_result = subprocess.run(
             ["git", "diff", "--name-only", "--diff-filter=U"],
-            cwd=work,
-            capture_output=True,
-            text=True,
-            check=True,
+            cwd=work, capture_output=True, text=True, check=True,
         )
         conflict_files = [f.strip() for f in status_result.stdout.splitlines() if f.strip()]
 
@@ -338,10 +324,7 @@ def resolve_conflict_with_agent(pr: PRInfo, clone_dir: Path, dry_run: bool = Fal
             conflict_list = "\n".join(f"- {f}" for f in conflict_files)
             commit_count_result = subprocess.run(
                 ["git", "rev-list", "--count", f"origin/{base}..HEAD"],
-                cwd=work,
-                capture_output=True,
-                text=True,
-                check=True,
+                cwd=work, capture_output=True, text=True, check=True,
             )
             commit_count = commit_count_result.stdout.strip()
 
@@ -387,10 +370,7 @@ Rules:
         # Verify branch was pushed
         verify = subprocess.run(
             ["git", "ls-remote", "origin", branch],
-            cwd=work,
-            capture_output=True,
-            text=True,
-            check=False,
+            cwd=work, capture_output=True, text=True, check=False,
         )
         if branch in verify.stdout:
             logger.info("  ✓ Conflict resolved and pushed for PR #%d", pr.number)
@@ -413,11 +393,8 @@ def process_repo(
 ) -> dict[str, int]:
     """Process all open PRs in one repo. Returns counts by outcome."""
     counts: dict[str, int] = {
-        "merged": 0,
-        "rebased": 0,
-        "conflict_resolved": 0,
-        "skipped": 0,
-        "failed": 0,
+        "merged": 0, "rebased": 0, "conflict_resolved": 0,
+        "skipped": 0, "failed": 0,
     }
 
     logger.info("\n══ %s ══", repo)
@@ -441,12 +418,8 @@ def process_repo(
         label = status_labels[pr.status]
         logger.info(
             "  PR #%d [%s] %s  (CI=%s mergeable=%s state=%s)",
-            pr.number,
-            label,
-            pr.title[:60],
-            pr.ci_state,
-            pr.mergeable,
-            pr.merge_state,
+            pr.number, label, pr.title[:60],
+            pr.ci_state, pr.mergeable, pr.merge_state,
         )
 
         if pr.status == PRStatus.READY:
@@ -480,15 +453,12 @@ def main() -> int:
     )
     parser.add_argument("--dry-run", action="store_true", help="Print actions without executing")
     parser.add_argument(
-        "--repos",
-        nargs="+",
-        metavar="REPO",
+        "--repos", nargs="+", metavar="REPO",
         help=f"Restrict to specific repos (default: all {len(ALL_REPOS)})",
         default=ALL_REPOS,
     )
     parser.add_argument(
-        "--skip-conflict-resolution",
-        action="store_true",
+        "--skip-conflict-resolution", action="store_true",
         help="Skip Claude agent swarm for conflicted PRs",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Debug logging")
@@ -505,11 +475,8 @@ def main() -> int:
     logger.info("Fleet sync — %d repo(s)%s", len(repos), dry_tag)
 
     totals: dict[str, int] = {
-        "merged": 0,
-        "rebased": 0,
-        "conflict_resolved": 0,
-        "skipped": 0,
-        "failed": 0,
+        "merged": 0, "rebased": 0, "conflict_resolved": 0,
+        "skipped": 0, "failed": 0,
     }
 
     with tempfile.TemporaryDirectory(prefix="hephaestus-fleet-") as tmp:

@@ -16,7 +16,7 @@ jobs:
   lint:
     name: lint
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v6
@@ -44,12 +44,6 @@ jobs:
       - name: Ruff format check
         run: pixi run --environment lint ruff format --check hephaestus scripts tests
 
-  typecheck:
-    name: typecheck
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
       - uses: actions/checkout@v6
 
       - name: Install pixi

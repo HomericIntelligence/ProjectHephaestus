@@ -57,9 +57,10 @@ def _detect_default_branch(override: str | None) -> str:
         return override
     try:
         result = subprocess.run(
-            ["gh", "repo", "view", "--json", "defaultBranchRef",
-             "--jq", ".defaultBranchRef.name"],
-            capture_output=True, text=True, check=True,
+            ["gh", "repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
+            capture_output=True,
+            text=True,
+            check=True,
         )
         branch = result.stdout.strip()
         if branch:
@@ -73,24 +74,32 @@ def _working_tree_clean() -> bool:
     """Return True if the git working tree has no uncommitted changes."""
     result = subprocess.run(
         ["git", "status", "--porcelain"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     return result.returncode == 0 and result.stdout.strip() == ""
 
 
 def _in_git_repo() -> bool:
     """Return True if cwd is inside a git repository."""
-    return subprocess.run(
-        ["git", "rev-parse", "--git-dir"],
-        capture_output=True, check=False,
-    ).returncode == 0
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    )
 
 
 def _repo_root() -> Path:
     """Return the root directory of the current git repository."""
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return Path(result.stdout.strip())
 
@@ -317,25 +326,30 @@ async def _dispatch_swarm(
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Tidy the current repo's branches and fix failed rebases "
-            "with a Myrmidon swarm"
+            "Tidy the current repo's branches and fix failed rebases with a Myrmidon swarm"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Print actions without executing",
     )
     parser.add_argument(
-        "--trunk", metavar="BRANCH",
+        "--trunk",
+        metavar="BRANCH",
         help="Trunk branch (default: auto-detected)",
     )
     parser.add_argument(
-        "--no-swarm", action="store_true",
+        "--no-swarm",
+        action="store_true",
         help="Skip swarm dispatch; only report failures",
     )
     parser.add_argument(
-        "--max-concurrent", type=int, default=5, metavar="N",
+        "--max-concurrent",
+        type=int,
+        default=5,
+        metavar="N",
         help="Max parallel swarm agents (default: 5)",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Debug logging")
@@ -349,8 +363,7 @@ def _validate_environment() -> tuple[str, str, Path] | None:
     """
     if not _in_git_repo():
         logger.error(
-            "Not inside a git repository. "
-            "Run hephaestus-tidy from within a repo clone.",
+            "Not inside a git repository. Run hephaestus-tidy from within a repo clone.",
         )
         return None
 
@@ -364,8 +377,7 @@ def _validate_environment() -> tuple[str, str, Path] | None:
     repo_slug = detect_repo_from_remote()
     if not repo_slug:
         logger.error(
-            "Could not detect GitHub repo from git remote. "
-            "Is 'origin' set to a GitHub URL?",
+            "Could not detect GitHub repo from git remote. Is 'origin' set to a GitHub URL?",
         )
         return None
 
@@ -384,12 +396,14 @@ def _print_summary(results: dict[str, str]) -> int:
     if subsumed:
         logger.info(
             "  Subsumed/already on trunk (%d): %s",
-            len(subsumed), ", ".join(subsumed),
+            len(subsumed),
+            ", ".join(subsumed),
         )
     if failed:
         logger.warning(
             "  Still failing (%d) — fix manually: %s",
-            len(failed), ", ".join(failed),
+            len(failed),
+            ", ".join(failed),
         )
     return 0 if not failed else 1
 
@@ -428,7 +442,8 @@ def main() -> int:
 
     logger.info(
         "\ngh tidy could not rebase %d branch(es): %s",
-        len(problem_branches), ", ".join(problem_branches),
+        len(problem_branches),
+        ", ".join(problem_branches),
     )
 
     if args.no_swarm:
@@ -439,7 +454,8 @@ def main() -> int:
 
     logger.info(
         "Dispatching Myrmidon swarm (%d agent(s), cap=%d)...",
-        len(problem_branches), args.max_concurrent,
+        len(problem_branches),
+        args.max_concurrent,
     )
 
     if args.dry_run:
@@ -449,8 +465,12 @@ def main() -> int:
 
     results = asyncio.run(
         _dispatch_swarm(
-            problem_branches, trunk, repo_path, repo_slug,
-            args.max_concurrent, dry_run=args.dry_run,
+            problem_branches,
+            trunk,
+            repo_path,
+            repo_slug,
+            args.max_concurrent,
+            dry_run=args.dry_run,
         )
     )
 

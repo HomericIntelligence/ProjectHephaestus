@@ -5,7 +5,6 @@ Provides utilities for working with GitHub repositories, PRs, and automation.
 
 from hephaestus.github.fleet_sync import main as fleet_sync
 from hephaestus.github.pr_merge import detect_repo_from_remote, local_branch_exists
-from hephaestus.github.tidy import main as tidy
 from hephaestus.github.pr_merge import main as merge_prs
 from hephaestus.github.rate_limit import (
     detect_claude_usage_limit,
@@ -22,14 +21,14 @@ from hephaestus.github.stats import (
     get_prs_stats,
     validate_date,
 )
+from hephaestus.github.tidy import main as tidy
 
 __all__ = [
     "collect_stats",
-    "fleet_sync",
-    "tidy",
     "detect_claude_usage_limit",
     "detect_rate_limit",
     "detect_repo_from_remote",
+    "fleet_sync",
     "format_stats_table",
     "get_commits_stats",
     "get_current_repo",
@@ -38,6 +37,7 @@ __all__ = [
     "local_branch_exists",
     "merge_prs",
     "parse_reset_epoch",
+    "tidy",
     "validate_date",
     "wait_until",
 ]

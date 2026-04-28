@@ -751,6 +751,7 @@ class TestGhPrResolveThread:
         """Live mode calls _gh_call twice (reply + resolve)."""
         mock_result = Mock()
         mock_result.stdout = "{}"
-        with patch("hephaestus.automation.github_api._gh_call", return_value=mock_result) as mock_gh:
+        patch_target = "hephaestus.automation.github_api._gh_call"
+        with patch(patch_target, return_value=mock_result) as mock_gh:
             gh_pr_resolve_thread("thread-abc", "All good", dry_run=False)
         assert mock_gh.call_count == 2

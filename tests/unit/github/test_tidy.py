@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
-
 import pytest
 
 from hephaestus.github.tidy import _build_arg_parser, _print_summary, parse_problem_branches
@@ -163,6 +161,8 @@ def test_print_summary_empty_returns_zero():
 
 def test_build_arg_parser_returns_parser():
     """_build_arg_parser returns an ArgumentParser."""
+    import argparse
+
     parser = _build_arg_parser()
     assert isinstance(parser, argparse.ArgumentParser)
 

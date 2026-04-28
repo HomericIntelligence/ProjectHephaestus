@@ -25,7 +25,6 @@ from hephaestus.github.tidy import main as tidy
 
 __all__ = [
     "collect_stats",
-    "fleet_sync",
     "detect_claude_usage_limit",
     "detect_rate_limit",
     "detect_repo_from_remote",

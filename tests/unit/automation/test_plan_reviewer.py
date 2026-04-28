@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hephaestus.automation.models import PlanReviewerOptions
+from hephaestus.automation.models import PlanReviewerOptions, WorkerResult
 from hephaestus.automation.plan_reviewer import PlanReviewer
 
 
@@ -247,3 +247,137 @@ class TestReviewIssue:
 
         assert result.success is False
         assert result.error is not None
+
+
+# ---------------------------------------------------------------------------
+# _parse_args (CLI argument parser)
+# ---------------------------------------------------------------------------
+
+
+class TestPlanReviewerRunEmpty:
+    """Tests for run() with empty issues list."""
+
+    def test_empty_issues_returns_empty(self, mock_options: PlanReviewerOptions) -> None:
+        """Empty issue list → run() returns {} without launching any workers."""
+        mock_options.issues = []
+        reviewer = PlanReviewer(mock_options)
+        results = reviewer.run()
+        assert results == {}
+
+    def test_run_returns_worker_results_for_issues(self, reviewer: PlanReviewer) -> None:
+        """run() with non-empty issues submits workers and collects results."""
+        reviewer.options.issues = [123]
+        expected = WorkerResult(issue_number=123, success=True)
+
+        with patch.object(reviewer, "_review_issue", return_value=expected) as mock_review:
+            results = reviewer.run()
+
+        assert 123 in results
+        assert results[123].success is True
+        mock_review.assert_called_once()
+
+    def test_run_captures_worker_exception(self, reviewer: PlanReviewer) -> None:
+        """run() records a failure when a worker raises an exception."""
+        reviewer.options.issues = [123]
+
+        with patch.object(reviewer, "_review_issue", side_effect=RuntimeError("crash")):
+            results = reviewer.run()
+
+        assert 123 in results
+        assert results[123].success is False
+        assert "crash" in (results[123].error or "")
+
+    def test_run_multiple_issues(self, reviewer: PlanReviewer) -> None:
+        """run() processes multiple issues and collects all results."""
+        reviewer.options.issues = [1, 2]
+        reviewer.options.max_workers = 2
+
+        def _review(issue_num: int, slot_id: int) -> WorkerResult:
+            return WorkerResult(issue_number=issue_num, success=True)
+
+        with patch.object(reviewer, "_review_issue", side_effect=_review):
+            results = reviewer.run()
+
+        assert len(results) == 2
+        assert all(r.success for r in results.values())
+
+
+class TestPlanReviewerPrintSummary:
+    """Tests for PlanReviewer._print_summary."""
+
+    def test_all_successful(self, reviewer: PlanReviewer) -> None:
+        """All results successful → no error logged."""
+        results = {123: WorkerResult(issue_number=123, success=True)}
+        reviewer._print_summary(results)  # Should not raise
+
+    def test_with_failures(self, reviewer: PlanReviewer) -> None:
+        """Failed results are included in summary."""
+        results = {123: WorkerResult(issue_number=123, success=False, error="timeout")}
+        reviewer._print_summary(results)  # Should not raise
+
+    def test_empty_results(self, reviewer: PlanReviewer) -> None:
+        """Empty results do not crash."""
+        reviewer._print_summary({})
+
+
+class TestPlanReviewerParseArgs:
+    """Tests for _parse_args() CLI argument parser in plan_reviewer."""
+
+    def test_issues_arg_parsed(self) -> None:
+        """--issues argument is parsed as a list of ints."""
+        import sys
+
+        from hephaestus.automation.plan_reviewer import _parse_args
+
+        orig = sys.argv
+        try:
+            sys.argv = ["prog", "--issues", "1", "2"]
+            args = _parse_args()
+            assert args.issues == [1, 2]
+        finally:
+            sys.argv = orig
+
+    def test_defaults(self) -> None:
+        """Default values for optional arguments are correct."""
+        import sys
+
+        from hephaestus.automation.plan_reviewer import _parse_args
+
+        orig = sys.argv
+        try:
+            sys.argv = ["prog", "--issues", "1"]
+            args = _parse_args()
+            assert args.max_workers == 3
+            assert args.dry_run is False
+            assert args.no_ui is False
+            assert args.verbose is False
+        finally:
+            sys.argv = orig
+
+    def test_dry_run_flag(self) -> None:
+        """--dry-run flag sets dry_run=True."""
+        import sys
+
+        from hephaestus.automation.plan_reviewer import _parse_args
+
+        orig = sys.argv
+        try:
+            sys.argv = ["prog", "--issues", "1", "--dry-run"]
+            args = _parse_args()
+            assert args.dry_run is True
+        finally:
+            sys.argv = orig
+
+    def test_max_workers_option(self) -> None:
+        """--max-workers sets max_workers to the given value."""
+        import sys
+
+        from hephaestus.automation.plan_reviewer import _parse_args
+
+        orig = sys.argv
+        try:
+            sys.argv = ["prog", "--issues", "1", "--max-workers", "5"]
+            args = _parse_args()
+            assert args.max_workers == 5
+        finally:
+            sys.argv = orig

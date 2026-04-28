@@ -17,7 +17,9 @@ from hephaestus.automation.github_api import (
     gh_issue_json,
     gh_list_labels,
     gh_list_open_issues,
+    gh_pr_checks,
     gh_pr_create,
+    gh_pr_resolve_thread,
     is_issue_closed,
     parse_issue_dependencies,
     prefetch_issue_states,
@@ -700,3 +702,55 @@ class TestWriteSecure:
         finally:
             # Restore permissions for cleanup
             test_file.parent.chmod(0o755)
+
+
+class TestGhPrChecks:
+    """Tests for gh_pr_checks function."""
+
+    def test_dry_run_returns_empty_list(self) -> None:
+        """dry_run=True → returns empty list without calling gh."""
+        result = gh_pr_checks(42, dry_run=True)
+        assert result == []
+
+    def test_parses_checks_correctly(self) -> None:
+        """Parses raw check data into standardized dicts."""
+        raw = [
+            {"name": "test", "status": "completed", "conclusion": "success", "required": True},
+            {"name": "lint", "status": "in_progress", "conclusion": None, "required": False},
+        ]
+        mock_result = Mock()
+        mock_result.stdout = __import__("json").dumps(raw)
+        with patch("hephaestus.automation.github_api._gh_call", return_value=mock_result):
+            checks = gh_pr_checks(42)
+        assert len(checks) == 2
+        assert checks[0]["name"] == "test"
+        assert checks[0]["conclusion"] == "success"
+        assert checks[0]["required"] is True
+        assert checks[1]["conclusion"] is None
+
+    def test_empty_conclusion_becomes_none(self) -> None:
+        """Empty string conclusion is normalized to None."""
+        raw = [{"name": "ci", "status": "in_progress", "conclusion": "", "required": True}]
+        mock_result = Mock()
+        mock_result.stdout = __import__("json").dumps(raw)
+        with patch("hephaestus.automation.github_api._gh_call", return_value=mock_result):
+            checks = gh_pr_checks(1)
+        assert checks[0]["conclusion"] is None
+
+
+class TestGhPrResolveThread:
+    """Tests for gh_pr_resolve_thread function."""
+
+    def test_dry_run_does_not_call_gh(self) -> None:
+        """dry_run=True → no gh API calls are made."""
+        with patch("hephaestus.automation.github_api._gh_call") as mock_gh:
+            gh_pr_resolve_thread("thread-id-123", "Fixed this", dry_run=True)
+        mock_gh.assert_not_called()
+
+    def test_live_calls_graphql(self) -> None:
+        """Live mode calls _gh_call twice (reply + resolve)."""
+        mock_result = Mock()
+        mock_result.stdout = "{}"
+        with patch("hephaestus.automation.github_api._gh_call", return_value=mock_result) as mock_gh:
+            gh_pr_resolve_thread("thread-abc", "All good", dry_run=False)
+        assert mock_gh.call_count == 2

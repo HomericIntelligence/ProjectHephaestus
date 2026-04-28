@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hephaestus.automation.models import ReviewerOptions
+from hephaestus.automation.models import ReviewerOptions, WorkerResult
 from hephaestus.automation.pr_reviewer import PRReviewer, _parse_json_block
 
 # ---------------------------------------------------------------------------
@@ -215,3 +215,109 @@ class TestReviewPostsInlineComments:
         call_kwargs = mock_post.call_args
         assert call_kwargs[1]["pr_number"] == 42 or call_kwargs[0][0] == 42
         assert "comments" in (call_kwargs[1] if call_kwargs[1] else {}) or mock_post.called
+
+
+# ---------------------------------------------------------------------------
+# _parse_args (CLI argument parser)
+# ---------------------------------------------------------------------------
+
+
+class TestPrReviewerDiscoverPrs:
+    """Tests for PRReviewer._discover_prs."""
+
+    def test_discover_finds_prs(self, reviewer: PRReviewer) -> None:
+        """Issues with PRs are mapped; issues without are logged as warnings."""
+        def find_pr(issue_num: int) -> int | None:
+            return {10: 20, 30: None}[issue_num]
+
+        with patch.object(reviewer, "_find_pr_for_issue", side_effect=find_pr):
+            pr_map = reviewer._discover_prs([10, 30])
+
+        assert pr_map == {10: 20}
+
+    def test_discover_all_missing_returns_empty(self, reviewer: PRReviewer) -> None:
+        """No PRs found → empty dict returned."""
+        with patch.object(reviewer, "_find_pr_for_issue", return_value=None):
+            pr_map = reviewer._discover_prs([1, 2])
+        assert pr_map == {}
+
+
+class TestPrReviewerPrintSummary:
+    """Tests for PRReviewer._print_summary."""
+
+    def test_all_successful(self, reviewer: PRReviewer) -> None:
+        """All results successful → no error logged."""
+        results = {123: WorkerResult(issue_number=123, success=True)}
+        reviewer._print_summary(results)  # Should not raise
+
+    def test_with_failures(self, reviewer: PRReviewer) -> None:
+        """Failed results are included in summary."""
+        results = {123: WorkerResult(issue_number=123, success=False, error="timeout")}
+        reviewer._print_summary(results)  # Should not raise
+
+    def test_empty_results(self, reviewer: PRReviewer) -> None:
+        """Empty results do not crash."""
+        reviewer._print_summary({})
+
+
+class TestPrReviewerParseArgs:
+    """Tests for _parse_args() CLI argument parser in pr_reviewer."""
+
+    def test_issues_arg_parsed(self) -> None:
+        """--issues argument is parsed as a list of ints."""
+        import sys
+
+        from hephaestus.automation.pr_reviewer import _parse_args
+
+        orig = sys.argv
+        try:
+            sys.argv = ["prog", "--issues", "123", "456"]
+            args = _parse_args()
+            assert args.issues == [123, 456]
+        finally:
+            sys.argv = orig
+
+    def test_defaults(self) -> None:
+        """Default values for optional arguments are correct."""
+        import sys
+
+        from hephaestus.automation.pr_reviewer import _parse_args
+
+        orig = sys.argv
+        try:
+            sys.argv = ["prog", "--issues", "1"]
+            args = _parse_args()
+            assert args.max_workers == 3
+            assert args.dry_run is False
+            assert args.no_ui is False
+            assert args.verbose is False
+        finally:
+            sys.argv = orig
+
+    def test_dry_run_flag(self) -> None:
+        """--dry-run sets dry_run=True."""
+        import sys
+
+        from hephaestus.automation.pr_reviewer import _parse_args
+
+        orig = sys.argv
+        try:
+            sys.argv = ["prog", "--issues", "1", "--dry-run"]
+            args = _parse_args()
+            assert args.dry_run is True
+        finally:
+            sys.argv = orig
+
+    def test_verbose_flag(self) -> None:
+        """--verbose flag sets verbose=True."""
+        import sys
+
+        from hephaestus.automation.pr_reviewer import _parse_args
+
+        orig = sys.argv
+        try:
+            sys.argv = ["prog", "--issues", "1", "--verbose"]
+            args = _parse_args()
+            assert args.verbose is True
+        finally:
+            sys.argv = orig

@@ -14,6 +14,8 @@
 # Exit codes:
 #   0 — all checks passed (or installed successfully)
 #   1 — one or more checks failed
+#
+# shellcheck disable=SC2015  # A && B || C patterns are intentional best-effort installs
 set -uo pipefail
 
 # ─── Colors ──────────────────────────────────────────────────────────────────

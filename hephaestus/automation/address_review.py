@@ -39,6 +39,15 @@ from .prompts import get_address_review_prompt
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
+__all__ = [
+    "AddressReviewOptions",
+    "ReviewPhase",
+    "ReviewState",
+    "WorkerResult",
+    "AddressReviewer",
+    "main",
+]
+
 logger = logging.getLogger(__name__)
 
 

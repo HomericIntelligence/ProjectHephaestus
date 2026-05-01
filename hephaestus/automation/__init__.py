@@ -7,6 +7,7 @@ from hephaestus.automation.models import (
     IssueInfo,
     PlannerOptions,
     ReviewerOptions,
+    ReviewState,
 )
 from hephaestus.automation.planner import Planner
 from hephaestus.automation.reviewer import PRReviewer
@@ -20,4 +21,5 @@ __all__ = [
     "Planner",
     "PlannerOptions",
     "ReviewerOptions",
+    "ReviewState",
 ]

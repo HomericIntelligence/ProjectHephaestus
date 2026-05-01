@@ -13,7 +13,7 @@ audit = "pixi run --environment lint pip-audit"
 
 [dependencies]
 python = ">=3.10"
-pip = "*"
+pip = ">=26.0"  # CVE-2026-3219 ignored via pip-audit --ignore-vuln until conda-forge ships 26.1
 pydantic = ">=2.12.5,<3"
 pygments = ">=2.20.0"  # CVE-2026-4539
 requests = ">=2.33.0"  # CVE-2026-25645
@@ -47,7 +47,7 @@ types-pyyaml = ">=6.0.12,<7"
 pip-audit = ">=2.7,<3"
 
 [feature.lint.tasks]
-pip-audit = "pip-audit"
+pip-audit = "pip-audit --ignore-vuln CVE-2026-3219"  # pip 26.0.1 CVE; conda-forge 26.1 pending
 
 [environments]
 default = { features = ["dev"], solve-group = "default" }

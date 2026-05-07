@@ -24,7 +24,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import tomllib
+
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # pragma: no cover — only on Python 3.10
+    import tomli as tomllib  # type: ignore[no-redef, unused-ignore]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -61,9 +65,10 @@ class TestCLIHelpFlag:
 
     @pytest.mark.parametrize("command,module_path,attr", ENTRY_POINTS, ids=ENTRY_POINT_IDS)
     def test_help_flag(self, command: str, module_path: str, attr: str) -> None:
-        binary = shutil.which(command)
+        binary: str | None = shutil.which(command)
         if binary is None:
             pytest.skip(f"{command} not on PATH — install with `pip install -e .` or run via pixi")
+        assert binary is not None  # narrow for mypy; pytest.skip already returned
 
         result = subprocess.run([binary, "--help"], capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, (

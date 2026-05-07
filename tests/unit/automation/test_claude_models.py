@@ -16,9 +16,7 @@ class TestDefaults:
         monkeypatch.delenv("HEPH_PLANNER_MODEL", raising=False)
         assert claude_models.planner_model() == claude_models.OPUS
 
-    def test_implementer_defaults_to_haiku(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_implementer_defaults_to_haiku(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("HEPH_IMPLEMENTER_MODEL", raising=False)
         assert claude_models.implementer_model() == claude_models.HAIKU
 

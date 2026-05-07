@@ -215,10 +215,7 @@ class TestDetectClaudeUsageCap:
         assert detect_claude_usage_cap("Normal output, nothing wrong") is None
 
     def test_parses_date_qualified_form(self) -> None:
-        text = (
-            "You're out of extra usage \xb7 resets May 8, 5pm "
-            "(America/Los_Angeles)"
-        )
+        text = "You're out of extra usage \xb7 resets May 8, 5pm (America/Los_Angeles)"
         epoch = detect_claude_usage_cap(text)
         assert epoch is not None
         # Reset must be in the future (or recent past for clock skew).

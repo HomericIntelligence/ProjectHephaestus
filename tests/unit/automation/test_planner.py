@@ -101,9 +101,7 @@ class TestCallClaude:
             mock_detect.side_effect = [0, None]
 
             with patch("time.sleep"):  # Don't actually sleep
-                result = planner._call_claude(
-                    "Test prompt", model="claude-opus-4-7", max_retries=3
-                )
+                result = planner._call_claude("Test prompt", model="claude-opus-4-7", max_retries=3)
 
             assert result == "Success"
             assert mock_run.call_count == 2
@@ -131,9 +129,7 @@ class TestCallClaude:
                 sp.CalledProcessError(1, "claude", output=usage_json, stderr=""),
                 MagicMock(stdout="Success", returncode=0),
             ]
-            result = planner._call_claude(
-                "p", model="claude-opus-4-7", max_retries=2
-            )
+            result = planner._call_claude("p", model="claude-opus-4-7", max_retries=2)
 
             assert result == "Success"
             assert mock_run.call_count == 2

@@ -795,8 +795,7 @@ class IssueImplementer:
                     reset_epoch = _claude_quota_reset_epoch(err_text)
                     if reset_epoch is not None and reset_epoch > 0:
                         logger.warning(
-                            f"Claude usage cap hit for issue #{issue_number}; "
-                            "waiting for reset"
+                            f"Claude usage cap hit for issue #{issue_number}; waiting for reset"
                         )
                         wait_until(reset_epoch)
                     raise RuntimeError(f"Claude Code failed: {err_text or 'is_error=true'}")
@@ -837,9 +836,7 @@ class IssueImplementer:
             # seconds. The Claude CLI puts its 429 message in stdout JSON.
             reset_epoch = _claude_quota_reset_epoch(stderr, stdout)
             if reset_epoch is not None and reset_epoch > 0:
-                logger.warning(
-                    f"Claude usage cap hit for issue #{issue_number}; waiting for reset"
-                )
+                logger.warning(f"Claude usage cap hit for issue #{issue_number}; waiting for reset")
                 wait_until(reset_epoch)
 
             raise RuntimeError(f"Claude Code failed: {e.stderr or e.stdout}") from e

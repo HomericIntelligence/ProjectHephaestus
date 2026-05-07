@@ -188,9 +188,10 @@ class TestRunImplReviewLoop:
 class TestRunImplReviewFailsSafe:
     """When the reviewer call itself fails, treat as NoGo."""
 
-    def test_synthetic_nogo_on_call_claude_failure(self, implementer: IssueImplementer) -> None:
+    def test_synthetic_nogo_on_subprocess_failure(self, implementer: IssueImplementer) -> None:
+        """Reviewer subprocess failure synthesizes a NOGO verdict."""
         with patch(
-            "hephaestus.automation.implementer.call_claude",
+            "hephaestus.automation.implementer.subprocess.run",
             side_effect=RuntimeError("claude down"),
         ):
             out = implementer._run_impl_review(

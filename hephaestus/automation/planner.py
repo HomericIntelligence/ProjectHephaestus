@@ -21,9 +21,14 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from hephaestus.github.rate_limit import detect_rate_limit, wait_until
+from hephaestus.github.rate_limit import (
+    detect_claude_usage_cap,
+    detect_rate_limit,
+    wait_until,
+)
 
-from .claude_invoke import Complexity, call_claude, parse_review_verdict
+from .claude_invoke import parse_review_verdict
+from .claude_models import advise_model, learn_model, planner_model, reviewer_model
 from .git_utils import get_repo_root
 from .github_api import (
     _gh_call,
@@ -43,6 +48,23 @@ from .status_tracker import StatusTracker
 MAX_REVIEW_ITERATIONS = 3
 
 logger = logging.getLogger(__name__)
+
+
+def _scan_quota_reset(*texts: str) -> int | None:
+    """Find a quota-reset epoch across one or more output streams.
+
+    Inspects each text for either form of rate-limit message — the GitHub-CLI
+    "Limit reached ..." form or the Claude-CLI "out of extra usage ·
+    resets ..." form. Uses ``is not None`` chaining so an epoch of ``0``
+    (rate-limited, reset time unknown) is preserved instead of being
+    mistaken for "no rate limit".
+    """
+    for text in texts:
+        for detect in (detect_rate_limit, detect_claude_usage_cap):
+            epoch = detect(text)
+            if epoch is not None:
+                return epoch
+    return None
 
 
 class Planner:
@@ -247,6 +269,7 @@ class Planner:
         self,
         prompt: str,
         *,
+        model: str,
         max_retries: int = 3,
         timeout: int = 300,
         extra_args: list[str] | None = None,
@@ -255,6 +278,8 @@ class Planner:
 
         Args:
             prompt: The prompt to send to Claude
+            model: Claude model ID to pass to ``--model`` (caller picks per phase
+                via :mod:`hephaestus.automation.claude_models`)
             max_retries: Maximum retry attempts for rate limits
             timeout: Timeout in seconds
             extra_args: Additional CLI arguments
@@ -266,19 +291,16 @@ class Planner:
             RuntimeError: If Claude call fails
 
         """
-        # Build command. We default to sonnet here for parity with the new
-        # `claude_invoke.call_claude` helper. Per-task model fallback (opus for
-        # complex, haiku for simple) is handled by the loop methods that call
-        # `call_claude` directly; this legacy path is kept as a backward-compatible
-        # surface for `_run_advise` and external callers / tests.
+        # Build command. ``--model`` pins the phase-appropriate model so this
+        # call doesn't burn quota on whatever the user's CLI default is.
         cmd = [
             "claude",
+            "--model",
+            model,
             "--print",
             prompt,
             "--output-format",
             "text",
-            "--model",
-            "sonnet",
         ]
 
         # Add system prompt if configured
@@ -313,10 +335,14 @@ class Planner:
             return response
 
         except subprocess.CalledProcessError as e:
-            stderr = e.stderr if e.stderr else ""
+            stderr = e.stderr or ""
+            stdout = e.stdout or ""
 
-            # Check for rate limit
-            reset_epoch = detect_rate_limit(stderr)
+            # Rate-limit messages may appear in either stream. The Claude CLI
+            # in particular returns its 429 ("You're out of extra usage ·
+            # resets ...") inside the stdout JSON payload as the ``result``
+            # field of an ``is_error: true`` response, not in stderr.
+            reset_epoch = _scan_quota_reset(stderr, stdout)
             if reset_epoch is not None and max_retries > 0:
                 if reset_epoch > 0:
                     wait_until(reset_epoch)
@@ -328,12 +354,16 @@ class Planner:
                 # Retry with decremented counter
                 return self._call_claude(
                     prompt,
+                    model=model,
                     max_retries=max_retries - 1,
                     timeout=timeout,
                     extra_args=extra_args,
                 )
 
-            raise RuntimeError(f"Claude failed: {stderr}") from e
+            # Surface stdout too — the CLI's 429 message lives there, and an
+            # empty stderr in the original logs hid the actual cause.
+            detail = stderr or stdout or "(no output)"
+            raise RuntimeError(f"Claude failed: {detail}") from e
 
         except subprocess.TimeoutExpired as e:
             raise RuntimeError(f"Claude timed out after {timeout}s") from e
@@ -446,9 +476,10 @@ class Planner:
                 marketplace_path=str(marketplace_path),
             )
 
-            # Call Claude with shorter timeout
+            # Call Claude with shorter timeout. /advise is light search work
+            # so it runs on the cheap model.
             logger.info(f"Running advise for issue #{issue_number}...")
-            findings = self._call_claude(advise_prompt, timeout=180)
+            findings = self._call_claude(advise_prompt, model=advise_model(), timeout=180)
 
             return findings
 
@@ -536,8 +567,9 @@ class Planner:
 
         context = "\n".join(context_parts)
 
-        # Call Claude to generate plan
-        plan = self._call_claude(context, timeout=300)
+        # Call Claude to generate plan. Plans are small but reasoning-heavy,
+        # so this is the right place to spend Opus.
+        plan = self._call_claude(context, model=planner_model(), timeout=300)
 
         return plan
 
@@ -558,7 +590,6 @@ class Planner:
                 reviewer can see why the loop terminated.
 
         """
-        # Add header
         comment_body = f"""# Implementation Plan
 
 {plan}
@@ -645,7 +676,7 @@ class Planner:
                 plan_text=plan,
                 learnings=learnings,
                 iteration=iteration,
-                prior_review=review_text,  # show prior review to next reviewer
+                prior_review=review_text,
             )
 
             verdict = parse_review_verdict(review_text)
@@ -664,12 +695,15 @@ class Planner:
         return plan, review_text, iterations_run
 
     def _capture_planner_learnings(self, issue_number: int, plan: str) -> str:
-        """Ask Claude (SIMPLE complexity) to summarize what the planner just learned.
+        """Ask Claude to summarize what the planner just learned.
 
         These learnings are passed to the reviewer alongside the plan, giving
         the reviewer extra signal about which aspects the planner is most/least
         confident in. Failure here is non-fatal — return empty string and let
         the review proceed without learnings.
+
+        Uses ``learn_model()`` (Haiku by default) per the per-phase model
+        selection in :mod:`hephaestus.automation.claude_models`.
 
         Args:
             issue_number: GitHub issue number (used in prompt for grounding).
@@ -692,12 +726,7 @@ class Planner:
             f"{plan}"
         )
         try:
-            return call_claude(
-                prompt,
-                complexity=Complexity.SIMPLE,
-                timeout=120,
-                use_stdin=True,
-            )
+            return self._call_claude(prompt, model=learn_model(), timeout=120)
         except Exception as e:
             logger.warning(f"#{issue_number}: planner-learnings capture failed (non-fatal): {e}")
             return ""
@@ -717,7 +746,8 @@ class Planner:
 
         Uses a separate ``claude --print`` invocation (no ``--resume``) so each
         review is unbiased by the planner session. Applies the strict
-        ``review-pr-strict`` rubric embedded in the prompt.
+        ``review-pr-strict`` rubric embedded in the prompt. Uses
+        ``reviewer_model()`` (Sonnet by default).
 
         Args:
             issue_number: GitHub issue number.
@@ -743,12 +773,7 @@ class Planner:
             prior_review=prior_review,
         )
         try:
-            return call_claude(
-                prompt,
-                complexity=Complexity.COMPLEX,
-                timeout=300,
-                use_stdin=True,
-            )
+            return self._call_claude(prompt, model=reviewer_model(), timeout=300)
         except Exception as e:
             logger.error(
                 f"#{issue_number} R{iteration}: reviewer call failed: {e}; "

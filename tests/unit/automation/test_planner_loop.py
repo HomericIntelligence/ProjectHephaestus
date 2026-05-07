@@ -142,18 +142,14 @@ class TestCapturePlannerLearnings:
     """Learnings capture must fail safely (return '') without raising."""
 
     def test_returns_empty_on_call_claude_failure(self, planner: Planner) -> None:
-        with patch(
-            "hephaestus.automation.planner.call_claude",
-            side_effect=RuntimeError("claude down"),
-        ):
+        """Planner-learnings call failure is non-fatal — returns empty string."""
+        with patch.object(planner, "_call_claude", side_effect=RuntimeError("claude down")):
             out = planner._capture_planner_learnings(123, "plan text")
         assert out == ""
 
     def test_returns_call_claude_output(self, planner: Planner) -> None:
-        with patch(
-            "hephaestus.automation.planner.call_claude",
-            return_value="- learning A\n- learning B",
-        ):
+        """Successful learnings call returns the output verbatim."""
+        with patch.object(planner, "_call_claude", return_value="- learning A\n- learning B"):
             out = planner._capture_planner_learnings(123, "plan text")
         assert "learning A" in out
 
@@ -162,10 +158,8 @@ class TestRunPlanReview:
     """The reviewer must fail safely to NoGo when the call errors."""
 
     def test_review_call_failure_returns_synthetic_nogo(self, planner: Planner) -> None:
-        with patch(
-            "hephaestus.automation.planner.call_claude",
-            side_effect=RuntimeError("review down"),
-        ):
+        """Reviewer call failure synthesizes a NOGO verdict so the loop continues."""
+        with patch.object(planner, "_call_claude", side_effect=RuntimeError("review down")):
             out = planner._run_plan_review(
                 issue_number=1,
                 issue_title="t",

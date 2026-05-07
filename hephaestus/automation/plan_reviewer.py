@@ -12,12 +12,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import subprocess
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Any
 
-from .claude_invoke import Complexity, call_claude
+from .claude_models import reviewer_model
 from .github_api import _gh_call, gh_issue_comment, gh_issue_json
 from .models import PlanReviewerOptions, WorkerResult
 from .prompts import get_plan_review_prompt
@@ -301,13 +303,37 @@ class PlanReviewer:
             plan_text=plan_text,
         )
 
+        env = os.environ.copy()
+        # Avoid nested-session guard used by the planner / implementer
+        env["CLAUDECODE"] = ""
+
         try:
-            return call_claude(
-                prompt,
-                complexity=Complexity.COMPLEX,
+            result = subprocess.run(
+                ["claude", "--model", reviewer_model(), "--print", "--output-format", "text"],
+                input=prompt,
+                capture_output=True,
+                text=True,
                 timeout=300,
-                use_stdin=True,
+                env=env,
             )
+
+            if result.returncode != 0:
+                logger.error(
+                    f"Claude returned exit code {result.returncode} for issue #{issue_number}: "
+                    f"{result.stderr[:200]}"
+                )
+                return None
+
+            output: str = (result.stdout or "").strip()
+            if not output:
+                logger.error(f"Claude returned empty output for issue #{issue_number}")
+                return None
+
+            return output
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"Claude timed out reviewing plan for issue #{issue_number}")
+            return None
         except FileNotFoundError:
             logger.error("'claude' CLI not found in PATH; cannot run plan review")
             return None

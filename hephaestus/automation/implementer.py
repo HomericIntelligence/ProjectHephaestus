@@ -13,6 +13,7 @@ import argparse
 import contextlib
 import json
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -22,7 +23,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
-from .claude_invoke import Complexity, call_claude, parse_review_verdict
+from hephaestus.github.rate_limit import (
+    detect_claude_usage_cap,
+    detect_rate_limit,
+    wait_until,
+)
+
+from .claude_invoke import parse_review_verdict
+from .claude_models import implementer_model, reviewer_model
 from .curses_ui import CursesUI, ThreadLogManager
 from .dependency_resolver import CyclicDependencyError, DependencyResolver
 from .follow_up import parse_follow_up_items, run_follow_up_issues
@@ -48,6 +56,23 @@ from .worktree_manager import WorktreeManager
 MAX_REVIEW_ITERATIONS = 3
 
 logger = logging.getLogger(__name__)
+
+
+def _claude_quota_reset_epoch(*texts: str) -> int | None:
+    """Find a quota-reset epoch across one or more output streams.
+
+    Inspects each text for either form of rate-limit message — the GitHub-CLI
+    "Limit reached ..." form or the Claude-CLI "out of extra usage ·
+    resets ..." form. Uses ``is not None`` chaining so an epoch of ``0``
+    (rate-limited, reset time unknown) is preserved instead of being
+    mistaken for "no rate limit".
+    """
+    for text in texts:
+        for detect in (detect_rate_limit, detect_claude_usage_cap):
+            epoch = detect(text)
+            if epoch is not None:
+                return epoch
+    return None
 
 
 class IssueImplementer:
@@ -397,7 +422,7 @@ class IssueImplementer:
                 state.phase = ImplementationPhase.IMPLEMENTING
             self._save_state(state)
 
-            # Run Claude Code (iteration 0 of the review loop)
+            # Run Claude Code
             issue = fetch_issue_info(issue_number)
             self.status_tracker.update_slot(slot_id, f"#{issue_number}: Running Claude Code")
             session_id = self._run_claude_code(
@@ -416,7 +441,7 @@ class IssueImplementer:
                 state.session_id = session_id
             self._save_state(state)
 
-            # In dry-run mode, skip all post-implementation steps (and the review loop)
+            # In dry-run mode, skip all post-implementation steps
             if self.options.dry_run:
                 self._log(
                     "info",
@@ -767,9 +792,9 @@ class IssueImplementer:
         the next prompt. The reviewer is a separate, fresh session each
         iteration (no ``--resume``) so its judgment is unbiased.
 
-        Iteration 0 is treated as a review of the just-completed initial run.
-        Iterations 1 and 2 first resume the impl session with feedback, then
-        re-review the resulting diff.
+        Iteration 0 reviews the just-completed initial run. Iterations 1 and 2
+        first resume the impl session with feedback, then re-review the
+        resulting diff.
 
         Args:
             issue_number: GitHub issue number.
@@ -778,9 +803,9 @@ class IssueImplementer:
             issue_title: Issue title (review prompt context).
             issue_body: Issue body (review prompt context).
             session_id: Implementer's Claude session id, captured by
-                :meth:`_run_claude_code`. ``None`` if capture failed — in that
-                case the loop runs a single review (iteration 0) and returns,
-                because we cannot re-iterate without a session to resume.
+                :meth:`_run_claude_code`. ``None`` if capture failed — the loop
+                runs a single review (iteration 0) and stops, since we cannot
+                re-iterate without a session to resume.
             slot_id: Worker slot id for status updates.
             thread_id: Thread id for log routing.
 
@@ -879,20 +904,7 @@ class IssueImplementer:
         prev_iteration: int,
         verdict: str,
     ) -> bool:
-        """Resume the impl session and feed reviewer feedback as the next prompt.
-
-        Args:
-            session_id: Claude session id from the initial impl run.
-            worktree_path: Worktree path (used as CWD so Claude finds the session).
-            issue_number: GitHub issue number.
-            review_text: Full reviewer output to feed back.
-            prev_iteration: Iteration index of the review being addressed.
-            verdict: ``"NOGO"`` or ``"AMBIGUOUS"``.
-
-        Returns:
-            True on success; False on resume failure (caller decides what to do).
-
-        """
+        """Resume the impl session and feed reviewer feedback as the next prompt."""
         prompt = get_impl_resume_feedback_prompt(
             issue_number=issue_number,
             prev_iteration=prev_iteration,
@@ -907,6 +919,8 @@ class IssueImplementer:
                     session_id,
                     prompt,
                     "--print",
+                    "--model",
+                    implementer_model(),
                     "--permission-mode",
                     "dontAsk",
                     "--allowedTools",
@@ -935,10 +949,9 @@ class IssueImplementer:
     ) -> str:
         """Run a fresh-session reviewer against the current impl diff.
 
-        Returns:
-            Review text. On reviewer-call failure, returns a synthetic NoGo
-            review so the loop can continue (failing safe — never silently GO).
-
+        Uses ``reviewer_model()`` (Sonnet by default) per the per-phase model
+        selection in :mod:`hephaestus.automation.claude_models`. On reviewer
+        call failure, returns a synthetic NoGo so the loop fails safe.
         """
         prompt = get_impl_loop_review_prompt(
             issue_number=issue_number,
@@ -950,12 +963,28 @@ class IssueImplementer:
             prior_review=prior_review,
         )
         try:
-            return call_claude(
-                prompt,
-                complexity=Complexity.COMPLEX,
+            env = os.environ.copy()
+            env["CLAUDECODE"] = ""
+            result = subprocess.run(
+                [
+                    "claude",
+                    "--print",
+                    "--model",
+                    reviewer_model(),
+                    "--output-format",
+                    "text",
+                ],
+                input=prompt,
+                capture_output=True,
+                text=True,
+                check=True,
                 timeout=600,
-                use_stdin=True,
+                env=env,
             )
+            output = (result.stdout or "").strip()
+            if not output:
+                raise RuntimeError("reviewer returned empty output")
+            return output
         except Exception as e:
             logger.error(
                 f"#{issue_number} R{iteration}: impl reviewer call failed: {e}; "
@@ -982,7 +1011,6 @@ class IssueImplementer:
             )
             diff = result.stdout or ""
             if not diff.strip():
-                # Fall back to last commit (e.g. when origin/main is unfetched)
                 fb = run(
                     ["git", "diff", "HEAD~1..HEAD"],
                     cwd=worktree_path,
@@ -991,11 +1019,10 @@ class IssueImplementer:
                     timeout=60,
                 )
                 diff = fb.stdout or ""
-        except Exception as e:  # broad: diff is non-critical; reviewer just gets less context
+        except Exception as e:
             logger.warning(f"diff collection failed for {branch_name}: {e}")
             return ""
 
-        # Truncate huge diffs so we don't blow the prompt budget.
         max_chars = 200_000
         if len(diff) > max_chars:
             diff = diff[:max_chars] + f"\n\n[... diff truncated at {max_chars} chars ...]\n"
@@ -1022,7 +1049,7 @@ class IssueImplementer:
                 timeout=30,
             )
             return (fb.stdout or "").strip()
-        except Exception as e:  # broad: non-critical
+        except Exception as e:
             logger.warning(f"changed-files collection failed for {branch_name}: {e}")
             return ""
 
@@ -1031,7 +1058,7 @@ class IssueImplementer:
         try:
             log_file = self.state_dir / f"review-{issue_number}-r{iteration}.log"
             log_file.write_text(review_text)
-        except Exception as e:  # broad: log persistence is non-critical
+        except Exception as e:
             logger.warning(f"#{issue_number}: failed to save review log r{iteration}: {e}")
 
     def _run_claude_code(
@@ -1063,6 +1090,8 @@ class IssueImplementer:
             result = run(
                 [
                     "claude",
+                    "--model",
+                    implementer_model(),
                     str(prompt_file),
                     "--output-format",
                     "json",
@@ -1077,6 +1106,23 @@ class IssueImplementer:
             # Parse session_id from JSON output
             try:
                 data = json.loads(result.stdout)
+
+                # The CLI sometimes returns exit 0 with ``is_error: true`` in
+                # JSON (e.g. usage caps in some channels). Treat that as a
+                # failure so the orchestrator can wait/retry instead of
+                # silently logging a useless session_id.
+                if isinstance(data, dict) and data.get("is_error"):
+                    err_text = str(data.get("result") or "")
+                    log_file = self.state_dir / f"claude-{issue_number}.log"
+                    log_file.write_text(result.stdout or "")
+                    reset_epoch = _claude_quota_reset_epoch(err_text)
+                    if reset_epoch is not None and reset_epoch > 0:
+                        logger.warning(
+                            f"Claude usage cap hit for issue #{issue_number}; waiting for reset"
+                        )
+                        wait_until(reset_epoch)
+                    raise RuntimeError(f"Claude Code failed: {err_text or 'is_error=true'}")
+
                 session_id = data.get("session_id")
 
                 # Save successful output to log file
@@ -1107,6 +1153,14 @@ class IssueImplementer:
             stderr = e.stderr or ""
             output = f"EXIT CODE: {e.returncode}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
             log_file.write_text(output)
+
+            # If the failure was a quota cap, block until reset rather than
+            # letting the orchestrator burn through every remaining issue in
+            # seconds. The Claude CLI puts its 429 message in stdout JSON.
+            reset_epoch = _claude_quota_reset_epoch(stderr, stdout)
+            if reset_epoch is not None and reset_epoch > 0:
+                logger.warning(f"Claude usage cap hit for issue #{issue_number}; waiting for reset")
+                wait_until(reset_epoch)
 
             raise RuntimeError(f"Claude Code failed: {e.stderr or e.stdout}") from e
         except subprocess.TimeoutExpired as e:

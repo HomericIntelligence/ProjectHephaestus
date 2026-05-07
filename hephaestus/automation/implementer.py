@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
+from .claude_invoke import Complexity, call_claude, parse_review_verdict
 from .curses_ui import CursesUI, ThreadLogManager
 from .dependency_resolver import CyclicDependencyError, DependencyResolver
 from .follow_up import parse_follow_up_items, run_follow_up_issues
@@ -36,9 +37,15 @@ from .models import (
     WorkerResult,
 )
 from .pr_manager import commit_changes, create_pr, ensure_pr_created
-from .prompts import get_implementation_prompt
+from .prompts import (
+    get_impl_loop_review_prompt,
+    get_impl_resume_feedback_prompt,
+    get_implementation_prompt,
+)
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
+
+MAX_REVIEW_ITERATIONS = 3
 
 logger = logging.getLogger(__name__)
 
@@ -390,7 +397,7 @@ class IssueImplementer:
                 state.phase = ImplementationPhase.IMPLEMENTING
             self._save_state(state)
 
-            # Run Claude Code
+            # Run Claude Code (iteration 0 of the review loop)
             issue = fetch_issue_info(issue_number)
             self.status_tracker.update_slot(slot_id, f"#{issue_number}: Running Claude Code")
             session_id = self._run_claude_code(
@@ -409,11 +416,11 @@ class IssueImplementer:
                 state.session_id = session_id
             self._save_state(state)
 
-            # In dry-run mode, skip all post-implementation steps
+            # In dry-run mode, skip all post-implementation steps (and the review loop)
             if self.options.dry_run:
                 self._log(
                     "info",
-                    f"[DRY RUN] Skipping PR creation, learn, follow-up for #{issue_number}",
+                    f"[DRY RUN] Skipping review loop, PR, learn, follow-up for #{issue_number}",
                     thread_id,
                 )
                 return WorkerResult(
@@ -422,6 +429,29 @@ class IssueImplementer:
                     branch_name=branch_name,
                     worktree_path=str(worktree_path),
                 )
+
+            # Strict review loop — re-uses the implementer session across
+            # iterations (via `claude --resume`) but uses a fresh reviewer
+            # session each iteration. Loop terminates on first unambiguous GO
+            # or after MAX_REVIEW_ITERATIONS.
+            with self.state_lock:
+                state.phase = ImplementationPhase.REVIEWING
+            self._save_state(state)
+            iterations, last_verdict, last_grade = self._run_impl_review_loop(
+                issue_number=issue_number,
+                worktree_path=worktree_path,
+                branch_name=branch_name,
+                issue_title=issue.title,
+                issue_body=issue.body,
+                session_id=session_id,
+                slot_id=slot_id,
+                thread_id=thread_id,
+            )
+            with self.state_lock:
+                state.review_iterations = iterations
+                state.last_review_verdict = last_verdict
+                state.last_review_grade = last_grade
+            self._save_state(state)
 
             # Verify commit, push, and PR were created by Claude
             with self.state_lock:
@@ -713,6 +743,296 @@ class IssueImplementer:
     ) -> bool:
         """Resume Claude session to run /learn."""
         return run_learn(session_id, worktree_path, issue_number, self.state_dir, slot_id)
+
+    # ------------------------------------------------------------------
+    # Strict review loop for implementer sessions
+    # ------------------------------------------------------------------
+
+    def _run_impl_review_loop(
+        self,
+        *,
+        issue_number: int,
+        worktree_path: Path,
+        branch_name: str,
+        issue_title: str,
+        issue_body: str,
+        session_id: str | None,
+        slot_id: int | None,
+        thread_id: int | None,
+    ) -> tuple[int, str | None, str | None]:
+        """Run the bounded review loop for an implementation.
+
+        The implementer session is re-used across iterations via
+        ``claude --resume <session_id>``, fed each iteration's NoGo critique as
+        the next prompt. The reviewer is a separate, fresh session each
+        iteration (no ``--resume``) so its judgment is unbiased.
+
+        Iteration 0 is treated as a review of the just-completed initial run.
+        Iterations 1 and 2 first resume the impl session with feedback, then
+        re-review the resulting diff.
+
+        Args:
+            issue_number: GitHub issue number.
+            worktree_path: Path to the git worktree (for diff and resume CWD).
+            branch_name: Implementation branch name (for diff base resolution).
+            issue_title: Issue title (review prompt context).
+            issue_body: Issue body (review prompt context).
+            session_id: Implementer's Claude session id, captured by
+                :meth:`_run_claude_code`. ``None`` if capture failed — in that
+                case the loop runs a single review (iteration 0) and returns,
+                because we cannot re-iterate without a session to resume.
+            slot_id: Worker slot id for status updates.
+            thread_id: Thread id for log routing.
+
+        Returns:
+            Tuple of (iterations executed, last verdict string, last grade letter).
+
+        """
+        last_verdict: str | None = None
+        last_grade: str | None = None
+        prior_review: str | None = None
+        iterations_run = 0
+
+        for iteration in range(MAX_REVIEW_ITERATIONS):
+            # Iterations 1+ resume the impl session with the prior reviewer's
+            # critique, so the implementer can fix the flagged issues before
+            # the next review.
+            if iteration > 0:
+                if not session_id:
+                    self._log(
+                        "warning",
+                        f"#{issue_number}: cannot iterate (no session_id from initial run); "
+                        "stopping review loop",
+                        thread_id,
+                    )
+                    break
+                if slot_id is not None:
+                    self.status_tracker.update_slot(
+                        slot_id, f"#{issue_number}: addressing review [R{iteration}]"
+                    )
+                resumed = self._resume_impl_with_feedback(
+                    session_id=session_id,
+                    worktree_path=worktree_path,
+                    issue_number=issue_number,
+                    review_text=prior_review or "",
+                    prev_iteration=iteration - 1,
+                    verdict=last_verdict or "NOGO",
+                )
+                if not resumed:
+                    self._log(
+                        "warning",
+                        f"#{issue_number}: resume failed at R{iteration}; stopping review loop",
+                        thread_id,
+                    )
+                    break
+
+            # Compute the diff and changed-files list for the reviewer.
+            if slot_id is not None:
+                self.status_tracker.update_slot(
+                    slot_id, f"#{issue_number}: reviewing impl [R{iteration}]"
+                )
+            diff_text = self._collect_diff(worktree_path, branch_name)
+            files_changed = self._collect_changed_files(worktree_path, branch_name)
+
+            review_text = self._run_impl_review(
+                issue_number=issue_number,
+                issue_title=issue_title,
+                issue_body=issue_body,
+                diff_text=diff_text,
+                files_changed=files_changed,
+                iteration=iteration,
+                prior_review=prior_review,
+            )
+            self._save_review_log(issue_number, iteration, review_text)
+            iterations_run = iteration + 1
+
+            verdict = parse_review_verdict(review_text)
+            last_verdict = verdict.verdict
+            last_grade = verdict.grade
+            self._log(
+                "info",
+                f"#{issue_number} R{iteration}: Verdict={verdict.verdict} "
+                f"Grade={verdict.grade or '?'}",
+                thread_id,
+            )
+
+            if verdict.is_go:
+                self._log(
+                    "info",
+                    f"#{issue_number}: GO on iteration {iteration} — review loop terminated",
+                    thread_id,
+                )
+                break
+
+            # Save this review for next iteration's context
+            prior_review = review_text
+
+        return iterations_run, last_verdict, last_grade
+
+    def _resume_impl_with_feedback(
+        self,
+        *,
+        session_id: str,
+        worktree_path: Path,
+        issue_number: int,
+        review_text: str,
+        prev_iteration: int,
+        verdict: str,
+    ) -> bool:
+        """Resume the impl session and feed reviewer feedback as the next prompt.
+
+        Args:
+            session_id: Claude session id from the initial impl run.
+            worktree_path: Worktree path (used as CWD so Claude finds the session).
+            issue_number: GitHub issue number.
+            review_text: Full reviewer output to feed back.
+            prev_iteration: Iteration index of the review being addressed.
+            verdict: ``"NOGO"`` or ``"AMBIGUOUS"``.
+
+        Returns:
+            True on success; False on resume failure (caller decides what to do).
+
+        """
+        prompt = get_impl_resume_feedback_prompt(
+            issue_number=issue_number,
+            prev_iteration=prev_iteration,
+            verdict=verdict,
+            review_text=review_text,
+        )
+        try:
+            run(
+                [
+                    "claude",
+                    "--resume",
+                    session_id,
+                    prompt,
+                    "--print",
+                    "--permission-mode",
+                    "dontAsk",
+                    "--allowedTools",
+                    "Read,Write,Edit,Glob,Grep,Bash",
+                ],
+                cwd=worktree_path,
+                timeout=1800,
+            )
+            return True
+        except Exception as e:  # broad: resume is best-effort, never crash the loop
+            logger.warning(
+                f"#{issue_number}: failed to resume impl session for R{prev_iteration + 1}: {e}"
+            )
+            return False
+
+    def _run_impl_review(
+        self,
+        *,
+        issue_number: int,
+        issue_title: str,
+        issue_body: str,
+        diff_text: str,
+        files_changed: str,
+        iteration: int,
+        prior_review: str | None,
+    ) -> str:
+        """Run a fresh-session reviewer against the current impl diff.
+
+        Returns:
+            Review text. On reviewer-call failure, returns a synthetic NoGo
+            review so the loop can continue (failing safe — never silently GO).
+
+        """
+        prompt = get_impl_loop_review_prompt(
+            issue_number=issue_number,
+            issue_title=issue_title,
+            issue_body=issue_body,
+            diff_text=diff_text,
+            files_changed=files_changed,
+            iteration=iteration,
+            prior_review=prior_review,
+        )
+        try:
+            return call_claude(
+                prompt,
+                complexity=Complexity.COMPLEX,
+                timeout=600,
+                use_stdin=True,
+            )
+        except Exception as e:
+            logger.error(
+                f"#{issue_number} R{iteration}: impl reviewer call failed: {e}; "
+                "treating as NOGO so the loop continues"
+            )
+            return (
+                f"Reviewer invocation failed at iteration {iteration}: {e}\n\n"
+                "Grade: F\nVerdict: NOGO\n"
+            )
+
+    def _collect_diff(self, worktree_path: Path, branch_name: str) -> str:
+        """Return the cumulative diff of *branch_name* against ``origin/main``.
+
+        Falls back to ``HEAD~1..HEAD`` if origin/main is unavailable. Truncates
+        to ~200KB to keep the reviewer prompt manageable.
+        """
+        try:
+            result = run(
+                ["git", "diff", "origin/main...HEAD"],
+                cwd=worktree_path,
+                capture_output=True,
+                check=False,
+                timeout=60,
+            )
+            diff = result.stdout or ""
+            if not diff.strip():
+                # Fall back to last commit (e.g. when origin/main is unfetched)
+                fb = run(
+                    ["git", "diff", "HEAD~1..HEAD"],
+                    cwd=worktree_path,
+                    capture_output=True,
+                    check=False,
+                    timeout=60,
+                )
+                diff = fb.stdout or ""
+        except Exception as e:  # broad: diff is non-critical; reviewer just gets less context
+            logger.warning(f"diff collection failed for {branch_name}: {e}")
+            return ""
+
+        # Truncate huge diffs so we don't blow the prompt budget.
+        max_chars = 200_000
+        if len(diff) > max_chars:
+            diff = diff[:max_chars] + f"\n\n[... diff truncated at {max_chars} chars ...]\n"
+        return diff
+
+    def _collect_changed_files(self, worktree_path: Path, branch_name: str) -> str:
+        """Return a newline-separated list of changed files vs ``origin/main``."""
+        try:
+            result = run(
+                ["git", "diff", "--name-only", "origin/main...HEAD"],
+                cwd=worktree_path,
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+            files = (result.stdout or "").strip()
+            if files:
+                return files
+            fb = run(
+                ["git", "diff", "--name-only", "HEAD~1..HEAD"],
+                cwd=worktree_path,
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+            return (fb.stdout or "").strip()
+        except Exception as e:  # broad: non-critical
+            logger.warning(f"changed-files collection failed for {branch_name}: {e}")
+            return ""
+
+    def _save_review_log(self, issue_number: int, iteration: int, review_text: str) -> None:
+        """Persist a per-iteration review log for later inspection."""
+        try:
+            log_file = self.state_dir / f"review-{issue_number}-r{iteration}.log"
+            log_file.write_text(review_text)
+        except Exception as e:  # broad: log persistence is non-critical
+            logger.warning(f"#{issue_number}: failed to save review log r{iteration}: {e}")
 
     def _run_claude_code(
         self, issue_number: int, worktree_path: Path, prompt: str, slot_id: int | None = None

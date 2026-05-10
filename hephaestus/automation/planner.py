@@ -394,6 +394,7 @@ class Planner:
                         check=True,
                         capture_output=True,
                         text=True,
+                        timeout=120,
                     )
                     logger.info("ProjectMnemosyne cloned successfully")
                     # NOTE: do NOT unlink lock_path here — the file-lock sentinel
@@ -402,6 +403,13 @@ class Planner:
                     # new inode at the same path and grab its own lock, breaking
                     # cross-process mutual exclusion (#370).
                     return True
+
+                except subprocess.TimeoutExpired:
+                    logger.warning(
+                        "gh repo clone timed out after 120 s; "
+                        "ProjectMnemosyne unavailable this run"
+                    )
+                    return False
 
                 except subprocess.CalledProcessError as e:
                     logger.warning(f"Failed to clone ProjectMnemosyne: {e.stderr or e}")

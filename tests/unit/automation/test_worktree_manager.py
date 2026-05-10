@@ -3,7 +3,7 @@
 import subprocess
 from pathlib import Path
 from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -13,10 +13,14 @@ from hephaestus.automation.worktree_manager import WorktreeDirtyError, WorktreeM
 class TestWorktreeManager:
     """Tests for WorktreeManager class."""
 
+    @patch("hephaestus.automation.worktree_manager.run")
     @patch("hephaestus.automation.worktree_manager.get_repo_root")
-    def test_initialization_default_base_dir(self, mock_get_root: Any, tmp_path: Any) -> None:
+    def test_initialization_default_base_dir(
+        self, mock_get_root: Any, mock_run: Any, tmp_path: Any
+    ) -> None:
         """Test initialization with default base directory."""
         mock_get_root.return_value = tmp_path
+        mock_run.return_value.stdout = "origin/main"
 
         manager = WorktreeManager()
 
@@ -24,10 +28,14 @@ class TestWorktreeManager:
         assert manager.base_dir == tmp_path / ".worktrees"
         assert manager.worktrees == {}
 
+    @patch("hephaestus.automation.worktree_manager.run")
     @patch("hephaestus.automation.worktree_manager.get_repo_root")
-    def test_initialization_custom_base_dir(self, mock_get_root: Any, tmp_path: Any) -> None:
+    def test_initialization_custom_base_dir(
+        self, mock_get_root: Any, mock_run: Any, tmp_path: Any
+    ) -> None:
         """Test initialization with custom base directory."""
         mock_get_root.return_value = tmp_path
+        mock_run.return_value.stdout = "origin/main"
         custom_dir = tmp_path / "custom_worktrees"
 
         manager = WorktreeManager(base_dir=custom_dir)
@@ -125,7 +133,14 @@ class TestWorktreeManager:
     ) -> None:
         """Test worktree creation failure."""
         mock_get_root.return_value = tmp_path
-        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+        # First call is base-branch detection (symbolic-ref) — must succeed.
+        # All subsequent calls (rev-parse, worktree add) raise CalledProcessError.
+        success_result = MagicMock()
+        success_result.stdout = "origin/main"
+        mock_run.side_effect = [
+            success_result,  # symbolic-ref → succeeds (base branch detected)
+            subprocess.CalledProcessError(1, "git"),  # rev-parse check for branch
+        ]
 
         manager = WorktreeManager()
 
@@ -253,10 +268,12 @@ class TestWorktreeManager:
         assert len(manager.preserved) == 1
         assert manager.preserved[0] == (1, dirty_path)
 
+    @patch("hephaestus.automation.worktree_manager.run")
     @patch("hephaestus.automation.worktree_manager.get_repo_root")
-    def test_get_worktree(self, mock_get_root: Any, tmp_path: Any) -> None:
+    def test_get_worktree(self, mock_get_root: Any, mock_run: Any, tmp_path: Any) -> None:
         """Test getting worktree path."""
         mock_get_root.return_value = tmp_path
+        mock_run.return_value.stdout = "origin/main"
         manager = WorktreeManager()
 
         worktree_path = manager.base_dir / "issue-123"
@@ -385,3 +402,55 @@ branch refs/heads/123-feature
 
         # Should not raise
         manager.ensure_branch_deleted("feature-branch")
+
+
+# ---------------------------------------------------------------------------
+# #382/A4-05: base_branch silently defaulting to non-existent origin/main
+# ---------------------------------------------------------------------------
+
+
+class TestBaseBranchDetectionRaisesOnFailure:
+    """Tests that WorktreeManager raises RuntimeError when base branch can't be detected."""
+
+    @patch("hephaestus.automation.worktree_manager.get_repo_root")
+    def test_raises_when_no_candidates_exist(self, mock_get_root: Any, tmp_path: Any) -> None:
+        """If symbolic-ref fails and neither origin/main nor origin/master exist, raise."""
+        mock_get_root.return_value = tmp_path
+
+        # All git calls fail: symbolic-ref, origin/main verify, origin/master verify
+        with patch(
+            "hephaestus.automation.worktree_manager.run",
+            side_effect=subprocess.CalledProcessError(128, "git"),
+        ):
+            with pytest.raises(RuntimeError, match="Could not auto-detect the remote base branch"):
+                WorktreeManager()
+
+    @patch("hephaestus.automation.worktree_manager.get_repo_root")
+    def test_no_longer_silently_defaults_to_origin_main(
+        self, mock_get_root: Any, tmp_path: Any
+    ) -> None:
+        """Verify the old silent default (origin/main) is gone — raises instead."""
+        mock_get_root.return_value = tmp_path
+
+        with patch(
+            "hephaestus.automation.worktree_manager.run",
+            side_effect=subprocess.CalledProcessError(128, "git"),
+        ):
+            with pytest.raises(RuntimeError):
+                WorktreeManager()
+
+    @patch("hephaestus.automation.worktree_manager.get_repo_root")
+    def test_explicit_base_branch_bypasses_detection(
+        self, mock_get_root: Any, tmp_path: Any
+    ) -> None:
+        """Passing base_branch= explicitly skips auto-detection entirely."""
+        mock_get_root.return_value = tmp_path
+
+        # Even if git fails, passing base_branch= explicitly must succeed
+        with patch(
+            "hephaestus.automation.worktree_manager.run",
+            side_effect=subprocess.CalledProcessError(128, "git"),
+        ):
+            mgr = WorktreeManager(base_branch="origin/custom")
+
+        assert mgr.base_branch == "origin/custom"

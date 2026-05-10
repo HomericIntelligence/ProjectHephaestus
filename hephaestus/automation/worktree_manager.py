@@ -88,8 +88,12 @@ class WorktreeManager:
                     except Exception:
                         continue
                 if base_branch is None:
-                    base_branch = "origin/main"
-                    logger.warning("Could not auto-detect base branch, defaulting to origin/main")
+                    raise RuntimeError(
+                        "Could not auto-detect the remote base branch. "
+                        "Neither 'origin/main' nor 'origin/master' exists. "
+                        "Run 'git remote set-head origin --auto' or pass "
+                        "base_branch= explicitly to WorktreeManager()."
+                    ) from None
 
         self.base_branch = base_branch
         self.worktrees: dict[int, Path] = {}

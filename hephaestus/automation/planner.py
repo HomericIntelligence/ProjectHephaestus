@@ -396,7 +396,11 @@ class Planner:
                         text=True,
                     )
                     logger.info("ProjectMnemosyne cloned successfully")
-                    lock_path.unlink(missing_ok=True)
+                    # NOTE: do NOT unlink lock_path here — the file-lock sentinel
+                    # must remain on disk until the fd closes in the finally block.
+                    # Unlinking while LOCK_EX is held lets a second process open a
+                    # new inode at the same path and grab its own lock, breaking
+                    # cross-process mutual exclusion (#370).
                     return True
 
                 except subprocess.CalledProcessError as e:

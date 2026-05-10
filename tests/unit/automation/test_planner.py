@@ -388,8 +388,14 @@ class TestEnsureMnemosyne:
         assert "pull" in cmd
         assert "gh" not in cmd
 
-    def test_lock_file_removed_after_successful_clone(self, planner: Any, tmp_path: Any) -> None:
-        """Test that the lock file is removed after a successful clone."""
+    def test_lock_file_kept_after_successful_clone(self, planner: Any, tmp_path: Any) -> None:
+        """Lock file must NOT be removed while fcntl.LOCK_EX is held (#370).
+
+        Unlinking while holding the exclusive lock lets a second process open a
+        new inode at the same path and acquire its own lock, silently breaking
+        cross-process mutual exclusion.  The sentinel should persist; its
+        presence after the clone is harmless.
+        """
         mnemosyne_root = tmp_path / "ProjectMnemosyne"
         lock_path = tmp_path / ".mnemosyne.lock"
 
@@ -399,7 +405,11 @@ class TestEnsureMnemosyne:
             result = planner._ensure_mnemosyne(mnemosyne_root)
 
         assert result is True
-        assert not lock_path.exists(), "Lock file should be removed after successful clone"
+        # After a successful clone the lock file fd is closed (LOCK_UN) but the
+        # file itself remains on disk — it is a sentinel, not a temp file.
+        assert lock_path.exists(), (
+            "Lock file should remain on disk after clone (#370 — unlink-under-lock removed)"
+        )
 
     def test_git_pull_called_when_directory_exists(self, planner: Any, tmp_path: Any) -> None:
         """Test that git pull --ff-only is called when directory already exists."""

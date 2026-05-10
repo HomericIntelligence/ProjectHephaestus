@@ -432,20 +432,20 @@ class IssueImplementer:
         """
         # Learn phase (after CREATING_PR, before COMPLETED)
         if self.options.enable_learn and state.session_id:
-            self.status_tracker.update_slot(slot_id, f"#{issue_number}: Running learn")
+            if slot_id is not None:
+                self.status_tracker.update_slot(slot_id, f"#{issue_number}: Running learn")
             with self.state_lock:
                 state.phase = ImplementationPhase.LEARN
             self._save_state(state)
-            retro_success = self._run_learn(
-                state.session_id, worktree_path, issue_number, slot_id
-            )
+            retro_success = self._run_learn(state.session_id, worktree_path, issue_number, slot_id)
             with self.state_lock:
                 state.learn_completed = retro_success
             self._save_state(state)
 
         # Follow-up issues phase (after LEARN, before COMPLETED)
         if self.options.enable_follow_up and state.session_id:
-            self.status_tracker.update_slot(slot_id, f"#{issue_number}: Identifying follow-ups")
+            if slot_id is not None:
+                self.status_tracker.update_slot(slot_id, f"#{issue_number}: Identifying follow-ups")
             with self.state_lock:
                 state.phase = ImplementationPhase.FOLLOW_UP_ISSUES
             self._save_state(state)
@@ -566,9 +566,7 @@ class IssueImplementer:
             self._save_state(state)
 
             # Verify commit, push, PR creation; then run /learn and follow-ups.
-            pr_number = self._finalize_pr(
-                issue_number, branch_name, worktree_path, state, slot_id
-            )
+            pr_number = self._finalize_pr(issue_number, branch_name, worktree_path, state, slot_id)
             self._run_post_pr_followup(issue_number, worktree_path, state, slot_id)
 
             self._log("info", f"Issue #{issue_number} completed: PR #{pr_number}", thread_id)

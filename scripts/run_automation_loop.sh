@@ -25,8 +25,46 @@
 #   --reviewer-model MODEL    Set HEPH_REVIEWER_MODEL (covers plan-review and PR-review)
 #   --implementer-model MODEL Set HEPH_IMPLEMENTER_MODEL (covers implement, address-review,
 #                             ci-driver fresh sessions; --resume sites correctly omit --model)
+#   -h, --help                Show this help and exit
 
 set -euo pipefail
+
+# Job control: each backgrounded `process_repo` runs in its own process group,
+# so we can SIGTERM the whole subtree (repo subshell → Python phase →
+# claude/gh descendants) by signalling the negative pgid.
+set -m
+
+usage() {
+  sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+# ---------------------------------------------------------------------------
+# Cleanup: when interrupted (Ctrl-C, SIGTERM, SIGHUP), kill every backgrounded
+# repo subtree. We only fire on real signals — a normal exit (including
+# `exit 1` from bad args) skips the kill because there are no children yet
+# OR the main loop already drained them with `wait`.
+# ---------------------------------------------------------------------------
+ACTIVE_PIDS=()
+cleanup_on_signal() {
+  local sig="$1"
+  echo "" >&2
+  echo "▶ Interrupted ($sig). Stopping ${#ACTIVE_PIDS[@]} background repo job(s)..." >&2
+  trap - INT TERM HUP    # disarm to prevent re-entry mid-cleanup
+
+  for pid in "${ACTIVE_PIDS[@]}"; do
+    # Negative pid = entire process group (the `set -m` job).
+    # SIGTERM first; SIGKILL after a short grace.
+    kill -TERM -"$pid" 2>/dev/null || true
+  done
+  sleep 2
+  for pid in "${ACTIVE_PIDS[@]}"; do
+    kill -KILL -"$pid" 2>/dev/null || true
+  done
+  exit 130
+}
+trap 'cleanup_on_signal INT'  INT
+trap 'cleanup_on_signal TERM' TERM
+trap 'cleanup_on_signal HUP'  HUP
 
 # ---------------------------------------------------------------------------
 # Resolve the installed entry-point binaries from the Hephaestus pixi env.
@@ -62,6 +100,7 @@ IMPLEMENTER_MODEL=""
 # ---------------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    -h|--help)            usage; exit 0 ;;
     --dry-run)            DRY_RUN=1; shift ;;
     --loops)              LOOPS="$2"; shift 2 ;;
     --max-workers)        MAX_WORKERS="$2"; shift 2 ;;
@@ -70,7 +109,7 @@ while [[ $# -gt 0 ]]; do
     --planner-model)      PLANNER_MODEL="$2"; shift 2 ;;
     --reviewer-model)     REVIEWER_MODEL="$2"; shift 2 ;;
     --implementer-model)  IMPLEMENTER_MODEL="$2"; shift 2 ;;
-    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+    *) echo "Unknown argument: $1" >&2; echo "Run with --help for usage." >&2; exit 1 ;;
   esac
 done
 
@@ -259,21 +298,22 @@ for (( loop=1; loop<=LOOPS; loop++ )); do
   echo "▶ LOOP $loop / $LOOPS"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-  active_pids=()
+  ACTIVE_PIDS=()
   for repo in "${REPOS[@]}"; do
     process_repo "$repo" "$loop" &
-    active_pids+=($!)
+    ACTIVE_PIDS+=($!)
 
-    if [[ ${#active_pids[@]} -ge "$PARALLEL_REPOS" ]]; then
-      wait "${active_pids[0]}"
-      active_pids=("${active_pids[@]:1}")
+    if [[ ${#ACTIVE_PIDS[@]} -ge "$PARALLEL_REPOS" ]]; then
+      wait "${ACTIVE_PIDS[0]}" || true
+      ACTIVE_PIDS=("${ACTIVE_PIDS[@]:1}")
     fi
   done
 
   # Drain any remaining background jobs
-  for pid in "${active_pids[@]}"; do
-    wait "$pid"
+  for pid in "${ACTIVE_PIDS[@]}"; do
+    wait "$pid" || true
   done
+  ACTIVE_PIDS=()
 
   echo ""
   echo "  Loop $loop complete."

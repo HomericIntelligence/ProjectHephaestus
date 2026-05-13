@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for the Codex stage runner."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prompt-file", required=True, help="Prompt file to send to Codex")
     parser.add_argument("--repo-root", required=True, help="Repository root for Codex --cd")
@@ -31,11 +32,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Codex approval policy",
     )
     parser.add_argument("--timeout", type=int, default=1800, help="Subprocess timeout in seconds")
-    parser.add_argument("--debug", action="store_true", help="Print the Codex command before running")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print the Codex command before running",
+    )
     return parser
 
 
 def read_prompt(prompt_file: Path, skill_file: Path | None, stage: str) -> str:
+    """Read the stage prompt and optionally prepend skill instructions."""
     prompt = prompt_file.read_text(encoding="utf-8")
     if skill_file is None:
         return prompt
@@ -50,6 +56,7 @@ def read_prompt(prompt_file: Path, skill_file: Path | None, stage: str) -> str:
 
 
 def run_codex(args: argparse.Namespace) -> int:
+    """Run Codex for one automation stage and persist its output/log files."""
     repo_root = Path(args.repo_root).expanduser().resolve()
     prompt_file = Path(args.prompt_file).expanduser().resolve()
     output_file = Path(args.output).expanduser().resolve()
@@ -105,6 +112,7 @@ def run_codex(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the Codex stage command-line interface."""
     return run_codex(build_parser().parse_args(argv))
 
 

@@ -209,6 +209,7 @@ with `--help` to see full usage.
 | `hephaestus-plan-issues` | Bulk issue planning using Claude Code |
 | `hephaestus-implement-issues` | Bulk issue implementation using Claude Code in parallel worktrees |
 | `hephaestus-review-prs` | Read-only PR review automation using Claude Code in parallel worktrees |
+| `hephaestus-codex-stage` | Run one Codex CLI automation stage with prompt and skill context |
 
 ### GitHub
 

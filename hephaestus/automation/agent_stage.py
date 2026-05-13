@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .agent_runtime import run_codex_session
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for the agent stage runner."""
@@ -59,28 +61,6 @@ def read_prompt(prompt_file: Path, skill_file: Path | None, stage: str) -> str:
         "---\n\n"
         f"{prompt}"
     )
-
-
-def codex_approval_args(approval: str) -> list[str]:
-    """Return approval arguments supported by the installed Codex CLI."""
-    try:
-        result = subprocess.run(
-            ["codex", "exec", "--help"],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-
-    help_text = result.stdout or ""
-    if "--approval-policy" in help_text:
-        return ["--approval-policy", approval]
-    if "--ask-for-approval" in help_text:
-        return ["--ask-for-approval", approval]
-    return []
 
 
 def write_log(log_file: Path | None, text: str) -> None:
@@ -142,43 +122,36 @@ def run_codex(
     log_file: Path | None,
 ) -> int:
     """Run one stage with Codex."""
-    cmd = [
-        "codex",
-        "exec",
-        "--cd",
-        str(repo_root),
-        "--sandbox",
-        args.sandbox,
-        "--output-last-message",
-        str(output_file),
-        "-",
-    ]
-    cmd[8:8] = codex_approval_args(args.approval)
-    if args.model:
-        cmd[2:2] = ["--model", args.model]
     if args.debug:
-        print("Running:", " ".join(cmd), file=sys.stderr)
+        print("Running: codex exec", file=sys.stderr)
 
-    env = os.environ.copy()
-    env.setdefault("CODEX_HOME", str(Path.home() / ".codex"))
     try:
-        result = subprocess.run(
-            cmd,
-            input=prompt,
+        result = run_codex_session(
+            prompt,
             cwd=repo_root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
             timeout=args.timeout,
-            env=env,
-            check=False,
+            model=args.model,
+            sandbox=args.sandbox,
+            approval=args.approval,
         )
     except subprocess.TimeoutExpired as exc:
         write_log(log_file, str(exc))
         return 124
+    except subprocess.CalledProcessError as exc:
+        log_text = (
+            f"EXIT CODE: {exc.returncode}\n\n"
+            f"STDOUT:\n{exc.stdout or ''}\n\n"
+            f"STDERR:\n{exc.stderr or ''}"
+        )
+        write_log(log_file, log_text)
+        return exc.returncode
 
-    write_log(log_file, result.stdout or "")
-    return result.returncode
+    output_file.write_text(result.stdout, encoding="utf-8")
+    log = result.stdout
+    if result.session_id:
+        log = f"SESSION_ID: {result.session_id}\n\n{log}"
+    write_log(log_file, log)
+    return 0
 
 
 def run_agent(args: argparse.Namespace) -> int:

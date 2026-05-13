@@ -115,6 +115,7 @@ class PlannerOptions(BaseModel):
     """Options for the Planner."""
 
     issues: list[int]
+    agent: str = "claude"
     dry_run: bool = False
     force: bool = False
     parallel: int = 3
@@ -128,6 +129,7 @@ class ImplementerOptions(BaseModel):
 
     epic_number: int = 0
     issues: list[int] = Field(default_factory=list)
+    agent: str = "claude"
     analyze_only: bool = False
     health_check: bool = False
     resume: bool = False
@@ -178,6 +180,7 @@ class ReviewerOptions(BaseModel):
     """Options for the PRReviewer."""
 
     issues: list[int] = Field(default_factory=list)
+    agent: str = "claude"
     max_workers: int = 3
     dry_run: bool = False
     enable_learn: bool = True
@@ -188,6 +191,7 @@ class PlanReviewerOptions(BaseModel):
     """Options for the PlanReviewer."""
 
     issues: list[int] = Field(default_factory=list)
+    agent: str = "claude"
     max_workers: int = 3
     dry_run: bool = False
     enable_ui: bool = True
@@ -198,6 +202,7 @@ class AddressReviewOptions(BaseModel):
     """Options for the AddressReview workflow."""
 
     issues: list[int] = Field(default_factory=list)
+    agent: str = "claude"
     max_workers: int = 3
     dry_run: bool = False
     enable_ui: bool = True
@@ -209,6 +214,7 @@ class CIDriverOptions(BaseModel):
     """Options for the CIDriver workflow."""
 
     issues: list[int] = Field(default_factory=list)
+    agent: str = "claude"
     max_workers: int = 3
     dry_run: bool = False
     enable_ui: bool = True

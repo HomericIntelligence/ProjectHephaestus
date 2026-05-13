@@ -31,6 +31,7 @@ from typing import Any
 
 from hephaestus.github.rate_limit import detect_claude_usage_cap, wait_until
 
+from .agent_runtime import codex_json_stdout, resume_codex_session
 from .claude_timeouts import follow_up_claude_timeout
 from .git_utils import run
 from .github_api import gh_issue_comment, gh_issue_create
@@ -367,6 +368,7 @@ def run_follow_up_issues(  # noqa: C901  # quota-check + parse + file paths are 
     status_tracker: Any | None = None,
     slot_id: int | None = None,
     dry_run: bool = False,
+    agent: str = "claude",
 ) -> FollowUpResponse | None:
     """Resume the implementation Claude session and file ONE consolidated follow-up issue.
 
@@ -391,24 +393,34 @@ def run_follow_up_issues(  # noqa: C901  # quota-check + parse + file paths are 
     prompt_file.write_text(get_follow_up_prompt(issue_number))
 
     try:
-        result = run(
-            [
-                "claude",
-                "--resume",
+        if agent == "codex":
+            codex_result = resume_codex_session(
                 session_id,
-                str(prompt_file),
-                "--output-format",
-                "json",
-            ],
-            cwd=worktree_path,
-            timeout=follow_up_claude_timeout(),
-        )
+                prompt_file.read_text(),
+                cwd=worktree_path,
+                timeout=follow_up_claude_timeout(),
+            )
+            stdout = codex_json_stdout(codex_result.stdout, codex_result.session_id)
+        else:
+            result = run(
+                [
+                    "claude",
+                    "--resume",
+                    session_id,
+                    str(prompt_file),
+                    "--output-format",
+                    "json",
+                ],
+                cwd=worktree_path,
+                timeout=follow_up_claude_timeout(),
+            )
+            stdout = result.stdout or ""
 
         follow_up_log = state_dir / f"follow-up-{issue_number}.log"
-        follow_up_log.write_text(result.stdout or "")
+        follow_up_log.write_text(stdout)
 
         try:
-            data = json.loads(result.stdout)
+            data = json.loads(stdout)
         except (json.JSONDecodeError, AttributeError) as e:
             logger.warning("Could not parse follow-up response for issue #%d: %s", issue_number, e)
             return None

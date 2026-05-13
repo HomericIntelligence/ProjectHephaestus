@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from ._review_utils import find_pr_for_issue
+from .agent_runtime import add_agent_argument, is_codex, resume_codex_session, run_codex_session
 from .claude_models import implementer_model
 from .claude_timeouts import address_review_claude_timeout
 from .curses_ui import CursesUI, ThreadLogManager
@@ -584,11 +585,39 @@ class AddressReviewer:
             return base
 
         try:
+            if is_codex(self.options.agent):
+                codex_result = (
+                    resume_codex_session(
+                        session_id,
+                        prompt,
+                        cwd=worktree_path,
+                        timeout=address_review_claude_timeout(),
+                    )
+                    if session_id
+                    else run_codex_session(
+                        prompt,
+                        cwd=worktree_path,
+                        timeout=address_review_claude_timeout(),
+                        sandbox="workspace-write",
+                    )
+                )
+                log = codex_result.stdout
+                if codex_result.session_id:
+                    log = f"SESSION_ID: {codex_result.session_id}\n\n{log}"
+                log_file.write_text(log)
+                parsed = self._parse_json_block(codex_result.stdout, issue_number=issue_number)
+                logger.info(
+                    "Fix session complete for PR #%s; addressed %s thread(s)",
+                    pr_number,
+                    len(parsed.get("addressed", [])),
+                )
+                return parsed
+
             # Attempt with session resume first if we have a session_id
             if session_id:
                 claude_timeout = address_review_claude_timeout()
                 try:
-                    result = run(
+                    claude_result = run(
                         _build_cmd(with_resume=True, sid=session_id),
                         cwd=worktree_path,
                         timeout=claude_timeout,
@@ -623,26 +652,26 @@ class AddressReviewer:
                             e.returncode,
                             (e.stderr or "")[:120],
                         )
-                        result = run(
+                        claude_result = run(
                             _build_cmd(with_resume=False),
                             cwd=worktree_path,
                             timeout=claude_timeout,
                         )
             else:
-                result = run(
+                claude_result = run(
                     _build_cmd(with_resume=False),
                     cwd=worktree_path,
                     timeout=address_review_claude_timeout(),
                 )
 
-            log_file.write_text(result.stdout or "")
+            log_file.write_text(claude_result.stdout or "")
 
             # Extract response text from Claude's JSON wrapper
             try:
-                data = json.loads(result.stdout or "{}")
-                response_text: str = data.get("result", result.stdout or "")
+                data = json.loads(claude_result.stdout or "{}")
+                response_text: str = data.get("result", claude_result.stdout or "")
             except (json.JSONDecodeError, AttributeError):
-                response_text = result.stdout or ""
+                response_text = claude_result.stdout or ""
 
             parsed = self._parse_json_block(response_text, issue_number=issue_number)
             logger.info(
@@ -924,6 +953,7 @@ Examples:
         required=True,
         help="Issue numbers whose linked PRs should have review threads addressed",
     )
+    add_agent_argument(parser)
     parser.add_argument(
         "--max-workers",
         type=int,
@@ -969,6 +999,7 @@ def main() -> int:
 
     options = AddressReviewOptions(
         issues=args.issues,
+        agent=args.agent,
         max_workers=args.max_workers,
         dry_run=args.dry_run,
         enable_ui=not args.no_ui,

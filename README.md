@@ -206,9 +206,9 @@ with `--help` to see full usage.
 
 | Command | Description |
 |---|---|
-| `hephaestus-plan-issues` | Bulk issue planning using Claude Code |
-| `hephaestus-implement-issues` | Bulk issue implementation using Claude Code in parallel worktrees |
-| `hephaestus-review-prs` | Read-only PR review automation using Claude Code in parallel worktrees |
+| `hephaestus-plan-issues` | Bulk issue planning using Claude Code or Codex |
+| `hephaestus-implement-issues` | Bulk issue implementation using Claude Code or Codex in parallel worktrees |
+| `hephaestus-review-prs` | Read-only PR review automation using Claude Code or Codex in parallel worktrees |
 | `hephaestus-agent-stage` | Run one Claude or Codex automation stage with prompt and skill context |
 
 ### GitHub

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from .agent_runtime import resume_codex_session
 from .claude_models import learn_model
 from .claude_timeouts import learn_claude_timeout
 from .git_utils import run
@@ -23,8 +24,9 @@ def run_learn(
     issue_number: int,
     state_dir: Path,
     slot_id: int | None = None,
+    agent: str = "claude",
 ) -> bool:
-    """Resume Claude session to run /learn.
+    """Resume agent session to run /learn.
 
     Args:
         session_id: Claude session ID
@@ -42,6 +44,28 @@ def run_learn(
     """
     state_dir.mkdir(parents=True, exist_ok=True)
     log_file = state_dir / f"learn-{issue_number}.log"
+    if agent == "codex":
+        try:
+            codex_result = resume_codex_session(
+                session_id,
+                (
+                    "/skills-registry-commands:learn"
+                    " commit the results and create a PR."
+                    " IMPORTANT: Only push skills to ProjectMnemosyne."
+                    " Do NOT create files under .claude-plugin/ in this repo."
+                ),
+                cwd=worktree_path,
+                timeout=learn_claude_timeout(),
+            )
+            log_file.write_text(codex_result.stdout)
+            logger.info("Learn completed for issue #%s", issue_number)
+            logger.info("Learn log: %s", log_file)
+            return True
+        except Exception as e:  # broad catch: external agent process; non-blocking
+            logger.warning("Learn failed for issue #%s: %s", issue_number, e)
+            log_file.write_text(f"FAILED: {e}\n")
+            return False
+
     # /learn is a SIMPLE-complexity task (summarization + file writes), so we
     # use the configured learn model (default: Haiku) but accept operator
     # overrides via HEPH_LEARN_MODEL. We can't route through `call_claude`

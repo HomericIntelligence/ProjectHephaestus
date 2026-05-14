@@ -199,7 +199,7 @@ config = merge_with_env({}, convert_bools=True)
 <!-- CLI table generated from pyproject.toml [project.scripts]. Keep in sync via
      `python3 scripts/check_cli_table_sync.py` (also enforced in pre-commit). -->
 
-40 console scripts are installed when you install the package.  Run any command
+41 console scripts are installed when you install the package.  Run any command
 with `--help` to see full usage.
 
 ### Automation

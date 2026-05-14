@@ -34,7 +34,7 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any
 
-from hephaestus.automation.agent_runtime import add_agent_argument, is_codex, run_codex_text
+from hephaestus.agents.runtime import add_agent_argument, is_codex, run_codex_text
 from hephaestus.github.rate_limit import detect_rate_limit, wait_until
 from hephaestus.logging.utils import get_logger
 

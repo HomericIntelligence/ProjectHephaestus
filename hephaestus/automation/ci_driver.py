@@ -21,7 +21,13 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
-from .agent_runtime import add_agent_argument, is_codex, resume_codex_session, run_codex_session
+from hephaestus.agents.runtime import (
+    add_agent_argument,
+    is_codex,
+    resume_codex_session,
+    run_codex_session,
+)
+
 from .claude_models import implementer_model
 from .claude_timeouts import ci_driver_claude_timeout
 from .git_utils import get_repo_root, run

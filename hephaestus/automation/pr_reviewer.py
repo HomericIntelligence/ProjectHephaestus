@@ -24,8 +24,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from hephaestus.agents.runtime import add_agent_argument, is_codex, run_codex_text
+
 from ._review_utils import find_pr_for_issue, parse_json_block
-from .agent_runtime import add_agent_argument, is_codex, run_codex_text
 from .claude_models import reviewer_model
 from .claude_timeouts import pr_reviewer_claude_timeout
 from .curses_ui import CursesUI, ThreadLogManager

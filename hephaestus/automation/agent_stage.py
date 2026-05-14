@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .agent_runtime import run_codex_session
+from hephaestus.agents.runtime import add_agent_argument, run_codex_session
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,12 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, help="Where to write the agent's final response")
     parser.add_argument("--log-file", help="Where to write combined agent stdout/stderr")
     parser.add_argument("--skill-file", help="Optional skill instructions to prepend to the prompt")
-    parser.add_argument(
-        "--agent",
-        choices=["claude", "codex"],
-        default="claude",
-        help="Agent backend to run. Defaults to claude.",
-    )
+    add_agent_argument(parser)
     parser.add_argument("--model", default="", help="Optional agent model override")
     parser.add_argument(
         "--sandbox",

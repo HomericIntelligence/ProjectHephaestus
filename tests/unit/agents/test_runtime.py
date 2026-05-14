@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from hephaestus.automation import agent_runtime
+from hephaestus.agents import runtime as agent_runtime
 
 
 def test_parse_codex_json_events_extracts_session_id_and_messages() -> None:
@@ -53,7 +53,7 @@ def test_run_codex_session_returns_session_id_and_last_message(tmp_path: Path) -
         )
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
-    with patch("hephaestus.automation.agent_runtime.codex_approval_args", return_value=[]):
+    with patch("hephaestus.agents.runtime.codex_approval_args", return_value=[]):
         with patch("subprocess.run", side_effect=fake_run):
             result = agent_runtime.run_codex_session(
                 "prompt",

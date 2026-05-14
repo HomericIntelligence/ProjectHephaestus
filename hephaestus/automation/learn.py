@@ -10,7 +10,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from .agent_runtime import resume_codex_session
+from hephaestus.agents.runtime import resume_codex_session
+
 from .claude_models import learn_model
 from .claude_timeouts import learn_claude_timeout
 from .git_utils import run

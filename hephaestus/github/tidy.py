@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from hephaestus.automation.agent_runtime import add_agent_argument, is_codex, run_codex_text
+from hephaestus.agents.runtime import add_agent_argument, is_codex, run_codex_text
 from hephaestus.github.pr_merge import detect_repo_from_remote
 from hephaestus.logging.utils import get_logger
 

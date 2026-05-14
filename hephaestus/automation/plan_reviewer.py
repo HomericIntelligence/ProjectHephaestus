@@ -20,9 +20,9 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
+from hephaestus.agents.runtime import add_agent_argument, is_codex, run_codex_text
 from hephaestus.github.rate_limit import wait_until
 
-from .agent_runtime import add_agent_argument, is_codex, run_codex_text
 from .claude_invoke import scan_quota_reset
 from .claude_models import reviewer_model
 from .claude_timeouts import plan_reviewer_claude_timeout

@@ -29,9 +29,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from hephaestus.agents.runtime import codex_json_stdout, resume_codex_session
 from hephaestus.github.rate_limit import detect_claude_usage_cap, wait_until
 
-from .agent_runtime import codex_json_stdout, resume_codex_session
 from .claude_timeouts import follow_up_claude_timeout
 from .git_utils import run
 from .github_api import gh_issue_comment, gh_issue_create

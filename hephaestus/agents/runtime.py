@@ -1,4 +1,4 @@
-"""Shared Claude/Codex process helpers for automation CLIs."""
+"""Shared Claude/Codex process helpers for agent-driven CLIs."""
 
 from __future__ import annotations
 
@@ -9,9 +9,11 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-AgentName = str
+AgentName = Literal["claude", "codex"]
+AGENT_CHOICES: tuple[AgentName, ...] = ("claude", "codex")
+DEFAULT_AGENT: AgentName = "claude"
 
 
 @dataclass(frozen=True)
@@ -24,11 +26,11 @@ class AgentRunResult:
 
 
 def add_agent_argument(parser: argparse.ArgumentParser) -> None:
-    """Add the common provider selector to an automation CLI parser."""
+    """Add the common provider selector to an agent-driven CLI parser."""
     parser.add_argument(
         "--agent",
-        choices=["claude", "codex"],
-        default="claude",
+        choices=AGENT_CHOICES,
+        default=DEFAULT_AGENT,
         help="Agent backend to invoke for model-driven steps (default: claude)",
     )
 

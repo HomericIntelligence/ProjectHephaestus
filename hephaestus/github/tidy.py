@@ -328,7 +328,12 @@ async def _dispatch_swarm(
 
             logger.info("Spawning agent for branch: %s", branch)
             if is_codex(agent):
-                results[branch] = _run_codex_rebase_agent(prompt, branch, repo_path)
+                results[branch] = await asyncio.to_thread(
+                    _run_codex_rebase_agent,
+                    prompt,
+                    branch,
+                    repo_path,
+                )
                 return
 
             results[branch] = await _run_claude_rebase_agent(

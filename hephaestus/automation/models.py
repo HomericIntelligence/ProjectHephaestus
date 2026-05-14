@@ -81,6 +81,7 @@ class ImplementationState(BaseModel):
     branch_name: str | None = None
     pr_number: int | None = None
     session_id: str | None = None
+    session_agent: str | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
     error: str | None = None

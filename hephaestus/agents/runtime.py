@@ -40,6 +40,53 @@ def is_codex(agent: str) -> bool:
     return agent == "codex"
 
 
+def session_agent_matches(session_agent: str | None, selected_agent: str) -> bool:
+    """Return True when a persisted session belongs to the selected provider.
+
+    Legacy state files predate provider metadata and only stored Claude session
+    ids, so missing metadata is treated as Claude.
+    """
+    return (session_agent or "claude") == selected_agent
+
+
+def run_claude_text(
+    prompt: str,
+    *,
+    cwd: Path,
+    timeout: int,
+    model: str = "",
+    sandbox: str = "workspace-write",
+    allowed_tools: str = "Read,Write,Edit,Glob,Grep,Bash",
+) -> subprocess.CompletedProcess[str]:
+    """Run Claude Code non-interactively and return a text completed process."""
+    cmd = ["claude", "--print", "--output-format", "text"]
+    if model:
+        cmd.extend(["--model", model])
+    if sandbox != "read-only":
+        cmd.extend(
+            [
+                "--permission-mode",
+                "dontAsk",
+                "--allowedTools",
+                allowed_tools,
+            ]
+        )
+
+    env = os.environ.copy()
+    env["CLAUDECODE"] = ""
+    return subprocess.run(
+        cmd,
+        input=prompt,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+        env=env,
+        check=False,
+    )
+
+
 def codex_approval_args(approval: str) -> list[str]:
     """Return approval arguments supported by the installed Codex CLI."""
     try:
@@ -59,6 +106,8 @@ def codex_approval_args(approval: str) -> list[str]:
         return ["--approval-policy", approval]
     if "--ask-for-approval" in help_text:
         return ["--ask-for-approval", approval]
+    if "--config <key=value>" in help_text or "-c, --config" in help_text:
+        return ["-c", f"approval_policy={json.dumps(approval)}"]
     return []
 
 

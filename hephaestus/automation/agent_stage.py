@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
 from pathlib import Path
 
-from hephaestus.agents.runtime import add_agent_argument, run_codex_session
+from hephaestus.agents.runtime import add_agent_argument, run_claude_text, run_codex_session
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,33 +71,16 @@ def run_claude(
     log_file: Path | None,
 ) -> int:
     """Run one stage with Claude Code, the default Hephaestus agent."""
-    cmd = ["claude", "--print", prompt, "--output-format", "text"]
-    if args.model:
-        cmd.extend(["--model", args.model])
-    if args.sandbox != "read-only":
-        cmd.extend(
-            [
-                "--permission-mode",
-                "dontAsk",
-                "--allowedTools",
-                "Read,Write,Edit,Glob,Grep,Bash",
-            ]
-        )
     if args.debug:
-        print("Running:", " ".join(cmd), file=sys.stderr)
+        print("Running: claude --print", file=sys.stderr)
 
-    env = os.environ.copy()
-    env["CLAUDECODE"] = ""
     try:
-        result = subprocess.run(
-            cmd,
+        result = run_claude_text(
+            prompt,
             cwd=repo_root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
             timeout=args.timeout,
-            env=env,
-            check=False,
+            model=args.model,
+            sandbox=args.sandbox,
         )
     except subprocess.TimeoutExpired as exc:
         write_log(log_file, str(exc))
@@ -164,7 +146,9 @@ def run_agent(args: argparse.Namespace) -> int:
 
     if args.agent == "claude":
         return run_claude(args, prompt, repo_root, output_file, log_file)
-    return run_codex(args, prompt, repo_root, output_file, log_file)
+    if args.agent == "codex":
+        return run_codex(args, prompt, repo_root, output_file, log_file)
+    raise ValueError(f"Unsupported agent: {args.agent}")
 
 
 def main(argv: list[str] | None = None) -> int:

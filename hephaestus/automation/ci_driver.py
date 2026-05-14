@@ -26,6 +26,7 @@ from hephaestus.agents.runtime import (
     is_codex,
     resume_codex_session,
     run_codex_session,
+    session_agent_matches,
 )
 
 from .claude_models import implementer_model
@@ -578,6 +579,16 @@ class CIDriver:
         try:
             data = json.loads(state_file.read_text())
             session_id: str | None = data.get("session_id")
+            session_agent: str | None = data.get("session_agent")
+            if session_id and not session_agent_matches(session_agent, self.options.agent):
+                logger.info(
+                    "Skipping impl session for issue #%s: session belongs to %s, "
+                    "selected agent is %s",
+                    issue_number,
+                    session_agent or "claude",
+                    self.options.agent,
+                )
+                return None
             if session_id:
                 logger.debug("Loaded session_id for issue #%s: %s...", issue_number, session_id[:8])
             return session_id
@@ -585,7 +596,7 @@ class CIDriver:
             logger.warning("Could not load session_id for issue #%s: %s", issue_number, e)
             return None
 
-    def _run_ci_fix_session(
+    def _run_ci_fix_session(  # noqa: C901  # provider resume/fallback paths are intentionally coupled
         self,
         issue_number: int,
         pr_number: int,
@@ -620,21 +631,36 @@ class CIDriver:
         try:
             if is_codex(self.options.agent):
                 try:
-                    codex_result = (
-                        resume_codex_session(
-                            session_id,
-                            prompt,
-                            cwd=worktree_path,
-                            timeout=ci_driver_claude_timeout(),
-                        )
-                        if session_id
-                        else run_codex_session(
+                    if session_id:
+                        try:
+                            codex_result = resume_codex_session(
+                                session_id,
+                                prompt,
+                                cwd=worktree_path,
+                                timeout=ci_driver_claude_timeout(),
+                            )
+                        except subprocess.CalledProcessError as e:
+                            logger.warning(
+                                "Issue #%s: Codex resume session %r failed for PR #%s; "
+                                "falling back to fresh session: %s",
+                                issue_number,
+                                session_id,
+                                pr_number,
+                                (e.stderr or e.stdout or "")[:300],
+                            )
+                            codex_result = run_codex_session(
+                                prompt,
+                                cwd=worktree_path,
+                                timeout=ci_driver_claude_timeout(),
+                                sandbox="workspace-write",
+                            )
+                    else:
+                        codex_result = run_codex_session(
                             prompt,
                             cwd=worktree_path,
                             timeout=ci_driver_claude_timeout(),
                             sandbox="workspace-write",
                         )
-                    )
                     logger.debug(
                         "Issue #%s: Codex CI fix output: %s",
                         issue_number,

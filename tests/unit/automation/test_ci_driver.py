@@ -306,11 +306,14 @@ class TestRequiredVsNonRequired:
         mock_fix.assert_called_once()
         assert result.success is True
 
-    def test_pending_checks_skip_fix(self, driver: CIDriver) -> None:
+    def test_pending_checks_skip_fix(
+        self, driver: CIDriver, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """All checks pending (not completed) → no fix attempted."""
         checks = [
             _make_check("test", status="in_progress", conclusion="", required=True),
         ]
+        monkeypatch.setenv("HEPH_CI_POLL_MAX_WAIT", "0")
         with (
             patch.object(driver, "_find_pr_for_issue", return_value=42),
             patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),

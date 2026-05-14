@@ -81,8 +81,7 @@ def test_run_agent_dispatches_codex_and_logs_session(
     assert rc == 0
     assert Path(args.output).read_text(encoding="utf-8") == "codex output"
     assert (
-        Path(args.log_file).read_text(encoding="utf-8")
-        == "SESSION_ID: session-123\n\ncodex output"
+        Path(args.log_file).read_text(encoding="utf-8") == "SESSION_ID: session-123\n\ncodex output"
     )
 
 

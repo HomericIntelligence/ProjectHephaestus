@@ -1,5 +1,6 @@
 """Unit tests for hephaestus.github.tidy — focusing on parse_problem_branches."""
 
+import asyncio
 import importlib
 from pathlib import Path
 
@@ -123,8 +124,7 @@ def test_various_branch_name_formats(branch: str) -> None:
     assert parse_problem_branches(output) == [branch]
 
 
-@pytest.mark.asyncio
-async def test_dispatch_swarm_runs_codex_agents_in_threads(
+def test_dispatch_swarm_runs_codex_agents_in_threads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -137,14 +137,16 @@ async def test_dispatch_swarm_runs_codex_agents_in_threads(
 
     monkeypatch.setattr(tidy_module.asyncio, "to_thread", fake_to_thread)
 
-    result = await tidy_module._dispatch_swarm(
-        ["feature/a"],
-        "main",
-        tmp_path,
-        "owner/repo",
-        max_concurrent=1,
-        dry_run=False,
-        agent="codex",
+    result = asyncio.run(
+        tidy_module._dispatch_swarm(
+            ["feature/a"],
+            "main",
+            tmp_path,
+            "owner/repo",
+            max_concurrent=1,
+            dry_run=False,
+            agent="codex",
+        )
     )
 
     assert result == {"feature/a": "fixed"}

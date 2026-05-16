@@ -291,17 +291,31 @@ class TestGatherPrContextPolicyState:
         self,
         diff_text: str,
         pr_view_json: dict[str, Any],
+        graphql_nodes: list[dict[str, Any]] | None = None,
         checks_json: list[dict[str, Any]] | None = None,
     ) -> Any:
-        """Build a side_effect that mimics the three _gh_call invocations."""
+        """Build a side_effect for the four _gh_call invocations.
+
+        Order: pr diff, pr view --json (body+autoMergeRequest), api graphql
+        (signing state), pr checks --json. The reviewer calls them in that
+        sequence in ``_gather_pr_context``.
+        """
         diff_result = MagicMock(returncode=0, stdout=diff_text, stderr="")
         view_result = MagicMock(returncode=0, stdout=json.dumps(pr_view_json), stderr="")
+        graphql_payload = {
+            "data": {"repository": {"pullRequest": {"commits": {"nodes": graphql_nodes or []}}}}
+        }
+        graphql_result = MagicMock(returncode=0, stdout=json.dumps(graphql_payload), stderr="")
         checks_result = MagicMock(returncode=0, stdout=json.dumps(checks_json or []), stderr="")
-        return [diff_result, view_result, checks_result]
+        return [diff_result, view_result, graphql_result, checks_result]
 
     def test_extracts_auto_merge_enabled(self, reviewer: PRReviewer, tmp_path: Path) -> None:
         with (
             patch("hephaestus.automation.pr_reviewer._gh_call") as mock_gh,
+            patch(
+                "hephaestus.automation.pr_reviewer.get_repo_info",
+                return_value=("owner", "repo"),
+            ),
             patch(
                 "hephaestus.automation.pr_reviewer.fetch_issue_info",
                 return_value=MagicMock(body=""),
@@ -314,18 +328,15 @@ class TestGatherPrContextPolicyState:
                     "reviews": [],
                     "comments": [],
                     "autoMergeRequest": {"enabledBy": {"login": "alice"}},
-                    "commits": [
-                        {
-                            "oid": "abc",
-                            "commit": {
-                                "signature": {
-                                    "isValid": True,
-                                    "signer": {"login": "alice"},
-                                }
-                            },
-                        }
-                    ],
                 },
+                graphql_nodes=[
+                    {
+                        "commit": {
+                            "oid": "abc",
+                            "signature": {"isValid": True, "signer": {"login": "alice"}},
+                        }
+                    }
+                ],
             )
             ctx = reviewer._gather_pr_context(pr_number=1, issue_number=1, worktree_path=tmp_path)
         assert ctx["auto_merge_enabled"] is True
@@ -337,29 +348,9 @@ class TestGatherPrContextPolicyState:
         with (
             patch("hephaestus.automation.pr_reviewer._gh_call") as mock_gh,
             patch(
-                "hephaestus.automation.pr_reviewer.fetch_issue_info",
-                return_value=MagicMock(body=""),
+                "hephaestus.automation.pr_reviewer.get_repo_info",
+                return_value=("owner", "repo"),
             ),
-        ):
-            mock_gh.side_effect = self._gh_call_side_effect(
-                diff_text="diff --git a/x b/x\n+y\n",
-                pr_view_json={
-                    "body": "Closes #1",
-                    "reviews": [],
-                    "comments": [],
-                    "autoMergeRequest": None,
-                    "commits": [],
-                },
-            )
-            ctx = reviewer._gather_pr_context(pr_number=1, issue_number=1, worktree_path=tmp_path)
-        assert ctx["auto_merge_enabled"] is False
-
-    def test_unsigned_commit_yields_signature_valid_false(
-        self, reviewer: PRReviewer, tmp_path: Path
-    ) -> None:
-        """GitHub returns commit.signature == null for unsigned commits."""
-        with (
-            patch("hephaestus.automation.pr_reviewer._gh_call") as mock_gh,
             patch(
                 "hephaestus.automation.pr_reviewer.fetch_issue_info",
                 return_value=MagicMock(body=""),
@@ -372,8 +363,36 @@ class TestGatherPrContextPolicyState:
                     "reviews": [],
                     "comments": [],
                     "autoMergeRequest": None,
-                    "commits": [{"oid": "deadbeef", "commit": {"signature": None}}],
                 },
+                graphql_nodes=[],
+            )
+            ctx = reviewer._gather_pr_context(pr_number=1, issue_number=1, worktree_path=tmp_path)
+        assert ctx["auto_merge_enabled"] is False
+
+    def test_unsigned_commit_yields_signature_valid_false(
+        self, reviewer: PRReviewer, tmp_path: Path
+    ) -> None:
+        """GitHub returns commit.signature == null for unsigned commits."""
+        with (
+            patch("hephaestus.automation.pr_reviewer._gh_call") as mock_gh,
+            patch(
+                "hephaestus.automation.pr_reviewer.get_repo_info",
+                return_value=("owner", "repo"),
+            ),
+            patch(
+                "hephaestus.automation.pr_reviewer.fetch_issue_info",
+                return_value=MagicMock(body=""),
+            ),
+        ):
+            mock_gh.side_effect = self._gh_call_side_effect(
+                diff_text="diff --git a/x b/x\n+y\n",
+                pr_view_json={
+                    "body": "Closes #1",
+                    "reviews": [],
+                    "comments": [],
+                    "autoMergeRequest": None,
+                },
+                graphql_nodes=[{"commit": {"oid": "deadbeef", "signature": None}}],
             )
             ctx = reviewer._gather_pr_context(pr_number=1, issue_number=1, worktree_path=tmp_path)
         assert ctx["commits_signing_state"] == [
@@ -391,11 +410,17 @@ class TestGatherPrContextPolicyState:
         with (
             patch("hephaestus.automation.pr_reviewer._gh_call") as mock_gh,
             patch(
+                "hephaestus.automation.pr_reviewer.get_repo_info",
+                return_value=("owner", "repo"),
+            ),
+            patch(
                 "hephaestus.automation.pr_reviewer.fetch_issue_info",
                 return_value=MagicMock(body=""),
             ),
         ):
             diff_result = MagicMock(returncode=0, stdout="diff\n+x\n", stderr="")
+            # pr view fails → outer except handler skips both auto-merge AND
+            # the graphql signing fetch, so we only need a checks mock after.
             checks_result = MagicMock(returncode=0, stdout="[]", stderr="")
             mock_gh.side_effect = [diff_result, RuntimeError("API down"), checks_result]
             ctx = reviewer._gather_pr_context(pr_number=1, issue_number=1, worktree_path=tmp_path)

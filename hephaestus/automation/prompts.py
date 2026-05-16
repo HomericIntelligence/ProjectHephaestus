@@ -119,13 +119,22 @@ After implementation is complete and tests pass:
 4. IMMEDIATELY after PR creation, enable auto-merge:
        gh pr merge <PR#> --auto --rebase
    Fall back to `--squash` ONLY if rebase merging is disabled for the repo.
-5. Verify all three policy properties before declaring done:
-       gh pr view <PR#> --json body,autoMergeRequest,commits \\
-         -q '.body, .autoMergeRequest, [.commits[].commit.signature.isValid] | all'
-   - `.body` must contain a line matching `^Closes #\\d+$`.
-   - `.autoMergeRequest` must be non-null.
-   - The signature-validity list must reduce to `true`.
-   If any check fails, fix it before reporting completion.
+5. Verify all three policy properties before declaring done. ``gh pr view``
+   exposes body + auto-merge state but NOT per-commit signatures, so the
+   verification uses two queries — the REST projection for body/auto-merge
+   and GraphQL for signing state:
+       # Body and auto-merge state:
+       gh pr view <PR#> --json body,autoMergeRequest \\
+         -q '.body | test("(?m)^Closes #\\\\d+\\\\s*$"), .autoMergeRequest != null'
+       # Per-commit signing state (GraphQL — replace OWNER/REPO/PR#):
+       gh api graphql -f query='query($owner:String!,$name:String!,$pr:Int!){{
+         repository(owner:$owner,name:$name){{
+           pullRequest(number:$pr){{
+             commits(first:100){{ nodes{{ commit{{ oid signature{{ isValid }} }} }} }} }} }} }}' \\
+         -F owner=OWNER -F name=REPO -F pr=<PR#> \\
+         -q '[.data.repository.pullRequest.commits.nodes[].commit.signature.isValid] | all'
+   All three queries must return `true`. If any fails, fix it before
+   reporting completion.
 
 A PR that fails any of these three checks will be BLOCKED at code review and
 by the required CI gate. This policy applies to every PR — no exceptions.

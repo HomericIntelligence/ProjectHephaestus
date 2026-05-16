@@ -30,7 +30,7 @@ from ._review_utils import find_pr_for_issue, parse_json_block
 from .claude_models import reviewer_model
 from .claude_timeouts import pr_reviewer_claude_timeout
 from .curses_ui import CursesUI, ThreadLogManager
-from .git_utils import get_repo_root, issue_ref, pr_ref, run
+from .git_utils import get_repo_info, get_repo_root, issue_ref, pr_ref, run
 from .github_api import _gh_call, fetch_issue_info, gh_pr_review_post, write_secure
 from .models import ReviewerOptions, ReviewPhase, ReviewState, WorkerResult
 from .prompts import get_pr_review_analysis_prompt
@@ -40,17 +40,69 @@ from .worktree_manager import WorktreeManager
 logger = logging.getLogger(__name__)
 
 
-def _extract_signing_state(commits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Reduce the ``commits`` array from ``gh pr view --json`` to policy state.
+_SIGNING_GRAPHQL_QUERY = """
+query($owner: String!, $name: String!, $pr: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $pr) {
+      commits(first: 100) {
+        nodes {
+          commit {
+            oid
+            signature { isValid signer { login } }
+          }
+        }
+      }
+    }
+  }
+}
+"""
 
-    Each output element is a dict ``{"oid", "signature_valid", "signer"}``.
-    GitHub returns ``commit.signature == null`` for unsigned commits, which
-    we coerce to ``signature_valid=False`` rather than dropping the row.
+
+def _fetch_signing_state(pr_number: int) -> list[dict[str, Any]]:
+    """Fetch per-commit signing state for *pr_number* via the GitHub GraphQL API.
+
+    The REST projection of ``gh pr view --json commits`` does NOT expose the
+    ``signature`` subfield, so we go to GraphQL. Each returned element is a
+    dict ``{"oid", "signature_valid", "signer"}`` matching the schema the
+    reviewer prompt expects. A null GraphQL ``signature`` (unsigned commit)
+    is coerced to ``signature_valid=False`` rather than dropped.
+
+    Failures are returned as an empty list; the reviewer treats an empty
+    signing-state as a policy BLOCK, so the caller still surfaces the
+    violation rather than silently passing.
     """
+    try:
+        owner, name = get_repo_info()
+        result = _gh_call(
+            [
+                "api",
+                "graphql",
+                "-f",
+                f"query={_SIGNING_GRAPHQL_QUERY}",
+                "-F",
+                f"owner={owner}",
+                "-F",
+                f"name={name}",
+                "-F",
+                f"pr={pr_number}",
+            ],
+        )
+        data = json.loads(result.stdout or "{}")
+        nodes = (
+            data.get("data", {})
+            .get("repository", {})
+            .get("pullRequest", {})
+            .get("commits", {})
+            .get("nodes", [])
+        )
+    except Exception as exc:
+        logger.warning("PR #%d: failed to fetch signing state via GraphQL: %s", pr_number, exc)
+        return []
+
     out: list[dict[str, Any]] = []
-    for commit in commits:
-        inner = commit.get("commit") or {}
-        signature = inner.get("signature") or {}
+    for node in nodes:
+        commit = node.get("commit") or {}
+        signature = commit.get("signature") or {}
         out.append(
             {
                 "oid": commit.get("oid", ""),
@@ -248,6 +300,11 @@ class PRReviewer:
         # for everything except policy state — but the reviewer prompt treats
         # an empty signing-state list as a BLOCK, so a failure here surfaces
         # as a policy violation rather than silently passing.
+        #
+        # Note: `gh pr view --json commits` returns commit OIDs but NOT the
+        # `signature` subfield. Per-commit signing state must come from the
+        # GraphQL API (see ``_fetch_signing_state``); auto-merge and body
+        # still come from the REST projection here.
         try:
             result = _gh_call(
                 [
@@ -255,16 +312,16 @@ class PRReviewer:
                     "view",
                     str(pr_number),
                     "--json",
-                    "body,reviews,comments,autoMergeRequest,commits",
+                    "body,reviews,comments,autoMergeRequest",
                 ],
             )
             pr_data = json.loads(result.stdout or "{}")
             context["pr_description"] = pr_data.get("body", "")
 
-            # Policy state: auto-merge + per-commit signing. Extracted to a
-            # helper so this method stays under the C901 complexity ceiling.
+            # Policy state: auto-merge.
             context["auto_merge_enabled"] = pr_data.get("autoMergeRequest") is not None
-            context["commits_signing_state"] = _extract_signing_state(pr_data.get("commits", []))
+            # Policy state: per-commit signing via GraphQL.
+            context["commits_signing_state"] = _fetch_signing_state(pr_number)
 
             # Aggregate review comments
             review_parts: list[str] = []

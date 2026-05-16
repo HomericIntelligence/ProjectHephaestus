@@ -267,11 +267,36 @@ jobs:
     steps:
       - name: "Fetch PR metadata"
         id: fetch
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
+          # `gh pr view --json body,autoMergeRequest` exposes body + auto-merge
+          # state but DOES NOT expose per-commit signatures; we use the GraphQL
+          # API for that. Two separate queries are fine here — the workflow
+          # runs at most once per PR event and the policy gate must be cheap
+          # to read and debug.
           gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json body,autoMergeRequest,commits \
+            --json body,autoMergeRequest \
             > pr.json
+          gh api graphql \
+            -f query='query($owner:String!,$name:String!,$pr:Int!) {
+              repository(owner:$owner, name:$name) {
+                pullRequest(number:$pr) {
+                  commits(first:100) {
+                    nodes {
+                      commit {
+                        oid
+                        signature { isValid state }
+                      }
+                    }
+                  }
+                }
+              }
+            }' \
+            -F owner="$REPO_OWNER" -F name="$REPO_NAME" -F pr="$PR_NUMBER" \
+            > commits.json
           echo "Fetched metadata for PR #$PR_NUMBER"
 
       - name: "Check 1: PR body contains 'Closes #N'"
@@ -295,7 +320,7 @@ jobs:
           set -euo pipefail
           state=$(jq -r '.autoMergeRequest' pr.json)
           if [ "$state" = "null" ] || [ -z "$state" ]; then
-            echo "::error::Auto-merge is not enabled on this PR. Run: gh pr merge $PR_NUMBER --auto --rebase"
+            echo "::error::Auto-merge is not enabled on this PR. Run: gh pr merge $PR_NUMBER --auto --rebase  (or --squash if rebase is disallowed)"
             exit 1
           fi
           echo "OK: auto-merge is enabled"
@@ -304,10 +329,11 @@ jobs:
         if: always() && steps.fetch.outcome == 'success'
         run: |
           set -euo pipefail
-          # Build list of "<oid> <isValid>" rows. GitHub returns
-          # commit.signature == null for unsigned commits, so the // false
-          # default coerces that to "false" rather than dropping the row.
-          bad=$(jq -r '.commits[] | "\(.oid) \(.commit.signature.isValid // false)"' pr.json \
+          # Build "<oid> <isValid>" rows from the GraphQL response. A null
+          # signature object means an unsigned commit, which the // false
+          # default coerces to false (rather than dropping the row).
+          bad=$(jq -r '.data.repository.pullRequest.commits.nodes[]
+                       | "\(.commit.oid) \(.commit.signature.isValid // false)"' commits.json \
                 | awk '$2 != "true" { print $1 }')
           if [ -n "$bad" ]; then
             echo "::error::The following commits are unsigned or have invalid signatures:"

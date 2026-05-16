@@ -886,11 +886,7 @@ class TestGraphQLRateLimitDetection:
     """Tests for GitHubRateLimitError raised from GraphQL JSON payloads."""
 
     def test_raises_on_rate_limited_type(self) -> None:
-        data = {
-            "errors": [
-                {"type": "RATE_LIMITED", "message": "API rate limit exceeded"}
-            ]
-        }
+        data = {"errors": [{"type": "RATE_LIMITED", "message": "API rate limit exceeded"}]}
         with patch(
             "hephaestus.automation.github_api.gh_rate_limit_reset_epoch",
             return_value=1700000000,

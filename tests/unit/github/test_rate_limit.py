@@ -317,9 +317,7 @@ class TestGraphQLRateLimit:
             "GraphQL: API rate limit already exceeded."
         )
         # Should not call the probe — the REST regex matches first.
-        with patch(
-            "hephaestus.github.rate_limit.gh_rate_limit_reset_epoch"
-        ) as mock_probe:
+        with patch("hephaestus.github.rate_limit.gh_rate_limit_reset_epoch") as mock_probe:
             result = detect_rate_limit(text)
             mock_probe.assert_not_called()
         assert isinstance(result, int)
@@ -381,9 +379,7 @@ class TestGlobalThrottle:
         assert elapsed < 0.05
         assert not (tmp_path / "hephaestus_gh_rate.json").exists()
 
-    def test_first_call_succeeds_immediately_with_full_burst(
-        self, monkeypatch, tmp_path
-    ) -> None:
+    def test_first_call_succeeds_immediately_with_full_burst(self, monkeypatch, tmp_path) -> None:
         monkeypatch.setenv("HEPHAESTUS_GH_GLOBAL_RATE", "1000")
         monkeypatch.setenv("HEPHAESTUS_GH_GLOBAL_BURST", "10")
         monkeypatch.setenv("HEPHAESTUS_RATE_DIR", str(tmp_path))

@@ -407,9 +407,7 @@ def _check_graphql_errors(data: dict[str, Any], context: str) -> None:
         err_type = err.get("type", "") if isinstance(err, dict) else ""
         if err_type == "RATE_LIMITED" or "rate limit" in msg.lower():
             reset = gh_rate_limit_reset_epoch() or 0
-            raise GitHubRateLimitError(
-                f"GraphQL {context} rate-limited: {msg}", reset_epoch=reset
-            )
+            raise GitHubRateLimitError(f"GraphQL {context} rate-limited: {msg}", reset_epoch=reset)
 
     raise RuntimeError(f"GraphQL {context} failed: {errors!r}")
 

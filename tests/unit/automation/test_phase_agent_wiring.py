@@ -69,9 +69,7 @@ def test_self_agent_phase_passes_expected_agent_kwarg(
 
 
 @pytest.mark.parametrize("module_file, expected_agent", SELF_AGENT_PHASES)
-def test_self_agent_phase_does_not_use_foreign_agent(
-    module_file: str, expected_agent: str
-) -> None:
+def test_self_agent_phase_does_not_use_foreign_agent(module_file: str, expected_agent: str) -> None:
     """A self-agent phase must not pass any other AGENT_* constant."""
     src = (AUTOMATION_DIR / module_file).read_text()
     found = set(re.findall(r"\bagent\s*=\s*(AGENT_[A-Z_]+)\b", src))

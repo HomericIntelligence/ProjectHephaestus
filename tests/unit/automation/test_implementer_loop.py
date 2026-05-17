@@ -221,9 +221,7 @@ class TestResumeImplWithFeedback:
 
     @pytest.fixture(autouse=True)
     def _repo_lookup(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            "hephaestus.automation.implementer.get_repo_slug", lambda _: "TestRepo"
-        )
+        monkeypatch.setattr("hephaestus.automation.implementer.get_repo_slug", lambda _: "TestRepo")
         monkeypatch.setattr(
             "hephaestus.automation.implementer.current_trunk_githash", lambda _: "abc1234"
         )
@@ -231,9 +229,7 @@ class TestResumeImplWithFeedback:
     def test_resume_uses_session_id_and_prompt(
         self, implementer: IssueImplementer, tmp_path: Path
     ) -> None:
-        with patch(
-            "hephaestus.automation.implementer.invoke_claude_with_session"
-        ) as mock_invoke:
+        with patch("hephaestus.automation.implementer.invoke_claude_with_session") as mock_invoke:
             mock_invoke.return_value = ("ok", "uuid")
             ok = implementer._resume_impl_with_feedback(
                 session_id="abc",
@@ -275,9 +271,7 @@ class TestResumeImplWithFeedback:
         err = subprocess.CalledProcessError(1, ["claude"], stderr="session not found")
         state = ImplementationState(issue_number=1)
 
-        with patch(
-            "hephaestus.automation.implementer.invoke_claude_with_session", side_effect=err
-        ):
+        with patch("hephaestus.automation.implementer.invoke_claude_with_session", side_effect=err):
             ok = implementer._resume_impl_with_feedback(
                 session_id="ses123",
                 worktree_path=tmp_path,
@@ -299,9 +293,7 @@ class TestResumeImplWithFeedback:
         err = subprocess.CalledProcessError(1, ["claude"], stderr="network timeout")
         state = ImplementationState(issue_number=1)
 
-        with patch(
-            "hephaestus.automation.implementer.invoke_claude_with_session", side_effect=err
-        ):
+        with patch("hephaestus.automation.implementer.invoke_claude_with_session", side_effect=err):
             ok = implementer._resume_impl_with_feedback(
                 session_id="ses999",
                 worktree_path=tmp_path,

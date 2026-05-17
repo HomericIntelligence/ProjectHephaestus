@@ -306,9 +306,7 @@ class TestRecreateOnResumeFailureToggle:
         boom = subprocess.CalledProcessError(
             returncode=1, cmd=["claude"], output="", stderr="session not found"
         )
-        with patch(
-            "hephaestus.automation.claude_invoke.subprocess.run", side_effect=boom
-        ) as m:
+        with patch("hephaestus.automation.claude_invoke.subprocess.run", side_effect=boom) as m:
             with pytest.raises(subprocess.CalledProcessError):
                 invoke_claude_with_session(
                     repo="R",
@@ -396,9 +394,7 @@ class TestEndToEndSessionResume:
         sid_new = session_uuid("R", 1, AGENT_PLANNER, "def5678")
         _make_existing_jsonl(fake_home, cwd, sid_old)
 
-        with patch(
-            "hephaestus.automation.claude_invoke.subprocess.run"
-        ) as m:
+        with patch("hephaestus.automation.claude_invoke.subprocess.run") as m:
             m.return_value = MagicMock(stdout="ok", stderr="", returncode=0)
             _, returned_sid = invoke_claude_with_session(
                 repo="R",

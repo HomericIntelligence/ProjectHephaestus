@@ -1505,9 +1505,7 @@ class IssueImplementer:
                 permission_mode="dontAsk",
                 allowed_tools="Read,Write,Edit,Glob,Grep,Bash",
             )
-            result = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout=stdout, stderr=""
-            )
+            result = subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
             # Parse session_id from JSON output
             try:
                 data = json.loads(result.stdout)

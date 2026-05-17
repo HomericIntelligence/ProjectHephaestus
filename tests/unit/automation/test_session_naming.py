@@ -50,10 +50,7 @@ class TestSessionName:
             session_name(repo, issue, AGENT_PLANNER, gh)
 
     def test_whitespace_stripped(self) -> None:
-        assert (
-            session_name("  R  ", 1, AGENT_PLANNER, "  abc  ")
-            == "R_1_planner_abc"
-        )
+        assert session_name("  R  ", 1, AGENT_PLANNER, "  abc  ") == "R_1_planner_abc"
 
 
 class TestSessionUUID:
@@ -80,9 +77,7 @@ class TestSessionUUID:
         )
 
     def test_different_issue_different_uuid(self) -> None:
-        assert session_uuid("R", 1, AGENT_PLANNER, "x") != session_uuid(
-            "R", 2, AGENT_PLANNER, "x"
-        )
+        assert session_uuid("R", 1, AGENT_PLANNER, "x") != session_uuid("R", 2, AGENT_PLANNER, "x")
 
     def test_different_githash_different_uuid(self) -> None:
         assert session_uuid("R", 1, AGENT_PLANNER, "abc1234") != session_uuid(

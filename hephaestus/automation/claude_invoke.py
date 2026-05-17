@@ -132,11 +132,7 @@ def invoke_claude_with_session(
         base_tail.append(prompt)
 
     def _build(create: bool) -> list[str]:
-        mode = (
-            ["--session-id", sid, "--name", display_name]
-            if create
-            else ["--resume", sid]
-        )
+        mode = ["--session-id", sid, "--name", display_name] if create else ["--resume", sid]
         return ["claude", *mode, *base_tail]
 
     def _run(create: bool) -> subprocess.CompletedProcess[str]:

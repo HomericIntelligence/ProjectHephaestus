@@ -69,9 +69,7 @@ def session_name(repo: str, issue: int | str, agent: str, githash: str) -> str:
 
     """
     if agent not in _ALL_AGENTS:
-        raise ValueError(
-            f"unknown agent {agent!r}; must be one of {sorted(_ALL_AGENTS)}"
-        )
+        raise ValueError(f"unknown agent {agent!r}; must be one of {sorted(_ALL_AGENTS)}")
     repo_s = repo.strip()
     githash_s = githash.strip()
     if not repo_s or not githash_s:

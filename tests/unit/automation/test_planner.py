@@ -61,9 +61,10 @@ class TestCallClaude:
         return stack
 
     def test_successful_call(self, planner: Any) -> None:
-        with self._patch_repo(), patch(
-            "hephaestus.automation.claude_invoke.subprocess.run"
-        ) as mock_run:
+        with (
+            self._patch_repo(),
+            patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(stdout="This is a plan", returncode=0)
 
             result = planner._call_claude(
@@ -89,22 +90,22 @@ class TestCallClaude:
             assert "text" in args
 
     def test_model_kwarg_pins_argv(self, planner: Any) -> None:
-        with self._patch_repo(), patch(
-            "hephaestus.automation.claude_invoke.subprocess.run"
-        ) as mock_run:
+        with (
+            self._patch_repo(),
+            patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(stdout="ok", returncode=0)
-            planner._call_claude(
-                "p", model="claude-haiku-4-5", agent="planner", issue_number=1
-            )
+            planner._call_claude("p", model="claude-haiku-4-5", agent="planner", issue_number=1)
             args = mock_run.call_args[0][0]
             assert "--model" in args
             i = args.index("--model")
             assert args[i + 1] == "claude-haiku-4-5"
 
     def test_empty_response(self, planner: Any) -> None:
-        with self._patch_repo(), patch(
-            "hephaestus.automation.claude_invoke.subprocess.run"
-        ) as mock_run:
+        with (
+            self._patch_repo(),
+            patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(stdout="   ", returncode=0)
 
             with pytest.raises(RuntimeError, match="empty response"):
@@ -116,9 +117,10 @@ class TestCallClaude:
                 )
 
     def test_timeout(self, planner: Any) -> None:
-        with self._patch_repo(), patch(
-            "hephaestus.automation.claude_invoke.subprocess.run"
-        ) as mock_run:
+        with (
+            self._patch_repo(),
+            patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
+        ):
             mock_run.side_effect = subprocess.TimeoutExpired("claude", 300)
 
             with pytest.raises(RuntimeError, match="timed out"):
@@ -187,9 +189,10 @@ class TestCallClaude:
         mock_options.system_prompt_file = sys_prompt
         planner = Planner(mock_options)
 
-        with self._patch_repo(), patch(
-            "hephaestus.automation.claude_invoke.subprocess.run"
-        ) as mock_run:
+        with (
+            self._patch_repo(),
+            patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(stdout="Response", returncode=0)
             planner._call_claude(
                 "Test prompt",

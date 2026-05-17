@@ -55,9 +55,7 @@ def _make_existing_jsonl(home: Path, cwd: Path, sid: str) -> None:
 class TestCreateVsResume:
     """First call vs subsequent call: --session-id vs --resume."""
 
-    def test_first_call_uses_session_id(
-        self, stub_run: MagicMock, fake_home: Path
-    ) -> None:
+    def test_first_call_uses_session_id(self, stub_run: MagicMock, fake_home: Path) -> None:
         cwd = fake_home / "work"
         cwd.mkdir()
         out, sid = invoke_claude_with_session(
@@ -76,9 +74,7 @@ class TestCreateVsResume:
         assert out == "ok"
         assert sid == session_uuid("R", 1, AGENT_PLANNER, "x")
 
-    def test_subsequent_call_uses_resume(
-        self, stub_run: MagicMock, fake_home: Path
-    ) -> None:
+    def test_subsequent_call_uses_resume(self, stub_run: MagicMock, fake_home: Path) -> None:
         cwd = fake_home / "work"
         cwd.mkdir()
         sid = session_uuid("R", 1, AGENT_PLANNER, "x")

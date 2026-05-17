@@ -16,7 +16,6 @@ import argparse
 import contextlib
 import json
 import logging
-import os
 import subprocess
 import threading
 import time
@@ -36,7 +35,7 @@ from .git_utils import get_repo_info, get_repo_root, get_repo_slug, issue_ref, p
 from .github_api import _gh_call, fetch_issue_info, gh_pr_review_post, write_secure
 from .models import ReviewerOptions, ReviewPhase, ReviewState, WorkerResult
 from .prompts import get_pr_review_analysis_prompt
-from .session_naming import AGENT_PR_REVIEWER
+from .session_naming import AGENT_PR_REVIEWER, current_trunk_githash
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
@@ -439,8 +438,9 @@ class PRReviewer:
                 )
                 return parsed
 
-            githash = os.environ.get("HEPH_TRUNK_GITHASH", "unknown")
-            repo_slug = get_repo_slug(get_repo_root())
+            repo_root = get_repo_root()
+            githash = current_trunk_githash(repo_root)
+            repo_slug = get_repo_slug(repo_root)
             stdout, _ = invoke_claude_with_session(
                 repo=repo_slug,
                 issue=issue_number,

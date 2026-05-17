@@ -24,6 +24,7 @@ letting each agent resume itself across loop iterations.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import uuid
 from pathlib import Path
@@ -103,6 +104,21 @@ def short_githash(repo_path: Path) -> str:
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         return "unknown"
     return out.stdout.strip() or "unknown"
+
+
+def current_trunk_githash(repo_path: Path | None = None) -> str:
+    """Return the trunk SHA every phase should use for session naming.
+
+    Reads ``HEPH_TRUNK_GITHASH`` (set once per repo loop iteration by
+    ``scripts/run_automation_loop.sh``) so all phases within one loop
+    iteration share the same SHA. Falls back to live ``git rev-parse`` on
+    ``repo_path`` (or cwd) when the env var is unset — useful for one-off
+    CLI invocations outside the loop.
+    """
+    env_value = os.environ.get("HEPH_TRUNK_GITHASH")
+    if env_value:
+        return env_value
+    return short_githash(repo_path if repo_path is not None else Path.cwd())
 
 
 def session_jsonl_path(uuid_str: str, cwd: Path) -> Path:

@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import subprocess
 import threading
 import time
@@ -30,7 +29,7 @@ from .git_utils import get_repo_root, get_repo_slug, issue_ref
 from .github_api import _gh_call, gh_issue_comment, gh_issue_json
 from .models import PLAN_COMMENT_MARKERS, PlanReviewerOptions, WorkerResult
 from .prompts import get_plan_review_prompt
-from .session_naming import AGENT_PLAN_REVIEWER
+from .session_naming import AGENT_PLAN_REVIEWER, current_trunk_githash
 from .status_tracker import StatusTracker
 
 logger = logging.getLogger(__name__)
@@ -346,7 +345,7 @@ class PlanReviewer:
 
         repo_root = get_repo_root()
         repo = get_repo_slug(repo_root)
-        githash = os.environ.get("HEPH_TRUNK_GITHASH", "unknown")
+        githash = current_trunk_githash(repo_root)
 
         try:
             stdout, _ = invoke_claude_with_session(

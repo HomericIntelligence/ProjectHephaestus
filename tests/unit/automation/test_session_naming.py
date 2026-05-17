@@ -18,6 +18,7 @@ from hephaestus.automation.session_naming import (
     AGENT_PLAN_REVIEWER,
     AGENT_PLANNER,
     AGENT_PR_REVIEWER,
+    current_trunk_githash,
     session_jsonl_path,
     session_name,
     session_uuid,
@@ -158,3 +159,56 @@ class TestSessionJsonlPath:
         sid = session_uuid("R", 1, AGENT_IMPLEMENTER, "abc1234")
         p = session_jsonl_path(sid, tmp_path)
         assert p.name == f"{sid}.jsonl"
+
+
+class TestCurrentTrunkGithash:
+    """``current_trunk_githash`` reads env or falls back to live rev-parse."""
+
+    def test_env_var_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HEPH_TRUNK_GITHASH", "deadbee")
+        # tmp_path is not a git repo; if the env var weren't honored we'd get
+        # "unknown" from the fallback.
+        assert current_trunk_githash(tmp_path) == "deadbee"
+
+    def test_falls_back_to_short_githash(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HEPH_TRUNK_GITHASH", raising=False)
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t",
+        }
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, env=env)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "commit",
+                "--allow-empty",
+                "-m",
+                "x",
+                "--no-gpg-sign",
+            ],
+            check=True,
+            env=env,
+        )
+        h = current_trunk_githash(tmp_path)
+        assert len(h) == 7
+        assert h != "unknown"
+
+    def test_no_env_no_repo_returns_unknown(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HEPH_TRUNK_GITHASH", raising=False)
+        assert current_trunk_githash(tmp_path) == "unknown"
+
+    def test_empty_env_var_falls_back(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty HEPH_TRUNK_GITHASH must fall back, not propagate ``""``."""
+        monkeypatch.setenv("HEPH_TRUNK_GITHASH", "")
+        assert current_trunk_githash(tmp_path) == "unknown"

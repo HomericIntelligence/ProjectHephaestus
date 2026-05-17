@@ -52,7 +52,7 @@ def _session_expired(stderr: str, stdout: str) -> bool:
     return any(phrase in blob for phrase in SESSION_EXPIRED_PHRASES)
 
 
-def invoke_claude_with_session(
+def invoke_claude_with_session(  # noqa: C901  # state machine: argv assembly + create vs resume + expired fallback toggle
     *,
     repo: str,
     issue: int | str,
@@ -68,13 +68,18 @@ def invoke_claude_with_session(
     extra_args: list[str] | None = None,
     output_format: str = "text",
     input_via_stdin: bool = False,
+    recreate_on_resume_failure: bool = True,
 ) -> tuple[str, str]:
     """Invoke Claude with a deterministic session.
 
     First call for the ``(repo, issue, agent, githash)`` tuple uses
     ``--session-id <uuid>`` to create the session. Every later call uses
-    ``--resume <uuid>``. Any ``--resume`` failure retries once with
-    ``--session-id`` to recreate; quota-cap detection happens one layer up.
+    ``--resume <uuid>``. By default any ``--resume`` failure retries once
+    with ``--session-id`` to recreate; quota-cap detection happens one
+    layer up. Pass ``recreate_on_resume_failure=False`` to propagate the
+    ``CalledProcessError`` instead — needed by callers that must apply
+    their own session-expired classification (e.g. the impl review-loop
+    feedback path stops iterating on expiry rather than restarting).
 
     Args:
         repo: Repository slug (e.g. ``"ProjectScylla"``).
@@ -100,6 +105,11 @@ def invoke_claude_with_session(
             ``"stream-json"``).
         input_via_stdin: When True, ``prompt`` is fed via stdin instead of
             argv (matches the existing :mod:`plan_reviewer` invocation).
+        recreate_on_resume_failure: When ``True`` (default), any
+            ``--resume`` failure triggers a fresh ``--session-id`` retry.
+            When ``False``, the underlying ``CalledProcessError`` is
+            re-raised so the caller can distinguish expired-session from
+            transient errors itself.
 
     Returns:
         ``(stdout, session_uuid)``. The session UUID is the deterministic
@@ -109,7 +119,8 @@ def invoke_claude_with_session(
     Raises:
         subprocess.CalledProcessError: If a ``--session-id`` create call
             exits non-zero, or if both the ``--resume`` and the subsequent
-            recreate attempt fail.
+            recreate attempt fail, or if ``--resume`` fails when
+            ``recreate_on_resume_failure=False``.
         subprocess.TimeoutExpired: If the call exceeds ``timeout``.
 
     """
@@ -166,6 +177,8 @@ def invoke_claude_with_session(
     try:
         return _run(create=False).stdout, sid
     except subprocess.CalledProcessError as exc:
+        if not recreate_on_resume_failure:
+            raise
         # Any --resume failure falls back to a fresh session. The known
         # SESSION_EXPIRED phrases are the common case; transient failures
         # (the CLI itself crashed, a corrupted transcript, etc.) also

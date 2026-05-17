@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import re
 import subprocess
 import threading
@@ -47,7 +46,7 @@ from .github_api import (
 )
 from .models import AddressReviewOptions, ReviewPhase, ReviewState, WorkerResult
 from .prompts import get_address_review_prompt
-from .session_naming import AGENT_IMPLEMENTER
+from .session_naming import AGENT_IMPLEMENTER, current_trunk_githash
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
@@ -646,7 +645,7 @@ class AddressReviewer:
 
             # ``session_id`` is consumed only by the codex path above; the
             # Claude path resumes the implementer's deterministic session.
-            githash = os.environ.get("HEPH_TRUNK_GITHASH", "unknown")
+            githash = current_trunk_githash(self.repo_root)
             repo_slug = get_repo_slug(self.repo_root)
             stdout, _ = invoke_claude_with_session(
                 repo=repo_slug,

@@ -35,7 +35,7 @@ from .claude_timeouts import ci_driver_claude_timeout
 from .git_utils import get_repo_root, get_repo_slug, issue_ref, pr_ref, run
 from .github_api import _gh_call, gh_pr_checks
 from .models import CIDriverOptions, WorkerResult
-from .session_naming import AGENT_IMPLEMENTER
+from .session_naming import AGENT_IMPLEMENTER, current_trunk_githash
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
@@ -692,7 +692,7 @@ class CIDriver:
 
             # CI fix continues the implementer's session for this issue;
             # ``session_id`` is honored only on the codex path above.
-            githash = os.environ.get("HEPH_TRUNK_GITHASH", "unknown")
+            githash = current_trunk_githash(self.repo_root)
             repo_slug = get_repo_slug(self.repo_root)
             try:
                 stdout, _ = invoke_claude_with_session(

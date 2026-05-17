@@ -292,3 +292,128 @@ class TestArgvAssembly:
         )
         passed_env = stub_run.call_args.kwargs["env"]
         assert passed_env["CLAUDECODE"] == ""
+
+
+class TestRecreateOnResumeFailureToggle:
+    """recreate_on_resume_failure=False propagates instead of falling back."""
+
+    def test_propagates_called_process_error(self, fake_home: Path) -> None:
+        cwd = fake_home / "work"
+        cwd.mkdir()
+        sid = session_uuid("R", 1, AGENT_PLANNER, "x")
+        _make_existing_jsonl(fake_home, cwd, sid)
+
+        boom = subprocess.CalledProcessError(
+            returncode=1, cmd=["claude"], output="", stderr="session not found"
+        )
+        with patch(
+            "hephaestus.automation.claude_invoke.subprocess.run", side_effect=boom
+        ) as m:
+            with pytest.raises(subprocess.CalledProcessError):
+                invoke_claude_with_session(
+                    repo="R",
+                    issue=1,
+                    agent=AGENT_PLANNER,
+                    githash="x",
+                    prompt="hi",
+                    model="sonnet",
+                    cwd=cwd,
+                    recreate_on_resume_failure=False,
+                )
+        assert m.call_count == 1
+
+
+class TestEndToEndSessionResume:
+    """Two sequential invocations for the same tuple: create then resume.
+
+    The first call has no JSONL — must use ``--session-id``. The mocked
+    subprocess writes a JSONL on first call so the helper's existence
+    probe will report True on the second call, which must then use
+    ``--resume`` of the same UUID. This is the empirical proof that
+    cross-iteration cache reuse will trigger.
+    """
+
+    def test_create_then_resume_lands_on_same_uuid(self, fake_home: Path) -> None:
+        cwd = fake_home / "work"
+        cwd.mkdir()
+        expected_sid = session_uuid("ProjectScylla", 1944, AGENT_PLANNER, "abc1234")
+
+        # The first call's mock must write the JSONL on disk to simulate
+        # what the real ``claude --session-id`` invocation does.
+        encoded = str(cwd.resolve()).replace("/", "-")
+        transcript_dir = fake_home / ".claude" / "projects" / encoded
+
+        def _side_effect(*args: Any, **kwargs: Any) -> MagicMock:
+            transcript_dir.mkdir(parents=True, exist_ok=True)
+            (transcript_dir / f"{expected_sid}.jsonl").write_text("{}\n")
+            return MagicMock(stdout="ok", stderr="", returncode=0)
+
+        with patch(
+            "hephaestus.automation.claude_invoke.subprocess.run", side_effect=_side_effect
+        ) as m:
+            _, sid1 = invoke_claude_with_session(
+                repo="ProjectScylla",
+                issue=1944,
+                agent=AGENT_PLANNER,
+                githash="abc1234",
+                prompt="iter 0",
+                model="sonnet",
+                cwd=cwd,
+            )
+            _, sid2 = invoke_claude_with_session(
+                repo="ProjectScylla",
+                issue=1944,
+                agent=AGENT_PLANNER,
+                githash="abc1234",
+                prompt="iter 1",
+                model="sonnet",
+                cwd=cwd,
+            )
+
+        assert sid1 == sid2 == expected_sid
+        assert m.call_count == 2
+
+        first_argv = _argv(m.call_args_list[0])
+        second_argv = _argv(m.call_args_list[1])
+
+        assert "--session-id" in first_argv
+        assert expected_sid in first_argv
+        assert "--resume" not in first_argv
+
+        assert "--resume" in second_argv
+        assert expected_sid in second_argv
+        assert "--session-id" not in second_argv
+
+        # The prompts are distinct — the second call did NOT replay the first.
+        assert first_argv[-1] == "iter 0"
+        assert second_argv[-1] == "iter 1"
+
+    def test_different_githash_starts_fresh_family(self, fake_home: Path) -> None:
+        """A new trunk SHA must produce a different UUID (fresh session family)."""
+        cwd = fake_home / "work"
+        cwd.mkdir()
+        sid_old = session_uuid("R", 1, AGENT_PLANNER, "abc1234")
+        sid_new = session_uuid("R", 1, AGENT_PLANNER, "def5678")
+        _make_existing_jsonl(fake_home, cwd, sid_old)
+
+        with patch(
+            "hephaestus.automation.claude_invoke.subprocess.run"
+        ) as m:
+            m.return_value = MagicMock(stdout="ok", stderr="", returncode=0)
+            _, returned_sid = invoke_claude_with_session(
+                repo="R",
+                issue=1,
+                agent=AGENT_PLANNER,
+                githash="def5678",  # new trunk SHA
+                prompt="hi",
+                model="sonnet",
+                cwd=cwd,
+            )
+
+        assert returned_sid == sid_new
+        assert returned_sid != sid_old
+        argv = _argv(m.call_args)
+        # No prior JSONL exists for the new SHA → must --session-id (create), not --resume.
+        assert "--session-id" in argv
+        assert sid_new in argv
+        assert "--resume" not in argv

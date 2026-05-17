@@ -13,7 +13,6 @@ import argparse
 import fcntl
 import json
 import logging
-import os
 import shutil
 import subprocess
 import threading
@@ -51,6 +50,7 @@ from .session_naming import (
     AGENT_LEARNINGS,
     AGENT_PLAN_REVIEWER,
     AGENT_PLANNER,
+    current_trunk_githash,
 )
 from .status_tracker import StatusTracker
 
@@ -310,7 +310,7 @@ class Planner:
 
         repo_root = get_repo_root()
         repo = get_repo_slug(repo_root)
-        githash = os.environ.get("HEPH_TRUNK_GITHASH", "unknown")
+        githash = current_trunk_githash(repo_root)
 
         try:
             stdout, _ = invoke_claude_with_session(

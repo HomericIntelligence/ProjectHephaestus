@@ -38,9 +38,10 @@ from hephaestus.github.rate_limit import (
 )
 
 from .claude_invoke import (
-    SESSION_EXPIRED_PHRASES as _SESSION_EXPIRED_PHRASES,
+    SESSION_EXPIRED_PHRASES,
+    invoke_claude_with_session,
+    parse_review_verdict,
 )
-from .claude_invoke import invoke_claude_with_session, parse_review_verdict
 from .claude_models import implementer_model, reviewer_model
 from .claude_timeouts import implementer_claude_timeout
 from .curses_ui import CursesUI, ThreadLogManager
@@ -62,7 +63,7 @@ from .prompts import (
     get_impl_resume_feedback_prompt,
     get_implementation_prompt,
 )
-from .session_naming import AGENT_IMPLEMENTER
+from .session_naming import AGENT_IMPLEMENTER, current_trunk_githash
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
@@ -1106,7 +1107,7 @@ class IssueImplementer:
 
         * **Session-expired** — the ``--resume`` target no longer exists in
           the Claude CLI's session store. Detected by checking ``e.stderr`` /
-          ``e.stdout`` against :data:`_SESSION_EXPIRED_PHRASES`. When detected
+          ``e.stdout`` against :data:`SESSION_EXPIRED_PHRASES`. When detected
           sets ``state.error = "session_expired:<session_id>"`` (if *state* is
           provided) and returns ``False`` so the loop stops gracefully.
           Partial work in the worktree is preserved for later inspection.
@@ -1165,31 +1166,33 @@ class IssueImplementer:
                 )
                 return False
 
+        # Route through the centralized helper so create/resume semantics and
+        # the SESSION_EXPIRED phrase list stay in one place. The deterministic
+        # UUID matches what the initial impl session was created with, so the
+        # passed-in ``session_id`` (legacy ``state.session_id``) is ignored on
+        # the Claude path — it's still consumed by the codex branch above.
+        # ``recreate_on_resume_failure=False`` propagates the underlying error
+        # so we can preserve the "stop iterating on expiry" contract.
+        githash = current_trunk_githash(self.repo_root)
+        repo_slug = get_repo_slug(self.repo_root)
         try:
-            run(
-                [
-                    "claude",
-                    "--resume",
-                    session_id,
-                    prompt,
-                    "--print",
-                    "--model",
-                    implementer_model(),
-                    "--permission-mode",
-                    "dontAsk",
-                    "--allowedTools",
-                    "Read,Write,Edit,Glob,Grep,Bash",
-                ],
+            invoke_claude_with_session(
+                repo=repo_slug,
+                issue=issue_number,
+                agent=AGENT_IMPLEMENTER,
+                githash=githash,
+                prompt=prompt,
+                model=implementer_model(),
                 cwd=worktree_path,
                 timeout=implementer_claude_timeout(),
+                permission_mode="dontAsk",
+                allowed_tools="Read,Write,Edit,Glob,Grep,Bash",
+                recreate_on_resume_failure=False,
             )
             return True
         except subprocess.CalledProcessError as e:
-            # Distinguish session-expired from generic transient failures.
-            stderr = (e.stderr or "").lower()
-            stdout = (e.stdout or "").lower()
-            combined = stderr + stdout
-            if any(phrase in combined for phrase in _SESSION_EXPIRED_PHRASES):
+            combined = ((e.stderr or "") + (e.stdout or "")).lower()
+            if any(phrase in combined for phrase in SESSION_EXPIRED_PHRASES):
                 # Session pruned — partial work may still be committable;
                 # don't treat this as an unrecoverable failure.
                 error_tag = f"session_expired:{session_id}"
@@ -1205,8 +1208,6 @@ class IssueImplementer:
                         state.error = error_tag
                     self._save_state(state)
             else:
-                # Unknown / transient error — log at ERROR with full stderr so
-                # operators can diagnose it.
                 logger.error(
                     "#%d: failed to resume impl session for R%d (exit=%d): %s",
                     issue_number,
@@ -1488,7 +1489,7 @@ class IssueImplementer:
         prompt_file = worktree_path / f".claude-prompt-{issue_number}.md"
         prompt_file.write_text(prompt)
 
-        githash = os.environ.get("HEPH_TRUNK_GITHASH", "unknown")
+        githash = current_trunk_githash(self.repo_root)
         repo_slug = get_repo_slug(self.repo_root)
 
         try:

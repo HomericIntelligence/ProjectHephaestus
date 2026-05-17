@@ -37,13 +37,13 @@ from hephaestus.github.rate_limit import (
     wait_until,
 )
 
-from .claude_invoke import parse_review_verdict
+from .claude_invoke import invoke_claude_with_session, parse_review_verdict
 from .claude_models import implementer_model, reviewer_model
 from .claude_timeouts import implementer_claude_timeout
 from .curses_ui import CursesUI, ThreadLogManager
 from .dependency_resolver import CyclicDependencyError, DependencyResolver
 from .follow_up import parse_follow_up_items, run_follow_up_issues
-from .git_utils import get_repo_root, issue_ref, pr_ref, run
+from .git_utils import get_repo_root, get_repo_slug, issue_ref, pr_ref, run
 from .github_api import fetch_issue_info, gh_list_open_issues
 from .learn import learn_needs_rerun, run_learn
 from .models import (
@@ -59,6 +59,7 @@ from .prompts import (
     get_impl_resume_feedback_prompt,
     get_implementation_prompt,
 )
+from .session_naming import AGENT_IMPLEMENTER
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
@@ -70,19 +71,9 @@ MAX_REVIEW_ITERATIONS = 3
 # as the documented default and can be used in tests.
 _CLAUDE_IMPL_TIMEOUT: int = 1800
 
-# Session-expired phrases that indicate a ``--resume`` call hit a pruned
-# session rather than a transient error. Keep in sync with
-# ``address_review._run_fix_session`` (#A3-010).
-_SESSION_EXPIRED_PHRASES: tuple[str, ...] = (
-    "session not found",
-    "invalid session",
-    "session expired",
-    "no such session",
-    "session does not exist",
-    "cannot resume",
-    "resume failed",
-    "failed to resume",
-)
+# Session-expired phrases live in ``claude_invoke.SESSION_EXPIRED_PHRASES``
+# so every phase shares the same expired-session detection.
+from .claude_invoke import SESSION_EXPIRED_PHRASES as _SESSION_EXPIRED_PHRASES  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -1493,27 +1484,39 @@ class IssueImplementer:
     def _run_claude_impl_session(
         self, issue_number: int, worktree_path: Path, prompt: str
     ) -> str | None:
-        """Run Claude implementation prompt and return its session id."""
-        # Write prompt to temp file in worktree
+        """Run Claude implementation prompt and return its session id.
+
+        The session UUID is deterministic per
+        ``(repo, issue, AGENT_IMPLEMENTER, trunk_githash)`` — first call for
+        a tuple creates the session, subsequent calls (e.g. the same issue
+        on the next loop iteration before trunk advances) resume it. The
+        returned session_id matches the one ``--output-format json`` reports
+        in stdout, so the within-PR ``_resume_impl_with_feedback`` path
+        keeps working unchanged.
+        """
+        # Write prompt to temp file in worktree for debugging / log capture.
         prompt_file = worktree_path / f".claude-prompt-{issue_number}.md"
         prompt_file.write_text(prompt)
 
+        githash = os.environ.get("HEPH_TRUNK_GITHASH", "unknown")
+        repo_slug = get_repo_slug(self.repo_root)
+
         try:
-            result = run(
-                [
-                    "claude",
-                    "--model",
-                    implementer_model(),
-                    str(prompt_file),
-                    "--output-format",
-                    "json",
-                    "--permission-mode",
-                    "dontAsk",
-                    "--allowedTools",
-                    "Read,Write,Edit,Glob,Grep,Bash",
-                ],
+            stdout, _ = invoke_claude_with_session(
+                repo=repo_slug,
+                issue=issue_number,
+                agent=AGENT_IMPLEMENTER,
+                githash=githash,
+                prompt=prompt,
+                model=implementer_model(),
                 cwd=worktree_path,
                 timeout=implementer_claude_timeout(),
+                output_format="json",
+                permission_mode="dontAsk",
+                allowed_tools="Read,Write,Edit,Glob,Grep,Bash",
+            )
+            result = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=stdout, stderr=""
             )
             # Parse session_id from JSON output
             try:

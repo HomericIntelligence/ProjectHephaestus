@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import subprocess
 import threading
@@ -34,10 +35,11 @@ from hephaestus.agents.runtime import (
 )
 
 from ._review_utils import find_pr_for_issue
+from .claude_invoke import invoke_claude_with_session
 from .claude_models import implementer_model
 from .claude_timeouts import address_review_claude_timeout
 from .curses_ui import CursesUI, ThreadLogManager
-from .git_utils import get_repo_root, issue_ref, pr_ref, run
+from .git_utils import get_repo_root, get_repo_slug, issue_ref, pr_ref, run
 from .github_api import (
     gh_pr_list_unresolved_threads,
     gh_pr_resolve_thread,
@@ -45,6 +47,7 @@ from .github_api import (
 )
 from .models import AddressReviewOptions, ReviewPhase, ReviewState, WorkerResult
 from .prompts import get_address_review_prompt
+from .session_naming import AGENT_IMPLEMENTER
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
@@ -597,23 +600,6 @@ class AddressReviewer:
         prompt_file.write_text(prompt)
         log_file = self.state_dir / f"address-review-{issue_number}.log"
 
-        def _build_cmd(with_resume: bool, sid: str | None = None) -> list[str]:
-            # When resuming, the session locks the original model — passing
-            # --model would either be ignored or rejected. Only pin a model
-            # for fresh-session invocations.
-            base = ["claude", str(prompt_file), "--output-format", "json"]
-            if with_resume and sid:
-                base += ["--resume", sid]
-            else:
-                base[1:1] = ["--model", implementer_model()]
-            base += [
-                "--permission-mode",
-                "dontAsk",
-                "--allowedTools",
-                "Read,Write,Edit,Glob,Grep,Bash",
-            ]
-            return base
-
         try:
             if is_codex(self.options.agent):
                 if session_id:
@@ -658,65 +644,38 @@ class AddressReviewer:
                 )
                 return parsed
 
-            # Attempt with session resume first if we have a session_id
-            if session_id:
-                claude_timeout = address_review_claude_timeout()
-                try:
-                    claude_result = run(
-                        _build_cmd(with_resume=True, sid=session_id),
-                        cwd=worktree_path,
-                        timeout=claude_timeout,
-                    )
-                except subprocess.CalledProcessError as e:
-                    stderr = (e.stderr or "").lower()
-                    stdout = (e.stdout or "").lower()
-                    combined = stderr + stdout
-                    # Well-known "session gone" phrases (#A3-010 extended list)
-                    session_error_phrases = (
-                        "session not found",
-                        "invalid session",
-                        "session expired",
-                        "no such session",
-                        "session does not exist",
-                        "cannot resume",
-                        "resume failed",
-                        "failed to resume",
-                    )
-                    # Fall back to fresh session on any --resume failure:
-                    # either a known "session gone" phrase in stderr/stdout,
-                    # OR any non-zero exit from a --resume invocation (the
-                    # phrase list can never be exhaustive, so we default to
-                    # fresh-session on unknown errors too — losing the resume
-                    # context is preferable to a hard failure).
-                    if any(phrase in combined for phrase in session_error_phrases) or True:
-                        logger.warning(
-                            "Session %r resume failed for issue #%d (exit=%d, reason=%r); "
-                            "falling back to fresh session",
-                            session_id,
-                            issue_number,
-                            e.returncode,
-                            (e.stderr or "")[:120],
-                        )
-                        claude_result = run(
-                            _build_cmd(with_resume=False),
-                            cwd=worktree_path,
-                            timeout=claude_timeout,
-                        )
-            else:
-                claude_result = run(
-                    _build_cmd(with_resume=False),
-                    cwd=worktree_path,
-                    timeout=address_review_claude_timeout(),
-                )
-
-            log_file.write_text(claude_result.stdout or "")
+            # The Claude path now derives the session deterministically from
+            # ``(repo, issue, AGENT_IMPLEMENTER, githash)`` so it resumes the
+            # implementer's session for this issue. ``session_id`` is still
+            # accepted by the function signature (codex path), but ignored
+            # for Claude — the legacy state-file lookup is no longer needed.
+            # ``invoke_claude_with_session`` handles --session-id (create)
+            # vs --resume (continue) and the SESSION_EXPIRED fallback in one
+            # place.
+            githash = os.environ.get("HEPH_TRUNK_GITHASH", "unknown")
+            repo_slug = get_repo_slug(self.repo_root)
+            stdout, _ = invoke_claude_with_session(
+                repo=repo_slug,
+                issue=issue_number,
+                agent=AGENT_IMPLEMENTER,
+                githash=githash,
+                prompt=prompt,
+                model=implementer_model(),
+                cwd=worktree_path,
+                timeout=address_review_claude_timeout(),
+                output_format="json",
+                permission_mode="dontAsk",
+                allowed_tools="Read,Write,Edit,Glob,Grep,Bash",
+                input_via_stdin=True,
+            )
+            log_file.write_text(stdout or "")
 
             # Extract response text from Claude's JSON wrapper
             try:
-                data = json.loads(claude_result.stdout or "{}")
-                response_text: str = data.get("result", claude_result.stdout or "")
+                data = json.loads(stdout or "{}")
+                response_text: str = data.get("result", stdout or "")
             except (json.JSONDecodeError, AttributeError):
-                response_text = claude_result.stdout or ""
+                response_text = stdout or ""
 
             parsed = self._parse_json_block(response_text, issue_number=issue_number)
             logger.info(

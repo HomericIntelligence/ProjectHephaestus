@@ -29,11 +29,13 @@ from hephaestus.agents.runtime import (
     session_agent_matches,
 )
 
+from .claude_invoke import invoke_claude_with_session
 from .claude_models import implementer_model
 from .claude_timeouts import ci_driver_claude_timeout
-from .git_utils import get_repo_root, issue_ref, pr_ref, run
+from .git_utils import get_repo_root, get_repo_slug, issue_ref, pr_ref, run
 from .github_api import _gh_call, gh_pr_checks
 from .models import CIDriverOptions, WorkerResult
+from .session_naming import AGENT_IMPLEMENTER
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
@@ -688,56 +690,37 @@ class CIDriver:
                     )
                     return False
 
-            # Fresh sessions pin the implementer model; --resume sessions inherit
-            # the original session's model and ignore --model.
-            base_cmd = [
-                "claude",
-                "--model",
-                implementer_model(),
-                "--print",
-                "--output-format",
-                "json",
-                "--allowedTools",
-                "Read,Write,Edit,Glob,Grep,Bash",
-                "--dangerously-skip-permissions",
-            ]
-
-            if session_id:
-                cmd = [
-                    "claude",
-                    "--resume",
-                    session_id,
-                    "--print",
-                    "--output-format",
-                    "json",
-                    "--allowedTools",
-                    "Read,Write,Edit,Glob,Grep,Bash",
-                    "--dangerously-skip-permissions",
-                ]
-            else:
-                cmd = base_cmd
-
-            claude_result = subprocess.run(
-                cmd,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                cwd=worktree_path,
-                timeout=ci_driver_claude_timeout(),
-            )
-
-            # If --resume failed, retry without it
-            if claude_result.returncode != 0 and session_id:
-                logger.warning(
-                    "Issue #%s: --resume session failed, retrying without it", issue_number
-                )
-                claude_result = subprocess.run(
-                    base_cmd,
-                    input=prompt,
-                    capture_output=True,
-                    text=True,
+            # The CI fix is a continuation of the implementer's work for this
+            # issue, so we resume the AGENT_IMPLEMENTER session. The legacy
+            # ``session_id`` argument is ignored on the Claude path — the
+            # session is now derived deterministically from
+            # ``(repo, issue, AGENT_IMPLEMENTER, trunk_githash)``.
+            githash = os.environ.get("HEPH_TRUNK_GITHASH", "unknown")
+            repo_slug = get_repo_slug(self.repo_root)
+            try:
+                stdout, _ = invoke_claude_with_session(
+                    repo=repo_slug,
+                    issue=issue_number,
+                    agent=AGENT_IMPLEMENTER,
+                    githash=githash,
+                    prompt=prompt,
+                    model=implementer_model(),
                     cwd=worktree_path,
                     timeout=ci_driver_claude_timeout(),
+                    output_format="json",
+                    allowed_tools="Read,Write,Edit,Glob,Grep,Bash",
+                    extra_args=["--dangerously-skip-permissions"],
+                    input_via_stdin=True,
+                )
+                claude_result = subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=stdout, stderr=""
+                )
+            except subprocess.CalledProcessError as exc:
+                claude_result = subprocess.CompletedProcess(
+                    args=exc.cmd,
+                    returncode=exc.returncode,
+                    stdout=exc.stdout or "",
+                    stderr=exc.stderr or "",
                 )
 
             if claude_result.returncode == 0:

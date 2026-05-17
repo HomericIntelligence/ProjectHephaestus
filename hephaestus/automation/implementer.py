@@ -115,7 +115,7 @@ class IssueImplementer:
         """
         self.options = options
         self.repo_root = get_repo_root()
-        self.state_dir = self.repo_root / ".issue_implementer"
+        self.state_dir = self.repo_root / "build" / ".issue_implementer"
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
         self.resolver = DependencyResolver(skip_closed=options.skip_closed)
@@ -1844,7 +1844,7 @@ def main() -> int:
     """
     args = _parse_args()
 
-    state_dir = get_repo_root() / ".issue_implementer"
+    state_dir = get_repo_root() / "build" / ".issue_implementer"
     _setup_logging(args.verbose, log_dir=state_dir)
 
     log = logging.getLogger(__name__)

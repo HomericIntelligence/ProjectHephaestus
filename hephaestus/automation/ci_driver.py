@@ -62,7 +62,7 @@ class CIDriver:
         """
         self.options = options
         self.repo_root = get_repo_root()
-        self.state_dir = self.repo_root / ".issue_implementer"
+        self.state_dir = self.repo_root / "build" / ".issue_implementer"
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
         self.worktree_manager = WorktreeManager()

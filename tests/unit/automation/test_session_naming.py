@@ -10,9 +10,14 @@ from pathlib import Path
 import pytest
 
 from hephaestus.automation.session_naming import (
+    AGENT_ADDRESS_REVIEW,
+    AGENT_ADVISE,
+    AGENT_CI_DRIVER,
     AGENT_IMPLEMENTER,
+    AGENT_LEARNINGS,
     AGENT_PLAN_REVIEWER,
     AGENT_PLANNER,
+    AGENT_PR_REVIEWER,
     session_jsonl_path,
     session_name,
     session_uuid,
@@ -85,17 +90,6 @@ class TestSessionUUID:
         )
 
     def test_each_agent_constant_yields_distinct_uuid(self) -> None:
-        from hephaestus.automation.session_naming import (
-            AGENT_ADDRESS_REVIEW,
-            AGENT_ADVISE,
-            AGENT_CI_DRIVER,
-            AGENT_IMPLEMENTER,
-            AGENT_LEARNINGS,
-            AGENT_PLAN_REVIEWER,
-            AGENT_PLANNER,
-            AGENT_PR_REVIEWER,
-        )
-
         agents = [
             AGENT_PLANNER,
             AGENT_PLAN_REVIEWER,

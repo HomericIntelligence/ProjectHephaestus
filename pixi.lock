@@ -120,7 +120,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c7/18/c86eb8e0202e32dd3df50d43d7ff9854f8e0603945ff398974c1d91ac1ef/tomli_w-1.2.0-py3-none-any.whl
-      - pypi: .
   lint:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -228,7 +227,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c7/18/c86eb8e0202e32dd3df50d43d7ff9854f8e0603945ff398974c1d91ac1ef/tomli_w-1.2.0-py3-none-any.whl
-      - pypi: .
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
   build_number: 20
@@ -576,34 +574,6 @@ packages:
   - pkg:pypi/hatchling?source=hash-mapping
   size: 61052
   timestamp: 1773194193187
-- pypi: .
-  name: homericintelligence-hephaestus
-  version: 0.9.1.dev12+gc4012b416.d20260522
-  sha256: e3a837e504e48e45dd2ed682a7bf41ef2a0c1eae21e93388575f81d3ebf28906
-  requires_dist:
-  - packaging>=21.0,<27
-  - pydantic>=2.0,<3
-  - pyyaml>=6.0,<7
-  - defusedxml>=0.7,<1 ; extra == 'all'
-  - jsonschema>=4.0,<5 ; extra == 'all'
-  - nats-py>=2.6,<3 ; extra == 'all'
-  - pygithub>=1.55,<3 ; extra == 'all'
-  - tomli>=2.0,<3 ; python_full_version < '3.11' and extra == 'all'
-  - build>=1.0,<2 ; extra == 'dev'
-  - mypy>=1.8.0,<3 ; extra == 'dev'
-  - pip-audit>=2.6,<3 ; extra == 'dev'
-  - pre-commit>=3.0,<5 ; extra == 'dev'
-  - pytest-cov>=7.0,<8 ; extra == 'dev'
-  - pytest>=9.0,<10 ; extra == 'dev'
-  - ruff>=0.1.0,<1 ; extra == 'dev'
-  - tomli>=2.0,<3 ; python_full_version < '3.11' and extra == 'dev'
-  - pygithub>=1.55,<3 ; extra == 'github'
-  - nats-py>=2.6,<3 ; extra == 'nats'
-  - jsonschema>=4.0,<5 ; extra == 'schema'
-  - tomli>=2.0,<3 ; python_full_version < '3.11' and extra == 'toml'
-  - defusedxml>=0.7,<1 ; extra == 'xml'
-  requires_python: '>=3.10'
-  editable: true
 - conda: https://conda.anaconda.org/conda-forge/noarch/hpack-4.1.0-pyhd8ed1ab_0.conda
   sha256: 6ad78a180576c706aabeb5b4c8ceb97c0cb25f1e112d76495bff23e3779948ba
   md5: 0a802cb9888dd14eeefc611f05c40b6e

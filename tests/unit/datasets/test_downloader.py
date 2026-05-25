@@ -402,9 +402,9 @@ class TestSecurityHardening:
 
     def test_extractall_uses_data_filter(self) -> None:
         """Both CIFAR extract sites pass filter='data' to extractall (CWE-22)."""
-        import hephaestus.datasets.downloader as mod
+        from hephaestus.datasets.downloader import __file__ as downloader_file
 
-        src = Path(mod.__file__).read_text()
+        src = Path(downloader_file).read_text()
         # Two extract sites, both with the filter.
         assert src.count('tf.extractall(output_path, filter="data")') == 2
         # No bare extractall(output_path) without filter.

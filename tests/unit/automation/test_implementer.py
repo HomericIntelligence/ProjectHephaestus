@@ -20,7 +20,7 @@ from hephaestus.automation.implementer import (
     _CLAUDE_IMPL_TIMEOUT,
     IssueImplementer,
 )
-from hephaestus.automation.models import ImplementerOptions
+from hephaestus.automation.models import ImplementerOptions, WorkerResult
 
 
 class TestModuleSurface:
@@ -256,7 +256,7 @@ class TestPlanReviewVerdictGate:
         impl: IssueImplementer,
         tmp_path: Path,
         gate_return: bool,
-    ) -> object:
+    ) -> WorkerResult:
         """Run ``_implement_issue(1)`` past worktree creation and the gate.
 
         All side-effects beyond the gate (Claude invocation, review loop,

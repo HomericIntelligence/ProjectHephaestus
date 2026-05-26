@@ -285,3 +285,77 @@ class TestPlanReviewStrictRubric:
         assert "Requirements alignment" in out
         assert "Plan completeness" in out
         assert "Stage handoff" in out
+
+
+class TestPRReviewStrictRubric:
+    """Tests for the strict rubric injected into PR_REVIEW_ANALYSIS_PROMPT (#581)."""
+
+    def _render(self) -> str:
+        return prompts.get_pr_review_analysis_prompt(
+            pr_number=42,
+            issue_number=123,
+            pr_diff="diff --git a/x b/x",
+            issue_body="issue body",
+            ci_status="ci status",
+            pr_description="Closes #123",
+            auto_merge_enabled=True,
+            commits_signing_state=[{"oid": "abc", "signature_valid": True, "signer": "alice"}],
+        )
+
+    def test_pr_review_prompt_contains_strict_rubric(self) -> None:
+        """All seven principle markers AND stage-specific dimensions appear."""
+        out = self._render()
+        for marker in (
+            "P1 — KISS",
+            "P2 — YAGNI",
+            "P3 — TDD",
+            "P4 — DRY",
+            "P5 — SOLID",
+            "P6 — Modularity",
+            "P7 — POLA",
+        ):
+            assert marker in out, f"missing principle marker: {marker!r}"
+        # PR-stage specific dimensions
+        assert "Diff review of CHANGED lines" in out
+        assert "Inline-comment quality" in out
+        # Shared anti-inflation block
+        assert "DEFAULT IS F" in out
+
+    def test_pr_review_prompt_preserves_json_block(self) -> None:
+        """The trailing fenced JSON block must remain byte-exact at the end.
+
+        ``pr_reviewer.py:_parse_json_block`` extracts the LAST fenced JSON
+        block. Any breakage here would break the PR reviewer's output parser.
+        """
+        out = self._render()
+        # The canonical JSON skeleton string must appear (formatted with
+        # single curly braces after str.format).
+        json_skeleton = (
+            '{"comments": [{"path": "...", "line": 1, "side": "RIGHT", '
+            '"body": "..."}], "summary": "..."}'
+        )
+        assert json_skeleton in out
+        assert '"summary":' in out
+        # Verify the JSON skeleton sits inside the LAST fenced ```json block,
+        # with no further fenced blocks after it (parser takes LAST).
+        last_json_fence_start = out.rfind("```json")
+        assert last_json_fence_start != -1, "no ```json fence found"
+        after_fence = out[last_json_fence_start:]
+        assert json_skeleton in after_fence
+        # No additional fenced blocks after the JSON's closing fence.
+        closing_fence = after_fence.find("```", len("```json"))
+        assert closing_fence != -1, "JSON fence is not closed"
+        trailing = after_fence[closing_fence + 3 :]
+        assert "```" not in trailing, (
+            "extra fenced block after the JSON output block would break "
+            "pr_reviewer._parse_json_block (it takes the LAST fence)"
+        )
+
+    def test_pr_review_prompt_preserves_policy_gates(self) -> None:
+        """The three policy gates remain present and verbatim."""
+        out = self._render()
+        assert "Closes #N" in out
+        # auto-merge appears in multiple casings; check case-insensitively.
+        assert "auto-merge" in out.lower()
+        # Signed-commits gate is named via the signature_valid JSON field.
+        assert "signature_valid" in out

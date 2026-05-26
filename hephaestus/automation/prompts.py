@@ -508,6 +508,10 @@ Analyze PR #{pr_number} linked to issue #{issue_number}.
 
 ---
 
+{strict_rubric}
+
+---
+
 **Policy checks (MANDATORY — run these BEFORE any code-quality review):**
 
 This repository enforces three non-negotiable PR properties. If ANY check fails,
@@ -694,6 +698,7 @@ def get_pr_review_analysis_prompt(
         auto_merge_state_block=_fence_untrusted("AUTO_MERGE_STATE", auto_merge_state, nonce),
         commits_signing_block=_fence_untrusted("COMMITS_SIGNING_STATE", signing_state_json, nonce),
         untrusted_notice=_UNTRUSTED_NOTICE,
+        strict_rubric=_PR_STRICT_RUBRIC.strip(),
     )
 
 
@@ -909,6 +914,50 @@ Stage-specific dimensions for plan review:
   (file paths, function signatures, test names, commands) to execute
   the plan without re-deriving it? Flag plans that defer key decisions
   to the implementer.
+"""
+    + _SEVEN_PRINCIPLES_DIMENSIONS
+)
+
+
+# ---------------------------------------------------------------------------
+# Per-stage strict rubric: PR REVIEW
+#
+# Composes the shared strict-grading + anti-inflation rules with PR-stage
+# dimensions and the seven software-engineering principles. Injected into
+# PR_REVIEW_ANALYSIS_PROMPT so the standalone PR reviewer grades PRs against
+# the same strict rubric the loop reviewer uses.
+#
+# IMPORTANT: this rubric is injected BEFORE the existing policy-checks block
+# (Closes #N / auto-merge / signed commits). The policy-checks block remains
+# the highest-priority gate and produces a hard BLOCK verdict on any failure.
+# The trailing JSON output block at the end of PR_REVIEW_ANALYSIS_PROMPT is
+# preserved byte-exact; pr_reviewer.py:_parse_json_block extracts the LAST
+# fenced JSON block and would break if that block were altered.
+# ---------------------------------------------------------------------------
+
+_PR_STRICT_RUBRIC = (
+    _STRICT_GRADING_AND_ANTI_INFLATION
+    + """
+Stage-specific dimensions for PR review:
+
+- Policy compliance: the three mandatory policy gates below (Closes #N /
+  auto-merge / signed commits) are graded as a single dimension. BLOCK on
+  any violation, regardless of other dimensions. This dimension's verdict
+  CANNOT be overridden by code-quality scores.
+- Diff review of CHANGED lines only: review ONLY the lines this PR modifies
+  in the diff. Do NOT comment on pre-existing code that is merely visible
+  as context, and do NOT propose refactors of unrelated subsystems. Flag
+  every comment whose `line` falls outside the diff hunks as scope-bleed.
+- Inline-comment quality: every inline comment must be ACTIONABLE — name
+  the file, line, and the concrete change required. Reject vague
+  "consider …", "might want to …", or "you could …" phrasing. Each
+  comment must be specific enough that the author can apply it without
+  asking follow-up questions.
+- CI failure analysis: when the CI Status block above is non-empty and
+  reports failures, the review MUST identify the failing check by name
+  and either (a) point to the diff hunk responsible, or (b) state
+  explicitly that the failure is unrelated to the diff. Silent acceptance
+  of red CI is a finding.
 """
     + _SEVEN_PRINCIPLES_DIMENSIONS
 )

@@ -37,10 +37,13 @@ MAX_REVIEW_ITERATIONS = 3
 class PlanReviewLoop:
     """Bounded plan→learn→review iteration loop.
 
-    Holds a back-reference to the owning :class:`Planner` so the loop can
-    re-use the planner's ``_call_claude`` and ``_run_advise`` helpers without
-    duplicating their rate-limit retry logic. Once the Claude runner is
-    extracted (step 5), those calls will move off the back-reference.
+    Holds a back-reference to the owning :class:`Planner` and intentionally
+    routes per-issue work back through ``planner._generate_plan`` /
+    ``planner._capture_planner_learnings`` / ``planner._run_plan_review``
+    rather than calling :class:`PlannerClaudeRunner` directly. The indirection
+    preserves the existing ``patch.object(planner, "_generate_plan", ...)``
+    test seam: a patched method on the Planner instance still intercepts the
+    loop's inner calls.
     """
 
     def __init__(self, planner: Planner) -> None:

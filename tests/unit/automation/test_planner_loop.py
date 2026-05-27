@@ -44,7 +44,7 @@ class TestRunPlanReviewLoop:
         """A GO on R0 must skip iterations 1 and 2."""
         with (
             patch(
-                "hephaestus.automation.planner.gh_issue_json",
+                "hephaestus.automation.planner_review_loop.gh_issue_json",
                 return_value={"title": "T", "body": "B"},
             ),
             patch.object(planner, "_generate_plan", return_value="plan v0") as mock_plan,
@@ -64,7 +64,7 @@ class TestRunPlanReviewLoop:
         """When every review says NOGO, the loop runs exactly 3 iterations."""
         with (
             patch(
-                "hephaestus.automation.planner.gh_issue_json",
+                "hephaestus.automation.planner_review_loop.gh_issue_json",
                 return_value={"title": "T", "body": "B"},
             ),
             patch.object(
@@ -91,7 +91,7 @@ class TestRunPlanReviewLoop:
     def test_terminates_on_go_at_iter1(self, planner: Planner) -> None:
         with (
             patch(
-                "hephaestus.automation.planner.gh_issue_json",
+                "hephaestus.automation.planner_review_loop.gh_issue_json",
                 return_value={"title": "T", "body": "B"},
             ),
             patch.object(
@@ -117,7 +117,7 @@ class TestRunPlanReviewLoop:
         review_iter0 = _nogo_review("D")
         with (
             patch(
-                "hephaestus.automation.planner.gh_issue_json",
+                "hephaestus.automation.planner_review_loop.gh_issue_json",
                 return_value={"title": "T", "body": "B"},
             ),
             patch.object(

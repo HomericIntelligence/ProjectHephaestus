@@ -336,7 +336,7 @@ class TestGeneratePlan:
     def test_plan_with_advise_findings(self, planner: Any) -> None:
         """Test plan generation with advise findings injected."""
         with (
-            patch("hephaestus.automation.planner.gh_issue_json") as mock_gh,
+            patch("hephaestus.automation.planner_review_loop.gh_issue_json") as mock_gh,
             patch.object(
                 planner,
                 "_run_advise",
@@ -363,7 +363,7 @@ class TestGeneratePlan:
         planner = Planner(mock_options)
 
         with (
-            patch("hephaestus.automation.planner.gh_issue_json") as mock_gh,
+            patch("hephaestus.automation.planner_review_loop.gh_issue_json") as mock_gh,
             patch.object(planner, "_run_advise") as mock_advise,
             patch.object(planner, "_call_claude", return_value="# Implementation Plan\nStep 1"),
         ):

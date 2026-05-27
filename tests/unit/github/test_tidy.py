@@ -249,7 +249,7 @@ class TestMain:
         monkeypatch.setattr(tidy_module, "_run_gh_tidy", lambda trunk, dry: (0, ""))
         monkeypatch.setattr(tidy_module, "parse_problem_branches", lambda _o: ["feature/a"])
 
-        async def fake_dispatch(*args, **kwargs):  # type: ignore[no-untyped-def]
+        async def fake_dispatch(*args, **kwargs):
             return {"feature/a": "rebased"}
 
         monkeypatch.setattr(tidy_module, "_dispatch_swarm", fake_dispatch)

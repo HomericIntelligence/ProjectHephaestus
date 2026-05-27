@@ -27,30 +27,23 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from hephaestus.agents.runtime import add_agent_argument, is_codex, run_codex_text
-from hephaestus.github.rate_limit import wait_until
+from hephaestus.agents.runtime import add_agent_argument
 
-from .claude_invoke import (
-    invoke_claude_with_session,
-    scan_quota_reset,
-)
 from .claude_models import advise_model
-from .git_utils import get_repo_root, get_repo_slug, issue_ref
+from .git_utils import get_repo_root, issue_ref
 from .github_api import (
     GitHubRateLimitError,
     gh_issue_comment,
     gh_list_open_issues,
 )
 from .models import PlannerOptions, PlanResult
+from .planner_claude import PlannerClaudeRunner
 from .planner_review_loop import MAX_REVIEW_ITERATIONS, PlanReviewLoop
 from .planner_state import PlannerStateManager
 from .prompts import (
     get_advise_prompt,
 )
-from .session_naming import (
-    AGENT_ADVISE,
-    current_trunk_githash,
-)
+from .session_naming import AGENT_ADVISE
 from .status_tracker import StatusTracker
 
 __all__ = ["MAX_REVIEW_ITERATIONS", "Planner", "main"]
@@ -79,6 +72,7 @@ class Planner:
         self.results: dict[int, PlanResult] = {}
         self.lock = threading.Lock()
         self.state_mgr = PlannerStateManager(options)
+        self.claude_runner = PlannerClaudeRunner(options)
         self.review_loop = PlanReviewLoop(self)
 
     def run(self) -> dict[int, PlanResult]:
@@ -230,88 +224,16 @@ class Planner:
         timeout: int = 300,
         extra_args: list[str] | None = None,
     ) -> str:
-        """Call Claude CLI on a deterministic session with rate-limit retry.
-
-        The session UUID is derived from ``(repo, issue_number, agent,
-        trunk_githash)`` via :func:`session_naming.session_uuid`. First call
-        for a tuple creates the session; every later call resumes it. Cross-
-        agent independence (planner vs reviewer) is preserved because the
-        ``agent`` string is part of the hash.
-
-        Args:
-            prompt: The prompt to send to Claude.
-            model: Claude model ID for ``--model`` (caller picks per phase).
-            agent: One of the ``AGENT_*`` constants from
-                :mod:`hephaestus.automation.session_naming`. Different agents
-                map to different session IDs.
-            issue_number: GitHub issue number; participates in the session ID.
-            max_retries: Maximum retry attempts for rate limits.
-            timeout: Subprocess timeout in seconds.
-            extra_args: Additional CLI arguments.
-
-        Returns:
-            Claude's response text (stdout, stripped).
-
-        Raises:
-            RuntimeError: If Claude call fails.
-
-        """
-        if is_codex(self.options.agent):
-            return self._call_codex(prompt, model=model, max_retries=max_retries, timeout=timeout)
-
-        repo_root = get_repo_root()
-        repo = get_repo_slug(repo_root)
-        githash = current_trunk_githash(repo_root)
-
-        try:
-            stdout, _ = invoke_claude_with_session(
-                repo=repo,
-                issue=issue_number,
-                agent=agent,
-                githash=githash,
-                prompt=prompt,
-                model=model,
-                cwd=repo_root,
-                timeout=timeout,
-                system_prompt_file=self.options.system_prompt_file,
-                extra_args=extra_args,
-            )
-            response = stdout.strip()
-            if not response:
-                raise RuntimeError("Claude returned empty response")
-            return response
-
-        except subprocess.CalledProcessError as e:
-            stderr = e.stderr or ""
-            stdout = e.stdout or ""
-
-            # Rate-limit messages may appear in either stream. The Claude CLI
-            # in particular returns its 429 ("You're out of extra usage ·
-            # resets ...") inside the stdout JSON payload as the ``result``
-            # field of an ``is_error: true`` response, not in stderr.
-            reset_epoch = scan_quota_reset(stderr, stdout)
-            if reset_epoch is not None and max_retries > 0:
-                if reset_epoch > 0:
-                    wait_until(reset_epoch)
-                else:
-                    import time
-
-                    time.sleep(5)
-                return self._call_claude(
-                    prompt,
-                    model=model,
-                    agent=agent,
-                    issue_number=issue_number,
-                    max_retries=max_retries - 1,
-                    timeout=timeout,
-                    extra_args=extra_args,
-                )
-
-            detail = stderr or stdout or "(no output)"
-            raise RuntimeError(f"Claude failed: {detail}") from e
-
-        except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"Claude timed out after {timeout}s") from e
+        """Call Claude (delegates to claude_runner)."""
+        return self.claude_runner.call_claude(
+            prompt,
+            model=model,
+            agent=agent,
+            issue_number=issue_number,
+            max_retries=max_retries,
+            timeout=timeout,
+            extra_args=extra_args,
+        )
 
     def _call_codex(
         self,
@@ -321,36 +243,10 @@ class Planner:
         max_retries: int = 3,
         timeout: int = 300,
     ) -> str:
-        """Call Codex CLI with retry logic for rate limits."""
-        try:
-            result = run_codex_text(
-                prompt,
-                cwd=get_repo_root(),
-                timeout=timeout,
-                sandbox="workspace-write",
-            )
-        except subprocess.CalledProcessError as e:
-            stderr = e.stderr or ""
-            stdout = e.stdout or ""
-            reset_epoch = scan_quota_reset(stderr, stdout)
-            if reset_epoch is not None and reset_epoch > 0 and max_retries > 0:
-                logger.warning("Codex usage cap hit; waiting for reset")
-                wait_until(reset_epoch)
-                return self._call_codex(
-                    prompt,
-                    model=model,
-                    max_retries=max_retries - 1,
-                    timeout=timeout,
-                )
-            detail = stderr or stdout or str(e)
-            raise RuntimeError(f"Codex failed: {detail}") from e
-        except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"Codex timed out after {timeout}s") from e
-
-        response = (result.stdout or "").strip()
-        if not response:
-            raise RuntimeError("Codex returned empty response")
-        return response
+        """Call Codex (delegates to claude_runner)."""
+        return self.claude_runner.call_codex(
+            prompt, model=model, max_retries=max_retries, timeout=timeout
+        )
 
     def _ensure_mnemosyne(self, mnemosyne_root: Path) -> bool:
         """Clone ProjectMnemosyne if it does not exist locally.

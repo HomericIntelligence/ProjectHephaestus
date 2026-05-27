@@ -53,10 +53,10 @@ class TestCallClaude:
 
         stack = ExitStack()
         stack.enter_context(
-            patch("hephaestus.automation.planner.get_repo_root", return_value=Path("/repo"))
+            patch("hephaestus.automation.planner_claude.get_repo_root", return_value=Path("/repo"))
         )
         stack.enter_context(
-            patch("hephaestus.automation.planner.get_repo_slug", return_value="TestRepo")
+            patch("hephaestus.automation.planner_claude.get_repo_slug", return_value="TestRepo")
         )
         return stack
 
@@ -136,7 +136,7 @@ class TestCallClaude:
         with (
             self._patch_repo(),
             patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
-            patch("hephaestus.automation.planner.scan_quota_reset") as mock_scan,
+            patch("hephaestus.automation.planner_claude.scan_quota_reset") as mock_scan,
         ):
             mock_run.side_effect = [
                 subprocess.CalledProcessError(1, "claude", stderr="rate limit exceeded"),
@@ -163,7 +163,7 @@ class TestCallClaude:
         with (
             self._patch_repo(),
             patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
-            patch("hephaestus.automation.planner.wait_until") as mock_wait,
+            patch("hephaestus.automation.planner_claude.wait_until") as mock_wait,
         ):
             mock_run.side_effect = [
                 subprocess.CalledProcessError(1, "claude", output=usage_json, stderr=""),

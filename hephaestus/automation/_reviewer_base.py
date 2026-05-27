@@ -28,6 +28,9 @@ from .worktree_manager import WorktreeManager
 logger = logging.getLogger(__name__)
 
 
+_MISSING = object()
+
+
 def _resolve_from_subclass_module(cls: type, name: str) -> Any:
     """Look up ``name`` from the module that defines ``cls``.
 
@@ -36,9 +39,24 @@ def _resolve_from_subclass_module(cls: type, name: str) -> Any:
     with ``patch("hephaestus.automation.<module>.<Name>")``. Looking these
     up dynamically here preserves that test seam — patching the subclass
     module still wins.
+
+    Raises:
+        TypeError: If the subclass module does not re-export ``name``. The
+            error names the offending subclass and module so a future author
+            of a third ``BaseReviewer`` subclass gets an actionable message
+            instead of a bare ``AttributeError``.
+
     """
     module = importlib.import_module(cls.__module__)
-    return getattr(module, name)
+    obj = getattr(module, name, _MISSING)
+    if obj is _MISSING:
+        raise TypeError(
+            f"{cls.__qualname__} must re-export {name!r} in its own module "
+            f"({cls.__module__}) for BaseReviewer test-patch compatibility. "
+            f"Add `from .{name.lower()}_module import {name}  # noqa: F401` "
+            f"or equivalent to {cls.__module__}."
+        )
+    return obj
 
 
 class BaseReviewer:
@@ -154,7 +172,11 @@ class BaseReviewer:
         try:
             return ReviewState.model_validate_json(state_file.read_text())
         except Exception as exc:
-            logger.warning(
+            # Log under the subclass module's logger so observability tooling
+            # that filters on logger name attributes this to pr_reviewer /
+            # address_review (same behavior as before the BaseReviewer split).
+            subclass_logger = logging.getLogger(type(self).__module__)
+            subclass_logger.warning(
                 "Malformed review state for issue #%d (%s)", issue_number, exc
             )
             return None

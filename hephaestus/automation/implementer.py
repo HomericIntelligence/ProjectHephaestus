@@ -49,6 +49,7 @@ from .dependency_resolver import CyclicDependencyError, DependencyResolver
 from .follow_up import parse_follow_up_items, run_follow_up_issues
 from .git_utils import get_repo_root, get_repo_slug, issue_ref, pr_ref, run
 from .github_api import fetch_issue_info, gh_list_open_issues
+from .implementer_state import ImplementationStateManager
 from .learn import learn_needs_rerun, run_learn
 from .models import (
     ImplementationPhase,
@@ -135,10 +136,26 @@ class IssueImplementer:
         self.status_tracker = StatusTracker(options.max_workers)
         self.log_manager = ThreadLogManager()
 
-        self.states: dict[int, ImplementationState] = {}
-        self.state_lock = threading.Lock()
+        self.state_mgr = ImplementationStateManager(self.state_dir)
 
         self.ui: CursesUI | None = None
+
+    # ------------------------------------------------------------------
+    # Compatibility shims: callers that pre-date the #597 state-manager
+    # extraction reach into ``self.states`` / ``self.state_lock`` directly.
+    # Expose them as read-only views onto the manager so behavior is
+    # identical.
+    # ------------------------------------------------------------------
+
+    @property
+    def states(self) -> dict[int, ImplementationState]:
+        """Return the in-memory state dict owned by :attr:`state_mgr`."""
+        return self.state_mgr.states
+
+    @property
+    def state_lock(self) -> threading.Lock:
+        """Return the lock guarding :attr:`states`."""
+        return self.state_mgr.lock
 
     def _log(self, level: str, msg: str, thread_id: int | None = None) -> None:
         """Log to both standard logger and UI thread buffer.
@@ -1700,35 +1717,19 @@ class IssueImplementer:
 
     def _get_or_create_state(self, issue_number: int) -> ImplementationState:
         """Get or create implementation state for an issue."""
-        with self.state_lock:
-            if issue_number not in self.states:
-                self.states[issue_number] = ImplementationState(issue_number=issue_number)
-            return self.states[issue_number]
+        return self.state_mgr.get_or_create(issue_number)
 
     def _get_state(self, issue_number: int) -> ImplementationState | None:
         """Get implementation state for an issue."""
-        with self.state_lock:
-            return self.states.get(issue_number)
+        return self.state_mgr.get(issue_number)
 
     def _save_state(self, state: ImplementationState) -> None:
         """Save implementation state to disk."""
-        from .github_api import write_secure
-
-        state_file = self.state_dir / f"issue-{state.issue_number}.json"
-        # Use write_secure for atomic writes
-        write_secure(state_file, state.model_dump_json(indent=2))
+        self.state_mgr.save(state)
 
     def _load_state(self) -> None:
         """Load all implementation states from disk."""
-        for state_file in self.state_dir.glob("issue-*.json"):
-            try:
-                with open(state_file) as f:
-                    state = ImplementationState.model_validate_json(f.read())
-                    with self.state_lock:
-                        self.states[state.issue_number] = state
-                logger.info("Loaded state for issue #%s", state.issue_number)
-            except (json.JSONDecodeError, ValueError, OSError) as e:
-                logger.error("Failed to load state from %s: %s", state_file, e)
+        self.state_mgr.load_all()
 
     def _print_summary(self, results: dict[int, WorkerResult]) -> None:
         """Print implementation summary."""

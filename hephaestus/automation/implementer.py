@@ -161,7 +161,7 @@ class IssueImplementer:
         ui_msg = f"{prefix}: {msg}" if prefix else msg
         self.log_manager.log(tid, ui_msg)
 
-    def run(self) -> dict[int, WorkerResult]:  # noqa: C901  # one-extra-branch for #574 early-exit; orchestration body is intentionally linear
+    def run(self) -> dict[int, WorkerResult]:  # noqa: C901  # branchy orchestration body is intentionally linear
         """Run the implementer.
 
         Returns:

@@ -23,10 +23,6 @@ from hephaestus.agents.runtime import (
     add_agent_argument,
     is_codex,
 )
-from hephaestus.github.rate_limit import (
-    detect_claude_usage_cap,
-    detect_rate_limit,
-)
 
 # NOTE: Several symbols below are re-imported here purely so existing tests
 # can keep patching them at the ``hephaestus.automation.implementer.X`` path
@@ -42,7 +38,12 @@ from .curses_ui import CursesUI, ThreadLogManager
 from .dependency_resolver import CyclicDependencyError, DependencyResolver
 from .git_utils import get_repo_root, get_repo_slug, run  # noqa: F401
 from .github_api import fetch_issue_info, gh_list_open_issues
-from .implementer_phase_runner import ImplementationPhaseRunner
+
+# MAX_REVIEW_ITERATIONS is re-exported so tests that import it via
+# ``hephaestus.automation.implementer`` see the same value the runtime loop
+# in :class:`ImplementationPhaseRunner` uses. There is a single source of
+# truth in implementer_phase_runner.
+from .implementer_phase_runner import MAX_REVIEW_ITERATIONS, ImplementationPhaseRunner
 from .implementer_state import ImplementationStateManager
 from .implementer_summary import ImplementationSummaryPrinter
 from .models import (
@@ -67,8 +68,6 @@ __all__ = [
     "main",
 ]
 
-MAX_REVIEW_ITERATIONS = 3
-
 # Default Claude implementation timeout in seconds. Actual runtime value is
 # read from the ``HEPH_IMPLEMENTER_CLAUDE_TIMEOUT`` env-var by
 # :func:`.claude_timeouts.implementer_claude_timeout`; this constant serves
@@ -77,23 +76,6 @@ _CLAUDE_IMPL_TIMEOUT: int = 1800
 
 
 logger = logging.getLogger(__name__)
-
-
-def _claude_quota_reset_epoch(*texts: str) -> int | None:
-    """Find a quota-reset epoch across one or more output streams.
-
-    Inspects each text for either form of rate-limit message — the GitHub-CLI
-    "Limit reached ..." form or the Claude-CLI "out of extra usage ·
-    resets ..." form. Uses ``is not None`` chaining so an epoch of ``0``
-    (rate-limited, reset time unknown) is preserved instead of being
-    mistaken for "no rate limit".
-    """
-    for text in texts:
-        for detect in (detect_rate_limit, detect_claude_usage_cap):
-            epoch = detect(text)
-            if epoch is not None:
-                return epoch
-    return None
 
 
 class IssueImplementer:
@@ -636,9 +618,7 @@ class IssueImplementer:
         """Run Claude implementation prompt and return its session id."""
         return self.phase_runner._run_claude_impl_session(issue_number, worktree_path, prompt)
 
-    def _run_codex_code(
-        self, issue_number: int, worktree_path: Path, prompt: str
-    ) -> str | None:
+    def _run_codex_code(self, issue_number: int, worktree_path: Path, prompt: str) -> str | None:
         """Run Codex implementation prompt in a worktree."""
         return self.phase_runner._run_codex_code(issue_number, worktree_path, prompt)
 

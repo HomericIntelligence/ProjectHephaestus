@@ -38,26 +38,32 @@ from ._review_utils import (
     instance_log,
     setup_review_logging,
 )
+from ._reviewer_base import BaseReviewer
 from .claude_invoke import invoke_claude_with_session
 from .claude_models import implementer_model
 from .claude_timeouts import address_review_claude_timeout
-from .curses_ui import CursesUI, ThreadLogManager
-from .git_utils import get_repo_root, get_repo_slug, issue_ref, pr_ref, run
+from .curses_ui import CursesUI, ThreadLogManager  # noqa: F401  (ThreadLogManager re-exported)
+from .git_utils import (  # noqa: F401  (get_repo_root re-exported)
+    get_repo_root,
+    get_repo_slug,
+    issue_ref,
+    pr_ref,
+    run,
+)
 from .github_api import (
     gh_pr_list_unresolved_threads,
     gh_pr_resolve_thread,
-    write_secure,
 )
 from .models import AddressReviewOptions, ReviewPhase, ReviewState, WorkerResult
 from .prompts import get_address_review_prompt
 from .session_naming import AGENT_IMPLEMENTER, current_trunk_githash
-from .status_tracker import StatusTracker
-from .worktree_manager import WorktreeManager
+from .status_tracker import StatusTracker  # noqa: F401 — re-exported for test patching
+from .worktree_manager import WorktreeManager  # noqa: F401 — re-exported for test patching
 
 logger = logging.getLogger(__name__)
 
 
-class AddressReviewer:
+class AddressReviewer(BaseReviewer):
     """Addresses unresolved PR review threads using Claude Code.
 
     Features:
@@ -66,7 +72,12 @@ class AddressReviewer:
     - Selective thread resolution (only resolves threads Claude explicitly fixed)
     - State persistence for observability
     - Real-time curses UI for status monitoring
+
+    Inherits shared scaffolding (``__init__``, ``_log``, ``_fail``,
+    ``_save_state``) from :class:`BaseReviewer`.
     """
+
+    options: AddressReviewOptions
 
     def __init__(self, options: AddressReviewOptions) -> None:
         """Initialize address reviewer.
@@ -75,30 +86,13 @@ class AddressReviewer:
             options: Reviewer configuration options
 
         """
-        self.options = options
-        self.repo_root = get_repo_root()
-        self.state_dir = self.repo_root / "build" / ".issue_implementer"
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-
-        self.worktree_manager = WorktreeManager()
-        self.status_tracker = StatusTracker(options.max_workers)
-        self.log_manager = ThreadLogManager()
-
-        self.states: dict[int, ReviewState] = {}
-        self.state_lock = threading.Lock()
-
-        self.ui: CursesUI | None = None
+        super().__init__(options)
 
     def _log(self, level: str, msg: str, thread_id: int | None = None) -> None:
         """Log to both standard logger and UI thread buffer.
 
-        Delegates to :func:`_review_utils.instance_log` (#599 dedupe).
-
-        Args:
-            level: Log level ("error", "warning", or "info")
-            msg: Message to log
-            thread_id: Thread ID (defaults to current thread)
-
+        Overrides :meth:`BaseReviewer._log` so the stdlib log record
+        attributes to this module rather than ``_reviewer_base``.
         """
         instance_log(self.log_manager, level, msg, thread_id, caller_logger=logger)
 
@@ -487,6 +481,9 @@ class AddressReviewer:
     def _load_review_state(self, issue_number: int) -> ReviewState | None:
         """Load review state from disk.
 
+        Thin wrapper around :meth:`BaseReviewer._load_review_state_from_disk`
+        kept for backward compatibility with internal callers and tests.
+
         Args:
             issue_number: GitHub issue number
 
@@ -494,25 +491,19 @@ class AddressReviewer:
             ReviewState if state file exists and is valid, None otherwise
 
         """
-        state_file = self.state_dir / f"review-{issue_number}.json"
-        if not state_file.exists():
-            return None
-        try:
-            data = json.loads(state_file.read_text())
-            return ReviewState.model_validate(data)
-        except Exception as e:
-            logger.warning("Could not load review state for #%s: %s", issue_number, e)
-            return None
+        return self._load_review_state_from_disk(issue_number)
 
     def _save_review_state(self, state: ReviewState) -> None:
         """Save review state to disk.
+
+        Thin wrapper around :meth:`BaseReviewer._save_state` kept for
+        backward compatibility with internal callers.
 
         Args:
             state: ReviewState to persist
 
         """
-        state_file = self.state_dir / f"review-{state.issue_number}.json"
-        write_secure(state_file, state.model_dump_json(indent=2))
+        self._save_state(state)
 
     def _get_or_create_worktree(
         self,
@@ -857,34 +848,6 @@ class AddressReviewer:
             logger.info("Pushed branch %s to origin", branch_name)
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Failed to push branch {branch_name}: {e}") from e
-
-    def _fail(
-        self,
-        issue_number: int,
-        error_msg: str,
-        slot_id: int,
-    ) -> WorkerResult:
-        """Record a failure, update state and tracker, and return a failed WorkerResult.
-
-        Args:
-            issue_number: GitHub issue number
-            error_msg: Human-readable error description
-            slot_id: Worker slot ID for status updates
-
-        Returns:
-            WorkerResult with success=False
-
-        """
-        self.status_tracker.update_slot(
-            slot_id, f"{issue_ref(issue_number)}: FAILED - {error_msg[:50]}"
-        )
-        err_state = self.states.get(issue_number)
-        if err_state:
-            with self.state_lock:
-                err_state.phase = ReviewPhase.FAILED
-                err_state.error = error_msg
-            self._save_review_state(err_state)
-        return WorkerResult(issue_number=issue_number, success=False, error=error_msg)
 
     def _print_summary(self, results: dict[int, WorkerResult]) -> None:
         """Print address review summary.

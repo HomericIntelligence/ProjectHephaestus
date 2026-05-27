@@ -24,9 +24,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from hephaestus.agents.runtime import add_agent_argument, is_codex, run_codex_text
+from hephaestus.agents.runtime import is_codex, run_codex_text
 
-from ._review_utils import find_pr_for_issue, parse_json_block
+from ._review_utils import (
+    build_review_parser,
+    find_pr_for_issue,
+    instance_log,
+    parse_json_block,
+    setup_review_logging,
+)
 from .claude_invoke import invoke_claude_with_session
 from .claude_models import reviewer_model
 from .claude_timeouts import pr_reviewer_claude_timeout
@@ -167,17 +173,15 @@ class PRReviewer:
     def _log(self, level: str, msg: str, thread_id: int | None = None) -> None:
         """Log to both standard logger and UI thread buffer.
 
+        Delegates to :func:`_review_utils.instance_log` (#599 dedupe).
+
         Args:
             level: Log level ("error", "warning", or "info")
             msg: Message to log
             thread_id: Thread ID (defaults to current thread)
 
         """
-        getattr(logger, level)(msg)
-        tid = thread_id or threading.get_ident()
-        prefix = {"error": "ERROR", "warning": "WARN", "info": ""}.get(level, "")
-        ui_msg = f"{prefix}: {msg}" if prefix else msg
-        self.log_manager.log(tid, ui_msg)
+        instance_log(self.log_manager, level, msg, thread_id, caller_logger=logger)
 
     def run(self) -> dict[int, WorkerResult]:
         """Run the PR reviewer.
@@ -801,29 +805,13 @@ class PRReviewer:
                     logger.info("  #%s: %s", issue_num, result.error)
 
 
-def _setup_logging(verbose: bool = False) -> None:
-    """Configure logging for the CLI.
-
-    Args:
-        verbose: Enable verbose (DEBUG) logging
-
-    """
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-
 def _parse_args() -> argparse.Namespace:
     """Parse command line arguments for the reviewer CLI."""
-    parser = argparse.ArgumentParser(
+    parser = build_review_parser(
         description=(
             "Analyze open PRs linked to GitHub issues using Claude Code "
             "and post inline review comments (read-only — does not fix code)"
         ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Review PRs for specific issues
@@ -835,41 +823,9 @@ Examples:
   # Review with more workers
   %(prog)s --issues 595 596 --max-workers 5
         """,
+        issues_help="Issue numbers whose linked PRs should be reviewed",
+        dry_run_help="Show what would be done without actually posting any review comments",
     )
-
-    parser.add_argument(
-        "--issues",
-        type=int,
-        nargs="+",
-        required=True,
-        help="Issue numbers whose linked PRs should be reviewed",
-    )
-    add_agent_argument(parser)
-    parser.add_argument(
-        "--max-workers",
-        type=int,
-        default=3,
-        choices=range(1, 33),
-        metavar="N",
-        help="Maximum number of parallel workers, 1-32 (default: 3)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be done without actually posting any review comments",
-    )
-    parser.add_argument(
-        "--no-ui",
-        action="store_true",
-        help="Disable curses UI (use plain logging instead)",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging",
-    )
-
     return parser.parse_args()
 
 
@@ -881,7 +837,7 @@ def main() -> int:
 
     """
     args = _parse_args()
-    _setup_logging(args.verbose)
+    setup_review_logging(args.verbose)
 
     log = logging.getLogger(__name__)
     log.info("Starting PR review for issues: %s", args.issues)

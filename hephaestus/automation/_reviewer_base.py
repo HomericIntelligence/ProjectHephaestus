@@ -176,8 +176,5 @@ class BaseReviewer:
             # that filters on logger name attributes this to pr_reviewer /
             # address_review (same behavior as before the BaseReviewer split).
             subclass_logger = logging.getLogger(type(self).__module__)
-            subclass_logger.warning(
-                "Malformed review state for issue #%d (%s)", issue_number, exc
-            )
+            subclass_logger.warning("Malformed review state for issue #%d (%s)", issue_number, exc)
             return None
-

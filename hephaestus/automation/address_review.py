@@ -893,9 +893,7 @@ Examples:
   %(prog)s --issues 595 596 597 --max-workers 5
         """,
         issues_help="Issue numbers whose linked PRs should have review threads addressed",
-        dry_run_help=(
-            "Show what would be done without actually resolving threads or pushing code"
-        ),
+        dry_run_help=("Show what would be done without actually resolving threads or pushing code"),
     )
     return parser.parse_args()
 

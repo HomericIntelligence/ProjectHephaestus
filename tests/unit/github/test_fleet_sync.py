@@ -232,7 +232,7 @@ class TestMain:
 
         from hephaestus.github import fleet_sync
 
-        def fake_process(repo, args, clone_dir): 
+        def fake_process(repo, args, clone_dir):
             return {
                 "merged": 1,
                 "rebased": 0,
@@ -255,7 +255,7 @@ class TestMain:
 
         from hephaestus.github import fleet_sync
 
-        def fake_process(repo, args, clone_dir): 
+        def fake_process(repo, args, clone_dir):
             return {
                 "merged": 0,
                 "rebased": 0,
@@ -277,7 +277,7 @@ class TestMain:
 
         calls = []
 
-        def fake_process(repo, args, clone_dir): 
+        def fake_process(repo, args, clone_dir):
             calls.append(repo)
             return {
                 "merged": 0,

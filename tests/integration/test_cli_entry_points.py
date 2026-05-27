@@ -97,9 +97,7 @@ class TestCLIJsonFlag:
     """Every console script must accept ``--json`` for machine-readable output."""
 
     @pytest.mark.parametrize("command,module_path,attr", ENTRY_POINTS, ids=ENTRY_POINT_IDS)
-    def test_json_flag_documented_in_help(
-        self, command: str, module_path: str, attr: str
-    ) -> None:
+    def test_json_flag_documented_in_help(self, command: str, module_path: str, attr: str) -> None:
         """``<cmd> --help`` must mention ``--json`` so it is discoverable.
 
         We do not invoke ``<cmd> --json`` directly because most CLIs need
@@ -115,9 +113,7 @@ class TestCLIJsonFlag:
             pytest.skip(f"{command} not on PATH — install with `pip install -e .` or run via pixi")
         assert binary is not None
 
-        result = subprocess.run(
-            [binary, "--help"], capture_output=True, text=True, timeout=30
-        )
+        result = subprocess.run([binary, "--help"], capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, (
             f"{command} --help exited {result.returncode}\n"
             f"stdout: {result.stdout[:500]}\n"

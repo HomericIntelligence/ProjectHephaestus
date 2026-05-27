@@ -232,9 +232,7 @@ def main() -> int:
 
     if not args.coverage_file.exists():
         if args.json:
-            emit_json_status(
-                1, message=f"Coverage file not found: {args.coverage_file}"
-            )
+            emit_json_status(1, message=f"Coverage file not found: {args.coverage_file}")
             return 1
         # User-facing actionable guidance — intentionally written to stderr so
         # the message appears even when stdout is redirected to a file.

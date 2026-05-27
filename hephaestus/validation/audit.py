@@ -214,14 +214,11 @@ def _parse_audit_input(raw: str, json_mode: bool) -> dict[str, Any] | int:
         return 1
 
 
-def _emit_audit_json(
-    blocking: list[AuditEntry], suppressed: list[AuditEntry]
-) -> int:
+def _emit_audit_json(blocking: list[AuditEntry], suppressed: list[AuditEntry]) -> int:
     """Emit the audit findings as a JSON report and return the exit code."""
     report = {
         "blocking": [
-            {"package": n, "version": v, "id": vid, "severity": lbl}
-            for n, v, vid, lbl in blocking
+            {"package": n, "version": v, "id": vid, "severity": lbl} for n, v, vid, lbl in blocking
         ],
         "suppressed": [
             {"package": n, "version": v, "id": vid, "severity": lbl}

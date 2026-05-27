@@ -10,7 +10,6 @@ Provides:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import shutil
 import subprocess
@@ -41,13 +40,12 @@ from .claude_timeouts import planner_claude_timeout
 from .git_utils import get_repo_root, get_repo_slug, issue_ref
 from .github_api import (
     GitHubRateLimitError,
-    _gh_call,
     gh_issue_comment,
     gh_issue_json,
     gh_list_open_issues,
-    prefetch_issue_states,
 )
-from .models import PLAN_COMMENT_MARKERS, PlannerOptions, PlanResult
+from .models import PlannerOptions, PlanResult
+from .planner_state import PlannerStateManager
 from .prompts import (
     get_advise_prompt,
     get_plan_loop_review_prompt,
@@ -87,6 +85,7 @@ class Planner:
         self.status_tracker = StatusTracker(options.parallel)
         self.results: dict[int, PlanResult] = {}
         self.lock = threading.Lock()
+        self.state_mgr = PlannerStateManager(options)
 
     def run(self) -> dict[int, PlanResult]:
         """Run the planner on all issues.
@@ -136,75 +135,12 @@ class Planner:
         return self.results
 
     def _filter_issues(self) -> list[int]:
-        """Filter issues based on options.
-
-        Only does the cheap, batched check here: skip closed issues using one
-        GraphQL call per 100 via :func:`prefetch_issue_states`. The
-        already-planned check happens per-issue inside :meth:`_plan_issue` so
-        it runs in parallel with the worker pool instead of blocking on N
-        sequential ``gh issue view --comments`` round-trips before any worker
-        starts (#548).
-
-        Returns:
-            List of issue numbers to plan
-
-        """
-        # Batch fetch issue states if we need to check for closed issues
-        cached_states = {}
-        if self.options.skip_closed:
-            cached_states = prefetch_issue_states(self.options.issues)
-
-        issues_to_plan = []
-        for issue_num in self.options.issues:
-            if self.options.skip_closed:
-                state = cached_states.get(issue_num)
-                if state and state.value == "CLOSED":
-                    logger.info("Issue #%s is closed, skipping", issue_num)
-                    continue
-
-            issues_to_plan.append(issue_num)
-
-        return issues_to_plan
+        """Filter issues based on options (delegates to state manager)."""
+        return self.state_mgr.filter()
 
     def _has_existing_plan(self, issue_number: int) -> bool:
-        """Check if an issue already has a plan in comments.
-
-        Args:
-            issue_number: Issue number to check
-
-        Returns:
-            True if plan exists
-
-        """
-        try:
-            result = _gh_call(
-                [
-                    "issue",
-                    "view",
-                    str(issue_number),
-                    "--comments",
-                    "--json",
-                    "comments",
-                ],
-            )
-
-            data = json.loads(result.stdout)
-            comments = data.get("comments", [])
-
-            # Look for plan markers in comments (shared with plan_reviewer)
-            for comment in comments:
-                body = comment.get("body", "")
-                if any(marker in body for marker in PLAN_COMMENT_MARKERS):
-                    logger.debug("Found existing plan for %s", issue_ref(issue_number))
-                    return True
-
-            return False
-
-        except Exception as e:
-            logger.warning(
-                "Failed to check for existing plan on %s: %s", issue_ref(issue_number), e
-            )
-            return False
+        """Check if an issue already has a plan (delegates to state manager)."""
+        return self.state_mgr.has_existing_plan(issue_number)
 
     def _plan_issue(self, issue_number: int) -> PlanResult:
         """Plan a single issue.

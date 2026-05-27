@@ -317,7 +317,7 @@ class TestFilterIssues:
         with (
             patch.object(planner, "_has_existing_plan") as mock_check,
             patch(
-                "hephaestus.automation.planner.prefetch_issue_states",
+                "hephaestus.automation.planner_state.prefetch_issue_states",
                 return_value={},
             ),
         ):
@@ -331,7 +331,7 @@ class TestFilterIssues:
         from hephaestus.automation.models import IssueState
 
         with patch(
-            "hephaestus.automation.planner.prefetch_issue_states",
+            "hephaestus.automation.planner_state.prefetch_issue_states",
             return_value={123: IssueState.CLOSED},
         ):
             result = planner._filter_issues()
@@ -343,7 +343,7 @@ class TestFilterIssues:
         from hephaestus.automation.models import IssueState
 
         with patch(
-            "hephaestus.automation.planner.prefetch_issue_states",
+            "hephaestus.automation.planner_state.prefetch_issue_states",
             return_value={123: IssueState.OPEN},
         ):
             result = planner._filter_issues()

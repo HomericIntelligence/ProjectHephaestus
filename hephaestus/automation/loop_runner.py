@@ -32,6 +32,7 @@ import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 LOG = logging.getLogger(__name__)
 
@@ -296,9 +297,22 @@ def _detect_cwd_repo() -> tuple[str | None, str | None]:
         ).stdout.strip()
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         url = ""
-    if "github.com" in url:
-        tail = url.split("github.com", 1)[1].lstrip(":/")
-        parts = tail.split("/", 1)
+
+    host = ""
+    path = ""
+    parsed = urlparse(url)
+    if parsed.scheme:
+        host = (parsed.hostname or "").rstrip(".").lower()
+        path = parsed.path.lstrip("/")
+    elif "@" in url and ":" in url:
+        # SCP-like git remote, e.g. git@github.com:org/repo.git
+        after_at = url.split("@", 1)[1]
+        host_part, path_part = after_at.split(":", 1)
+        host = host_part.rstrip(".").lower()
+        path = path_part.lstrip("/")
+
+    if host == "github.com":
+        parts = path.split("/", 1)
         if len(parts) == 2:
             org = parts[0] or None
 

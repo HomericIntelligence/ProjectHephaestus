@@ -159,6 +159,3 @@ class BaseReviewer:
             )
             return None
 
-    def _state_file(self, issue_number: int) -> Path:
-        """Return the on-disk review-state file path for ``issue_number``."""
-        return self.state_dir / f"review-{issue_number}.json"

@@ -216,6 +216,7 @@ omit = [
     "hephaestus/automation/planner.py",
     "hephaestus/automation/address_review.py",
     "hephaestus/automation/ci_driver.py",
+    "hephaestus/automation/loop_runner.py",
     # curses_ui.py uses a live terminal; cannot be unit-tested without a real TTY
     "hephaestus/automation/curses_ui.py",
     # github_api.py shells out to gh CLI for every call; fully integration-only

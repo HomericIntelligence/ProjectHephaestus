@@ -4,4 +4,4 @@ minimum = 80
 
 # Per-module coverage floors
 [coverage.modules]
-"hephaestus/validation/schema.py" = { minimum = 80 }
+"validation/schema.py" = { minimum = 80 }

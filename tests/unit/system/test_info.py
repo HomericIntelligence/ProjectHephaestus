@@ -160,3 +160,27 @@ class TestFormatSystemInfo:
         text = format_system_info(info, format_type="json")
         parsed = json.loads(text)
         assert "os" in parsed
+
+
+def test_main_returns_zero(monkeypatch):
+    """Test that main() returns 0 on success."""
+    import sys
+    from hephaestus.system.info import main
+
+    monkeypatch.setattr(sys, "argv", ["info"])
+
+    exit_code = main()
+
+    assert exit_code == 0
+
+
+def test_main_json_returns_zero(monkeypatch):
+    """Test that main() returns 0 with --json flag."""
+    import sys
+    from hephaestus.system.info import main
+
+    monkeypatch.setattr(sys, "argv", ["info", "--json"])
+
+    exit_code = main()
+
+    assert exit_code == 0

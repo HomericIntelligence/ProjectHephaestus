@@ -1,15 +1,15 @@
-"""Smoke tests for omitted orchestration modules.
+"""Smoke tests for omitted orchestration modules — integration backstop.
 
-These tests serve as an integration backstop for the 10 modules omitted
-from unit test coverage in pyproject.toml. The omits are necessary because
-these modules require a live CLI session (claude, gh) or terminal (TTY).
+These tests validate that the 10 automation modules omitted from coverage
+(per pyproject.toml[tool.coverage.run].omit) remain importable and their
+console entry points work correctly.
 
-This test ensures:
-1. All 10 modules are importable (catches import-time regressions)
-2. The 4 console scripts (with --help entry points) work without hanging
-3. The 2 script-less main() modules are at least callable
-
-No live sessions are started; --help exits before any main() logic runs.
+Module enumeration and entry-point discovery verified at plan time:
+- All 10 modules are importable (guards against import regressions)
+- 4 modules have console scripts: implementer, planner, loop_runner, pr_reviewer
+- 2 modules are script-less but have main(): address_review, ci_driver
+- 4 modules lack main() entirely: implementer_phase_runner, implementer_summary,
+    curses_ui, github_api
 """
 
 import subprocess
@@ -19,8 +19,8 @@ from pathlib import Path
 import pytest
 
 
-# The 10 deliberately omitted orchestration modules
-ORCHESTRATION_MODULES = [
+# All 10 omitted orchestration modules
+OMITTED_MODULES = [
     "hephaestus.automation.implementer",
     "hephaestus.automation.implementer_phase_runner",
     "hephaestus.automation.implementer_summary",
@@ -33,54 +33,67 @@ ORCHESTRATION_MODULES = [
     "hephaestus.automation.pr_reviewer",
 ]
 
-# Console scripts (with --help entry points, no live session)
+# Modules with console scripts (run --help to verify entry point works)
 CONSOLE_SCRIPTS = [
-    "hephaestus-implement-issues",
-    "hephaestus-plan-issues",
-    "hephaestus-automation-loop",
-    "hephaestus-review-prs",
+    ("hephaestus-implement-issues", "hephaestus.automation.implementer"),
+    ("hephaestus-plan-issues", "hephaestus.automation.planner"),
+    ("hephaestus-automation-loop", "hephaestus.automation.loop_runner"),
+    ("hephaestus-review-prs", "hephaestus.automation.pr_reviewer"),
+]
+
+# Modules with main() but no console script
+MAIN_ONLY_MODULES = [
+    "hephaestus.automation.address_review",
+    "hephaestus.automation.ci_driver",
 ]
 
 
 @pytest.mark.integration
-class TestOrchestrationSmoke:
-    """Smoke tests for omitted orchestration modules."""
+class TestOrchestrationsImportable:
+    """All omitted modules must remain importable."""
 
-    @pytest.mark.parametrize("module_name", ORCHESTRATION_MODULES)
-    def test_module_is_importable(self, module_name: str) -> None:
-        """All orchestration modules are importable."""
+    @pytest.mark.parametrize("module_name", OMITTED_MODULES)
+    def test_module_importable(self, module_name: str) -> None:
+        """Verify module can be imported without errors."""
         try:
             __import__(module_name)
         except ImportError as e:
             pytest.fail(f"Module {module_name} failed to import: {e}")
 
-    @pytest.mark.parametrize("script_name", CONSOLE_SCRIPTS)
-    def test_console_script_help_exits_cleanly(self, script_name: str) -> None:
-        """Console scripts respond to --help without hanging."""
-        try:
-            result = subprocess.run(
-                [script_name, "--help"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            assert result.returncode == 0, f"{script_name} --help failed with exit {result.returncode}"
-            assert "usage:" in result.stdout.lower() or "help" in result.stdout.lower(), (
-                f"{script_name} --help did not produce usage text"
-            )
-        except FileNotFoundError:
-            pytest.skip(f"{script_name} not found on PATH")
-        except subprocess.TimeoutExpired:
-            pytest.fail(f"{script_name} --help timed out")
 
-    def test_address_review_main_is_callable(self) -> None:
-        """hephaestus.automation.address_review.main is callable."""
-        from hephaestus.automation.address_review import main
+@pytest.mark.integration
+class TestConsoleScriptsWork:
+    """Console scripts must respond to --help without live session."""
 
-        assert callable(main), "address_review.main is not callable"
+    @pytest.mark.parametrize("script_name,module_name", CONSOLE_SCRIPTS)
+    def test_console_script_help(self, script_name: str, module_name: str) -> None:
+        """Verify console script exits 0 on --help."""
+        result = subprocess.run(
+            [script_name, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
 
-    def test_ci_driver_main_is_callable(self) -> None:
-        """hephaestus.automation.ci_driver.main is callable."""
-        from hephaestus.automation.ci_driver import main
+        assert result.returncode == 0, (
+            f"Script {script_name} exited with {result.returncode}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
 
-        assert callable(main), "ci_driver.main is not callable"
+        # Should print usage text (argparse default)
+        assert "usage:" in result.stdout.lower() or "usage:" in result.stderr.lower(), (
+            f"Script {script_name} did not print usage text\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+
+@pytest.mark.integration
+class TestMainCallable:
+    """Modules with main() must have a callable main function."""
+
+    @pytest.mark.parametrize("module_name", MAIN_ONLY_MODULES)
+    def test_main_is_callable(self, module_name: str) -> None:
+        """Verify module has a callable main() function."""
+        module = __import__(module_name, fromlist=["main"])
+        assert hasattr(module, "main"), f"Module {module_name} does not have main()"
+        assert callable(module.main), f"Module {module_name}.main is not callable"

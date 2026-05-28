@@ -11,7 +11,7 @@ from hephaestus.resilience.circuit_breaker import reset_all_circuit_breakers
 
 
 @pytest.fixture(autouse=True)
-def _reset_breaker() -> None:
+def _reset_breaker() -> None:  # type: ignore[misc]
     """Reset the GitHub API circuit breaker before each test."""
     # Import and reset the module's _GH_BREAKER directly
     import hephaestus.automation.github_api as github_api_module

@@ -174,7 +174,7 @@ def run_subprocess(
 
     # Inject correlation ID into subprocess environment if set.
     # Function-local import to keep module import graph clean.
-    effective_env = env if env is not None else os.environ.copy()
+    effective_env = env.copy() if env is not None else os.environ.copy()
     from hephaestus.logging.utils import get_current_correlation_id
 
     cid = get_current_correlation_id()

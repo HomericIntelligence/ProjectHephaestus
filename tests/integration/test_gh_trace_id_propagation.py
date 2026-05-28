@@ -4,20 +4,20 @@
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hephaestus.automation.git_utils import run as git_run
 from hephaestus.logging.utils import correlation_id_scope, get_current_correlation_id
+from hephaestus.utils.helpers import run_subprocess
 
 
 @pytest.fixture(autouse=True)
 def _fake_binary_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Add a temporary directory with fake 'gh' and 'git' binaries to PATH.
 
-    These fake binaries echo their environment so tests can verify GH_TRACE_ID.
+    These fake binaries output GH_TRACE_ID if set, else NO_GH_TRACE_ID.
     """
     fake_bin_dir = tmp_path / "bin"
     fake_bin_dir.mkdir()
@@ -25,7 +25,7 @@ def _fake_binary_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     # Create a fake 'gh' script that outputs environment
     fake_gh = fake_bin_dir / "gh"
     fake_gh.write_text(
-        "#!/bin/sh\nenv | grep GH_TRACE_ID || echo 'NO_GH_TRACE_ID'\n",
+        "#!/bin/sh\n(env | grep -q '^GH_TRACE_ID=' && env | grep '^GH_TRACE_ID=') || echo 'NO_GH_TRACE_ID'\n",
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -33,7 +33,7 @@ def _fake_binary_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     # Create a fake 'git' script that outputs environment
     fake_git = fake_bin_dir / "git"
     fake_git.write_text(
-        "#!/bin/sh\nenv | grep GH_TRACE_ID || echo 'NO_GH_TRACE_ID'\n",
+        "#!/bin/sh\n(env | grep -q '^GH_TRACE_ID=' && env | grep '^GH_TRACE_ID=') || echo 'NO_GH_TRACE_ID'\n",
         encoding="utf-8",
     )
     fake_git.chmod(0o755)
@@ -50,66 +50,42 @@ class TestGhTraceIdPropagation:
         """Verify that get_current_correlation_id() returns None by default."""
         assert get_current_correlation_id() is None
 
-    def test_gh_trace_id_present_in_scope(self, tmp_path: Path) -> None:
-        """GH_TRACE_ID should be present in subprocess when in correlation_id_scope."""
-        result = subprocess.run(
-            ["gh", "issue", "list"],
-            capture_output=True,
-            text=True,
+    def test_gh_trace_id_injected_via_run_subprocess(self) -> None:
+        """GH_TRACE_ID should be injected into the subprocess environment via run_subprocess."""
+        # Outside scope: no GH_TRACE_ID should be set
+        result = run_subprocess(
+            ["sh", "-c", "env | grep GH_TRACE_ID || echo 'NO_GH_TRACE_ID'"],
             check=False,
-            env=None,  # Use current environment (won't have GH_TRACE_ID)
         )
-        # Outside scope: no GH_TRACE_ID
-        assert "NO_GH_TRACE_ID" in result.stdout or "GH_TRACE_ID" not in result.stdout
+        assert "NO_GH_TRACE_ID" in result.stdout
 
         # Inside scope: GH_TRACE_ID should be present
         with correlation_id_scope("test-trace-id-123"):
-            # Use git_run (which calls run_subprocess) to verify the injection
-            result = git_run(
-                ["--version"],
-                cwd=Path(os.getcwd()),
+            result = run_subprocess(
+                ["sh", "-c", "env | grep GH_TRACE_ID || echo 'NO_GH_TRACE_ID'"],
                 check=False,
             )
             assert "GH_TRACE_ID=test-trace-id-123" in result.stdout
 
-    def test_gh_trace_id_absent_outside_scope(self) -> None:
-        """GH_TRACE_ID should not be set outside of correlation_id_scope."""
-        assert get_current_correlation_id() is None
-
-        result = subprocess.run(
-            ["gh", "issue", "list"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        # Outside scope: no GH_TRACE_ID
-        assert "NO_GH_TRACE_ID" in result.stdout
-
-    def test_nested_correlation_id_scopes(self) -> None:
+    def test_correlation_id_preserved_across_scopes(self) -> None:
         """Nested correlation_id_scope should propagate the innermost ID."""
         with correlation_id_scope("outer-id"):
-            result_outer = subprocess.run(
-                ["gh", "issue", "list"],
-                capture_output=True,
-                text=True,
+            result_outer = run_subprocess(
+                ["sh", "-c", "env | grep GH_TRACE_ID || echo 'NO_GH_TRACE_ID'"],
                 check=False,
             )
             assert "GH_TRACE_ID=outer-id" in result_outer.stdout
 
             with correlation_id_scope("inner-id"):
-                result_inner = subprocess.run(
-                    ["gh", "issue", "list"],
-                    capture_output=True,
-                    text=True,
+                result_inner = run_subprocess(
+                    ["sh", "-c", "env | grep GH_TRACE_ID || echo 'NO_GH_TRACE_ID'"],
                     check=False,
                 )
                 assert "GH_TRACE_ID=inner-id" in result_inner.stdout
 
             # After exiting inner scope, outer ID should be restored
-            result_back = subprocess.run(
-                ["gh", "issue", "list"],
-                capture_output=True,
-                text=True,
+            result_back = run_subprocess(
+                ["sh", "-c", "env | grep GH_TRACE_ID || echo 'NO_GH_TRACE_ID'"],
                 check=False,
             )
             assert "GH_TRACE_ID=outer-id" in result_back.stdout
@@ -118,10 +94,8 @@ class TestGhTraceIdPropagation:
         """Correlation ID should be cleaned up even if an exception occurs in the scope."""
         try:
             with correlation_id_scope("error-scope-id"):
-                result = subprocess.run(
-                    ["gh", "issue", "list"],
-                    capture_output=True,
-                    text=True,
+                result = run_subprocess(
+                    ["sh", "-c", "env | grep GH_TRACE_ID || echo 'NO_GH_TRACE_ID'"],
                     check=False,
                 )
                 assert "GH_TRACE_ID=error-scope-id" in result.stdout
@@ -131,10 +105,27 @@ class TestGhTraceIdPropagation:
 
         # After exception: correlation ID should be cleared
         assert get_current_correlation_id() is None
-        result = subprocess.run(
-            ["gh", "issue", "list"],
-            capture_output=True,
-            text=True,
+        result = run_subprocess(
+            ["sh", "-c", "env | grep GH_TRACE_ID || echo 'NO_GH_TRACE_ID'"],
             check=False,
         )
         assert "NO_GH_TRACE_ID" in result.stdout
+
+    def test_custom_env_dict_preserved(self) -> None:
+        """When a custom env dict is passed to run_subprocess, GH_TRACE_ID should be injected into it."""
+        custom_env = {"CUSTOM_VAR": "custom_value"}
+
+        with correlation_id_scope("custom-trace-id"):
+            result = run_subprocess(
+                [
+                    "sh",
+                    "-c",
+                    "echo CUSTOM_VAR=$CUSTOM_VAR; env | grep GH_TRACE_ID || echo 'NO_GH_TRACE_ID'",
+                ],
+                env=custom_env,
+                check=False,
+            )
+            # Custom var should still be present
+            assert "CUSTOM_VAR=custom_value" in result.stdout
+            # GH_TRACE_ID should be injected
+            assert "GH_TRACE_ID=custom-trace-id" in result.stdout

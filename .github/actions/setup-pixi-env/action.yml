@@ -36,8 +36,8 @@ inputs:
       Prefix for the cache key. Use "pixi-lint" when only the lint env is
       installed (smaller cache, lint jobs share it). Use "pixi-shell" or
       similar when the default env is installed (larger cache, test jobs
-      share it). The full key becomes
-      `<prefix>-${{ runner.os }}-${{ hashFiles('pixi.lock') }}`.
+      share it). The full key is composed as
+      <prefix>-<runner.os>-<hashFiles(pixi.lock)>.
     required: true
 
 runs:

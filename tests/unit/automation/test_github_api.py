@@ -247,7 +247,9 @@ class TestPrefetchIssueStates:
 
     @patch("hephaestus.automation.github_api._gh_call")
     @patch("hephaestus.automation.github_api.get_repo_info")
-    def test_non_numeric_issue_number_raises_error(self, mock_repo_info: Any, mock_gh_call: Any) -> None:
+    def test_non_numeric_issue_number_raises_error(
+        self, mock_repo_info: Any, mock_gh_call: Any
+    ) -> None:
         """Test that non-numeric issue numbers raise ValueError during int() casting."""
         mock_repo_info.return_value = ("owner", "repo")
 

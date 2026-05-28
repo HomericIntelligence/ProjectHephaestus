@@ -190,9 +190,7 @@ class TestCheckFiles:
         assert exit_code == 0
         assert error_count >= 1
 
-    def test_schema_load_oserror(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_schema_load_oserror(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """OSError when loading schema file is caught and counted."""
         pytest.importorskip("jsonschema")
         yaml_file = tmp_path / "config" / "test.yaml"
@@ -410,7 +408,9 @@ class TestMain:
         )
         assert main() == 0
 
-    def test_json_flag_no_files(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    def test_json_flag_no_files(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
         """--json flag with no files emits JSON status."""
         from hephaestus.validation.schema import main
 
@@ -422,7 +422,9 @@ class TestMain:
         assert output["exit_code"] == 0
         assert "message" in output or "error_count" in output
 
-    def test_json_flag_success(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    def test_json_flag_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
         """--json flag on success emits JSON with correct fields."""
         pytest.importorskip("jsonschema")
         from hephaestus.validation.schema import main
@@ -464,7 +466,9 @@ class TestMain:
         assert output["error_count"] == 0
         assert output["files_checked"] == 1
 
-    def test_verbose_pass_output(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    def test_verbose_pass_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
         """--verbose flag prints PASS lines for valid files."""
         pytest.importorskip("jsonschema")
         from hephaestus.validation.schema import main
@@ -530,7 +534,6 @@ class TestMain:
         target = target_dir / "file.yaml"
         target.write_text("name: alice\n")
 
-        schema_path = tmp_path / "nonexistent.json"
         schema_map = [(re.compile(r"config/.*\.yaml$"), Path("nonexistent.json"))]
 
         exit_code, error_count = check_files([target], tmp_path, schema_map)

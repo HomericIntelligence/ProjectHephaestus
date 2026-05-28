@@ -294,7 +294,9 @@ class TestMain:
         payload = json.loads(capsys.readouterr().out)
         assert payload["passed"] is False
 
-    def test_json_unparseable_coverage(self, tmp_path: Path, monkeypatch, capsys, empty_config: Path) -> None:
+    def test_json_unparseable_coverage(
+        self, tmp_path: Path, monkeypatch, capsys, empty_config: Path
+    ) -> None:
         """--json returns 0 with passed=True when coverage is unparseable."""
         import json
 

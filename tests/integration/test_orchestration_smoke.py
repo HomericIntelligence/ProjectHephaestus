@@ -13,11 +13,8 @@ Module enumeration and entry-point discovery verified at plan time:
 """
 
 import subprocess
-import sys
-from pathlib import Path
 
 import pytest
-
 
 # All 10 omitted orchestration modules
 OMITTED_MODULES = [

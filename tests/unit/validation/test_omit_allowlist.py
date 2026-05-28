@@ -8,7 +8,7 @@ import pytest
 if sys.version_info >= (3, 11):
     import tomllib
 else:
-    import tomli as tomllib  # type: ignore
+    import tomli as tomllib
 
 
 def get_pyproject_toml_path() -> Path:
@@ -62,7 +62,10 @@ class TestOmitAllowlist:
                 msg += f"  Removed (unexpected): {removed}\n"
             if added:
                 msg += f"  Added (guard this in code): {added}\n"
-            msg += "See tests/unit/validation/test_omit_allowlist.py and tests/integration/test_orchestration_smoke.py\n"
+            msg += (
+                "See tests/unit/validation/test_omit_allowlist.py"
+                " and tests/integration/test_orchestration_smoke.py\n"
+            )
             msg += "These tests document and enforce the orchestration module omit-list."
             pytest.fail(msg)
 

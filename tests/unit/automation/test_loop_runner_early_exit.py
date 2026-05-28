@@ -3,12 +3,8 @@
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 from hephaestus.automation.loop_runner import (
-    LoopConfig,
     PhaseResult,
     RepoResult,
     _make_work_report_path,
@@ -25,11 +21,8 @@ class TestWriteWorkReport:
         os.environ.pop("HEPH_WORK_REPORT", None)
         from hephaestus.automation.work_report import write_work_report
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Call with env unset
-            write_work_report(5)
-            # No file should exist (no path to write to)
-            # This is a no-op when env is unset
+        # Call with env unset — this is a no-op; no file path to write to
+        write_work_report(5)
 
     def test_env_set_writes_int(self) -> None:
         """When HEPH_WORK_REPORT is set, writes the integer to that file."""
@@ -388,7 +381,7 @@ class TestPlanReviewerAlreadyReviewedFlag:
     def test_plan_reviewer_main_writes_correct_work_count(self) -> None:
         """plan_reviewer main() writes non-skipped count to HEPH_WORK_REPORT."""
         # Mock several review outcomes with mixed already_reviewed states.
-        # Assert work count = sum(1 for r in results.values() if r.success and not r.already_reviewed).
+        # Assert work count = sum(not r.already_reviewed for r in results.values() if r.success).
         # Deferred to implementation phase.
         pass
 
@@ -397,7 +390,7 @@ class TestPlannerMainWorkReport:
     """Tests for planner.main() work reporting."""
 
     def test_planner_writes_new_plans_count(self) -> None:
-        """planner main() writes (successful - already_planned) to HEPH_WORK_REPORT."""
+        """Planner main() writes (successful - already_planned) to HEPH_WORK_REPORT."""
         # Mock planner.run() to return results with known counts.
         # Assert work count = successful - already_planned.
         # Deferred to implementation phase.

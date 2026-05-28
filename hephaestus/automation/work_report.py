@@ -8,6 +8,7 @@ convergence.
 No-op when the env var is unset (phase run outside the loop runner).
 """
 
+import contextlib
 import os
 from pathlib import Path
 
@@ -18,12 +19,13 @@ def write_work_report(work_units: int) -> None:
     Args:
         work_units: The number of work units (e.g., issues planned or reviewed).
 
-    No-op when the env var is unset (phase run outside the loop runner).
+    Note:
+        No-op when the env var is unset (phase run outside the loop runner).
+
     """
     path = os.environ.get("HEPH_WORK_REPORT")
     if not path:
         return
-    try:
+    # best-effort; absence ⇒ "unknown" ⇒ treated as work
+    with contextlib.suppress(OSError):
         Path(path).write_text(str(int(work_units)), encoding="utf-8")
-    except OSError:
-        pass  # report is best-effort; absence ⇒ "unknown" ⇒ treated as work

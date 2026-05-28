@@ -148,9 +148,7 @@ class RepoResult:
     @property
     def produced_work(self) -> bool:
         """Whether any convergence-relevant phase produced work."""
-        return any(
-            p.produced_work for p in self.phases if p.name in _CONVERGENCE_PHASES
-        )
+        return any(p.produced_work for p in self.phases if p.name in _CONVERGENCE_PHASES)
 
 
 @dataclass
@@ -188,6 +186,7 @@ def _make_work_report_path(build_dir: str) -> str:
 
     Returns:
         Path to a new temp file for work reporting.
+
     """
     import tempfile
 
@@ -206,6 +205,7 @@ def _read_work_report(path: str) -> int | None:
 
     Returns:
         The work-unit count, or None if the file is missing, empty, or malformed.
+
     """
     try:
         content = Path(path).read_text(encoding="utf-8").strip()
@@ -751,10 +751,8 @@ def run_phase(
         try:
             work_units = _read_work_report(work_report_path)
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(work_report_path)
-            except OSError:
-                pass  # best-effort cleanup
 
     elapsed = time.monotonic() - t0
     LOG.info("[%s] phase %s done in %.1fs (rc=%d)", repo, phase, elapsed, rc)

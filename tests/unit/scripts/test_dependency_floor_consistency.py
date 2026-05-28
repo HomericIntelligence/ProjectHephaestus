@@ -58,15 +58,13 @@ class TestDependencyFloorConsistency:
             pyproject = tomllib.load(f)
 
         # Navigate to [project.optional-dependencies.github]
-        assert (
-            "project" in pyproject
-        ), "No [project] section in pyproject.toml"
-        assert (
-            "optional-dependencies" in pyproject["project"]
-        ), "No [project.optional-dependencies] section in pyproject.toml"
-        assert (
-            "github" in pyproject["project"]["optional-dependencies"]
-        ), "No [project.optional-dependencies.github] section in pyproject.toml"
+        assert "project" in pyproject, "No [project] section in pyproject.toml"
+        assert "optional-dependencies" in pyproject["project"], (
+            "No [project.optional-dependencies] section in pyproject.toml"
+        )
+        assert "github" in pyproject["project"]["optional-dependencies"], (
+            "No [project.optional-dependencies.github] section in pyproject.toml"
+        )
 
         github_deps = pyproject["project"]["optional-dependencies"]["github"]
         assert isinstance(github_deps, list), (
@@ -79,9 +77,9 @@ class TestDependencyFloorConsistency:
                 pyproject_spec = dep
                 break
 
-        assert (
-            pyproject_spec is not None
-        ), "PyGithub not found in [project.optional-dependencies.github]"
+        assert pyproject_spec is not None, (
+            "PyGithub not found in [project.optional-dependencies.github]"
+        )
 
         # Load pixi.toml
         pixi_path = repo_root / "pixi.toml"
@@ -92,9 +90,7 @@ class TestDependencyFloorConsistency:
 
         # Navigate to [dependencies.pygithub]
         assert "dependencies" in pixi, "No [dependencies] section in pixi.toml"
-        assert (
-            "pygithub" in pixi["dependencies"]
-        ), "No [dependencies.pygithub] entry in pixi.toml"
+        assert "pygithub" in pixi["dependencies"], "No [dependencies.pygithub] entry in pixi.toml"
 
         pixi_spec = pixi["dependencies"]["pygithub"]
         assert isinstance(pixi_spec, str), (

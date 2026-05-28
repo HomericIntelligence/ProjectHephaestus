@@ -19,6 +19,7 @@ from hephaestus.automation.github_api import (
     gh_issue_json,
     gh_list_labels,
     gh_list_open_issues,
+    gh_pr_checks,
     gh_pr_create,
     is_issue_closed,
     parse_issue_dependencies,
@@ -26,6 +27,13 @@ from hephaestus.automation.github_api import (
     write_secure,
 )
 from hephaestus.automation.models import IssueState
+from hephaestus.resilience.circuit_breaker import reset_all_circuit_breakers
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuit_breakers() -> None:
+    """Reset all circuit breakers before each test to prevent cross-test contamination."""
+    reset_all_circuit_breakers()
 
 
 class TestGhIssueJson:
@@ -431,28 +439,27 @@ class TestGhCall:
 
         assert mock_run.call_count == 1
 
-    @patch("hephaestus.automation.github_api.resilient_call")
-    def test_resilient_call_invoked_with_correct_parameters(self, mock_resilient: Any) -> None:
-        """Test that _gh_call invokes resilient_call with correct parameters.
+    @patch("hephaestus.automation.github_api._gh_call_impl")
+    def test_circuit_breaker_wraps_gh_call_impl(self, mock_impl: Any) -> None:
+        """Test that _gh_call routes through the circuit breaker to _gh_call_impl.
 
-        Verifies that the circuit breaker name, max_retries, and other
-        parameters are passed correctly to resilient_call.
+        Verifies that the circuit breaker calls _gh_call_impl with the
+        correct arguments forwarded from _gh_call.
         """
+        _github_api_module._GH_BREAKER.reset()
         mock_result = Mock(spec=subprocess.CompletedProcess)
         mock_result.stdout = "success"
-        mock_resilient.return_value = mock_result
+        mock_impl.return_value = mock_result
 
         result = _gh_call(["issue", "view", "123"], max_retries=6)
 
         assert result.stdout == "success"
-        # resilient_call should be called on outer loop
-        assert mock_resilient.call_count == 1
-        # Check that circuit_breaker_name was passed
-        call_kwargs = mock_resilient.call_args[1]
-        assert "circuit_breaker_name" in call_kwargs
-        assert call_kwargs["circuit_breaker_name"] == "gh_cli"
-        assert call_kwargs["max_retries"] == 2  # inner retries
-        assert call_kwargs["initial_delay"] == 2.0
+        # _gh_call_impl should be called once via the circuit breaker
+        assert mock_impl.call_count == 1
+        # Check that args and kwargs are forwarded correctly
+        call_args, call_kwargs = mock_impl.call_args
+        assert call_args[0] == ["issue", "view", "123"]
+        assert call_kwargs["max_retries"] == 6
 
     @patch("hephaestus.automation.github_api.run")
     def test_non_transient_errors_not_retried_by_resilient_call(self, mock_run: Any) -> None:
@@ -1295,3 +1302,87 @@ class TestGhCallRateLimitFromStdout:
         )
         with pytest.raises(GitHubRateLimitError):
             _gh_call(["issue", "list"], max_retries=2)
+
+
+# Valid field set for `gh pr checks --json`, captured from the gh CLI schema.
+# Any field the code requests MUST be a subset of this, or gh rejects the whole
+# call with "Unknown JSON field" (the bug behind issue #654).
+_GH_PR_CHECKS_VALID_FIELDS = {
+    "bucket",
+    "completedAt",
+    "description",
+    "event",
+    "link",
+    "name",
+    "startedAt",
+    "state",
+    "workflow",
+}
+
+
+class TestGhPrChecks:
+    """Tests for gh_pr_checks: schema validity and bucket->contract mapping."""
+
+    def test_dry_run_returns_empty(self) -> None:
+        assert gh_pr_checks(123, dry_run=True) == []
+
+    @patch("hephaestus.automation.github_api._gh_call")
+    def test_requested_json_fields_are_valid_schema(self, mock_gh_call: Any) -> None:
+        """The --json field list must be a subset of gh's real schema."""
+        mock_result = Mock()
+        mock_result.stdout = "[]"
+        mock_gh_call.return_value = mock_result
+
+        gh_pr_checks(123)
+
+        args = mock_gh_call.call_args.args[0]
+        json_idx = args.index("--json")
+        requested = set(args[json_idx + 1].split(","))
+        invalid = requested - _GH_PR_CHECKS_VALID_FIELDS
+        assert not invalid, f"gh pr checks requested invalid --json field(s): {invalid}"
+
+    @patch("hephaestus.automation.github_api._gh_call")
+    def test_maps_bucket_to_status_and_conclusion(self, mock_gh_call: Any) -> None:
+        """state/bucket from gh map onto the status/conclusion contract."""
+        mock_result = Mock()
+        mock_result.stdout = json.dumps(
+            [
+                {"name": "pass-check", "state": "SUCCESS", "bucket": "pass", "workflow": ""},
+                {"name": "fail-check", "state": "FAILURE", "bucket": "fail", "workflow": "CI"},
+                {"name": "skip-check", "state": "SKIPPED", "bucket": "skipping", "workflow": ""},
+                {"name": "pend-check", "state": "PENDING", "bucket": "pending", "workflow": ""},
+                {"name": "cancel-check", "state": "CANCELLED", "bucket": "cancel", "workflow": ""},
+            ]
+        )
+        mock_gh_call.return_value = mock_result
+
+        checks = gh_pr_checks(456)
+        by_name = {c["name"]: c for c in checks}
+
+        assert by_name["pass-check"]["status"] == "completed"
+        assert by_name["pass-check"]["conclusion"] == "success"
+        assert by_name["fail-check"]["status"] == "completed"
+        assert by_name["fail-check"]["conclusion"] == "failure"
+        assert by_name["skip-check"]["status"] == "completed"
+        assert by_name["skip-check"]["conclusion"] == "skipped"
+        assert by_name["cancel-check"]["status"] == "completed"
+        assert by_name["cancel-check"]["conclusion"] == "failure"
+        # Pending checks are not yet concluded.
+        assert by_name["pend-check"]["status"] == "in_progress"
+        assert by_name["pend-check"]["conclusion"] is None
+        # Every check exposes the contract keys consumed by ci_driver.
+        for c in checks:
+            assert set(c) == {"name", "status", "conclusion", "required"}
+
+    @patch("hephaestus.automation.github_api._gh_call")
+    def test_unknown_bucket_treated_as_pending(self, mock_gh_call: Any) -> None:
+        """An unrecognised bucket degrades to in_progress, never a false 'completed'."""
+        mock_result = Mock()
+        mock_result.stdout = json.dumps(
+            [{"name": "weird", "state": "QUEUED", "bucket": "something-new", "workflow": ""}]
+        )
+        mock_gh_call.return_value = mock_result
+
+        (check,) = gh_pr_checks(789)
+        assert check["status"] == "in_progress"
+        assert check["conclusion"] is None

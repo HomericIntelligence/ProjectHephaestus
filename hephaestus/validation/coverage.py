@@ -136,6 +136,59 @@ def parse_coverage_report(coverage_file: Path) -> float | None:
         return None
 
 
+def parse_module_coverage(coverage_file: Path) -> dict[str, tuple[float, float]]:
+    """Parse per-module coverage from Cobertura XML report.
+
+    Extracts line-rate and branch-rate for each <class> element
+    (representing a module/file).
+
+    Args:
+        coverage_file: Path to ``coverage.xml`` file.
+
+    Returns:
+        Dictionary mapping filename to (line_rate, branch_rate) tuple, both
+        as percentages (0-100).
+
+    Raises:
+        FileNotFoundError: If coverage file does not exist.
+        RuntimeError: If defusedxml is not available or parsing fails.
+
+    """
+    if not coverage_file.exists():
+        raise FileNotFoundError(f"Coverage file not found: {coverage_file}")
+
+    try:
+        import defusedxml.ElementTree as ElementTree
+    except ImportError:
+        raise RuntimeError(
+            "defusedxml not installed. "
+            "Install with: pip install HomericIntelligence-Hephaestus[xml]"
+        )
+
+    try:
+        tree = ElementTree.parse(str(coverage_file))
+        root = tree.getroot()
+    except Exception as e:
+        raise RuntimeError(f"Error parsing coverage file: {e}") from e
+
+    modules: dict[str, tuple[float, float]] = {}
+    for class_elem in root.findall(".//class"):
+        filename = class_elem.get("filename")
+        if filename is None:
+            continue
+        line_rate_str = class_elem.get("line-rate")
+        branch_rate_str = class_elem.get("branch-rate")
+        try:
+            line_rate = float(line_rate_str or "0") * 100.0 if line_rate_str else 0.0
+            branch_rate = float(branch_rate_str or "0") * 100.0 if branch_rate_str else 0.0
+            modules[filename] = (line_rate, branch_rate)
+        except (ValueError, TypeError) as e:
+            logger.warning("Could not parse rates for %s: %s", filename, e)
+            continue
+
+    return modules
+
+
 def check_coverage(threshold: float, path: str, coverage_file: Path) -> bool:
     """Check if coverage meets threshold.
 
@@ -242,6 +295,49 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Check per-module floors if configured
+    modules_config = config.get("coverage", {}).get("modules", {})
+    if modules_config:
+        try:
+            module_coverage = parse_module_coverage(args.coverage_file)
+        except (FileNotFoundError, RuntimeError) as e:
+            if args.json:
+                emit_json_status(1, message=f"Could not parse module coverage: {e}")
+            else:
+                print(f"\nERROR: Could not parse module coverage: {e}", file=sys.stderr)
+            return 1
+
+        # Check each configured module
+        all_modules_pass = True
+        for module_path in modules_config:
+            module_threshold = get_module_threshold(module_path, config)
+            if module_path not in module_coverage:
+                # Module is configured but not found in the coverage report — fail loudly
+                if not args.json:
+                    print(
+                        f"\nERROR: Module {module_path} expected in coverage report but not found",
+                        file=sys.stderr,
+                    )
+                all_modules_pass = False
+                continue
+
+            line_rate, branch_rate = module_coverage[module_path]
+            # Use branch rate for comparison if available, otherwise line rate
+            coverage_metric = branch_rate if branch_rate > 0 else line_rate
+            if coverage_metric < module_threshold:
+                if not args.json:
+                    print(
+                        f"\nModule {module_path}: {coverage_metric:.2f}% "
+                        f"(below threshold of {module_threshold:.2f}%)",
+                        file=sys.stderr,
+                    )
+                all_modules_pass = False
+            elif not args.json and args.verbose:
+                print(f"  {module_path}: {coverage_metric:.2f}% ✓")
+
+        if not all_modules_pass:
+            return 1
 
     if args.json:
         coverage_value = parse_coverage_report(args.coverage_file)

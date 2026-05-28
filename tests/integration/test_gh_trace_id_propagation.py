@@ -2,10 +2,7 @@
 """Integration test for GH_TRACE_ID environment variable propagation."""
 
 import os
-import subprocess
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -25,7 +22,8 @@ def _fake_binary_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     # Create a fake 'gh' script that outputs environment
     fake_gh = fake_bin_dir / "gh"
     fake_gh.write_text(
-        "#!/bin/sh\n(env | grep -q '^GH_TRACE_ID=' && env | grep '^GH_TRACE_ID=') || echo 'NO_GH_TRACE_ID'\n",
+        "#!/bin/sh\n"
+        "(env | grep -q '^GH_TRACE_ID=' && env | grep '^GH_TRACE_ID=') || echo 'NO_GH_TRACE_ID'\n",
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -33,7 +31,8 @@ def _fake_binary_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     # Create a fake 'git' script that outputs environment
     fake_git = fake_bin_dir / "git"
     fake_git.write_text(
-        "#!/bin/sh\n(env | grep -q '^GH_TRACE_ID=' && env | grep '^GH_TRACE_ID=') || echo 'NO_GH_TRACE_ID'\n",
+        "#!/bin/sh\n"
+        "(env | grep -q '^GH_TRACE_ID=' && env | grep '^GH_TRACE_ID=') || echo 'NO_GH_TRACE_ID'\n",
         encoding="utf-8",
     )
     fake_git.chmod(0o755)
@@ -112,7 +111,7 @@ class TestGhTraceIdPropagation:
         assert "NO_GH_TRACE_ID" in result.stdout
 
     def test_custom_env_dict_preserved(self) -> None:
-        """When a custom env dict is passed to run_subprocess, GH_TRACE_ID should be injected into it."""
+        """Verify GH_TRACE_ID is injected into a custom env dict passed to run_subprocess."""
         custom_env = {"CUSTOM_VAR": "custom_value"}
 
         with correlation_id_scope("custom-trace-id"):

@@ -2,19 +2,17 @@
 """Tests for CircuitBreaker wrapping of _gh_call."""
 
 import subprocess
+from collections.abc import Generator
 from unittest.mock import Mock, patch
 
 import pytest
 
-from hephaestus.automation.github_api import GitHubUnavailableError, _gh_call
-from hephaestus.resilience.circuit_breaker import reset_all_circuit_breakers
+import hephaestus.automation.github_api as github_api_module
 
 
 @pytest.fixture(autouse=True)
-def _reset_breaker() -> None:  # type: ignore[misc]
+def _reset_breaker() -> Generator[None, None, None]:
     """Reset the GitHub API circuit breaker before each test."""
-    # Import and reset the module's _GH_BREAKER directly
-    import hephaestus.automation.github_api as github_api_module
     github_api_module._GH_BREAKER.reset()
     yield
     github_api_module._GH_BREAKER.reset()
@@ -32,16 +30,16 @@ class TestGhCallCircuitBreaker:
         )
 
         # First 5 calls should fail with CalledProcessError (not caught by breaker)
-        for i in range(5):
+        for _i in range(5):
             with pytest.raises(subprocess.CalledProcessError):
-                _gh_call(["issue", "list"])
+                github_api_module._gh_call(["issue", "list"])
 
         # Verify the mock was called 5 times
         assert mock_impl.call_count == 5
 
         # 6th call should fail with GitHubUnavailableError (circuit now OPEN)
-        with pytest.raises(GitHubUnavailableError):
-            _gh_call(["issue", "list"])
+        with pytest.raises(github_api_module.GitHubUnavailableError):
+            github_api_module._gh_call(["issue", "list"])
 
         # Circuit is open: mock should NOT be called again (fail-fast)
         assert mock_impl.call_count == 5
@@ -56,15 +54,15 @@ class TestGhCallCircuitBreaker:
         # Trigger 5 failures to open the breaker
         for _ in range(5):
             with pytest.raises(subprocess.CalledProcessError):
-                _gh_call(["issue", "list"])
+                github_api_module._gh_call(["issue", "list"])
 
         # The error raised when breaker is open should be a RuntimeError
         with pytest.raises(RuntimeError):
-            _gh_call(["issue", "list"])
+            github_api_module._gh_call(["issue", "list"])
 
         # And specifically a GitHubUnavailableError
-        with pytest.raises(GitHubUnavailableError):
-            _gh_call(["issue", "list"])
+        with pytest.raises(github_api_module.GitHubUnavailableError):
+            github_api_module._gh_call(["issue", "list"])
 
     @patch("hephaestus.automation.github_api._gh_call_impl")
     def test_circuit_breaker_recovery_after_timeout(self, mock_impl: Mock) -> None:
@@ -73,7 +71,6 @@ class TestGhCallCircuitBreaker:
         Note: This test uses time mocking to avoid a 60-second sleep.
         """
         import time
-        from unittest.mock import MagicMock
 
         # Simulate failure
         mock_impl.side_effect = subprocess.CalledProcessError(
@@ -83,16 +80,13 @@ class TestGhCallCircuitBreaker:
         # Trigger 5 failures to open the breaker
         for _ in range(5):
             with pytest.raises(subprocess.CalledProcessError):
-                _gh_call(["issue", "list"])
+                github_api_module._gh_call(["issue", "list"])
 
         # Verify breaker is open
-        with pytest.raises(GitHubUnavailableError):
-            _gh_call(["issue", "list"])
+        with pytest.raises(github_api_module.GitHubUnavailableError):
+            github_api_module._gh_call(["issue", "list"])
 
         # Now simulate recovery by mocking the breaker's internal time check.
-        # We need to access the actual breaker instance to manipulate its state.
-        from hephaestus.automation.github_api import _GH_BREAKER
-
         # Mock time.monotonic to simulate timeout passage
         original_monotonic = time.monotonic
         elapsed_time = 0.0
@@ -111,11 +105,11 @@ class TestGhCallCircuitBreaker:
             )
 
             # Call should succeed (breaker in HALF_OPEN allows 2 calls)
-            result = _gh_call(["issue", "list"])
+            result = github_api_module._gh_call(["issue", "list"])
             assert result.returncode == 0
 
             # Another call should also succeed and fully close the breaker
-            result = _gh_call(["issue", "list"])
+            result = github_api_module._gh_call(["issue", "list"])
             assert result.returncode == 0
 
     @patch("hephaestus.automation.github_api._gh_call_impl")
@@ -128,7 +122,7 @@ class TestGhCallCircuitBreaker:
 
         # Multiple successful calls should work fine
         for _ in range(10):
-            result = _gh_call(["issue", "list"])
+            result = github_api_module._gh_call(["issue", "list"])
             assert result == expected_result
 
         # Mock should be called each time (breaker closed)
@@ -143,7 +137,7 @@ class TestGhCallCircuitBreaker:
         mock_impl.return_value = expected_result
 
         # Call with custom arguments
-        result = _gh_call(
+        result = github_api_module._gh_call(
             ["issue", "list"],
             check=False,
             retry_on_rate_limit=False,

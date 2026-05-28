@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for correlation ID context variable functionality."""
 
-import threading
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -15,7 +15,7 @@ from hephaestus.logging.utils import (
 
 
 @pytest.fixture(autouse=True)
-def _reset_correlation_id() -> None:
+def _reset_correlation_id() -> Generator[None, None, None]:
     """Reset correlation ID to None before each test."""
     token = _correlation_id_var.set(None)
     try:
@@ -140,6 +140,7 @@ class TestCorrelationIdThreadIsolation:
             try:
                 # Sleep to ensure threads overlap
                 import time
+
                 time.sleep(0.01)
                 results[thread_id] = get_current_correlation_id()
             finally:
@@ -159,6 +160,7 @@ class TestCorrelationIdThreadIsolation:
         outer_token = set_correlation_id("outer-id")
 
         try:
+
             def set_in_thread() -> str | None:
                 inner_token = set_correlation_id("inner-id")
                 try:

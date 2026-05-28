@@ -112,6 +112,10 @@ class WorkerResult(BaseModel):
     # PR is handled by the later review-prs / address-review / drive-green
     # phases. Not a failure.
     already_has_pr: bool = False
+    # Set True when the reviewer short-circuited (plan already APPROVED, or no
+    # plan comment yet); the issue was not reviewed this pass and does not
+    # count as work for loop convergence (#613).
+    already_reviewed: bool = False
 
 
 class PlanResult(BaseModel):

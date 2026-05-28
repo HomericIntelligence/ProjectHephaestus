@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-import subprocess
 
 import pytest
 
@@ -563,8 +563,9 @@ class TestTimeoutHandling:
         """get_pixi_packages uses METADATA_TIMEOUT."""
         from hephaestus.utils.helpers import METADATA_TIMEOUT
 
+        pixi_out = '[{"name": "pkg", "version": "1.0"}]'
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout='[{"name": "pkg", "version": "1.0"}]')
+            mock_run.return_value = MagicMock(returncode=0, stdout=pixi_out)
             get_pixi_packages()
             assert mock_run.called
             call_kwargs = mock_run.call_args[1]

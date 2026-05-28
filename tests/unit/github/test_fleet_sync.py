@@ -328,9 +328,7 @@ class TestTimeoutHandling:
         # Should get email from second attempt (after timeout)
         assert get_resign_email() == "alice@example.com"
 
-    def test_get_resign_email_uses_metadata_timeout(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_get_resign_email_uses_metadata_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """get_resign_email uses METADATA_TIMEOUT."""
         monkeypatch.delenv("FLEET_GIT_EMAIL", raising=False)
 

@@ -92,8 +92,7 @@ class TestExtractVerdictContext:
 
     def test_prefers_verdict_line_over_first_content_line(self) -> None:
         body = (
-            f"{PLAN_REVIEW_PREFIX}\n\nFirst line of content.\n"
-            "More details.\n**Verdict: BLOCK**\n"
+            f"{PLAN_REVIEW_PREFIX}\n\nFirst line of content.\nMore details.\n**Verdict: BLOCK**\n"
         )
         context = _extract_verdict_context(body)
         assert "Verdict: BLOCK" in context
@@ -120,9 +119,7 @@ class TestExtractVerdictContext:
 # ---------------------------------------------------------------------------
 
 
-def _review_comment(
-    verdict: str | None, url: str | None = None
-) -> dict[str, Any]:
+def _review_comment(verdict: str | None, url: str | None = None) -> dict[str, Any]:
     if verdict is None:
         body = f"{PLAN_REVIEW_PREFIX}\n\nMalformed review with no verdict line.\n"
     else:
@@ -183,9 +180,7 @@ class TestIsPlanReviewApprovedWithComments:
         comments = [_plan_comment(), _review_comment(None)]
         assert is_plan_review_approved(123, comments=comments) is False
 
-    def test_enriched_logging_includes_verdict_context_and_url(
-        self, caplog: Any
-    ) -> None:
+    def test_enriched_logging_includes_verdict_context_and_url(self, caplog: Any) -> None:
         """Not-APPROVED logs should include verdict context and URL."""
         import logging
 

@@ -1,6 +1,7 @@
 """Tests for git utility functions."""
 
 import subprocess
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
@@ -19,7 +20,7 @@ from hephaestus.automation.git_utils import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_caches() -> None:
+def _clear_caches() -> Generator[None, None, None]:
     """Clear repo caches before each test to avoid cross-test interference."""
     clear_repo_caches()
     yield
@@ -145,9 +146,7 @@ class TestGetRepoInfo:
 
     @patch("hephaestus.automation.git_utils.run")
     @patch("hephaestus.automation.git_utils.get_repo_root")
-    def test_clear_repo_caches_forces_re_detection(
-        self, mock_get_root: Any, mock_run: Any
-    ) -> None:
+    def test_clear_repo_caches_forces_re_detection(self, mock_get_root: Any, mock_run: Any) -> None:
         """Test that clear_repo_caches forces re-detection on next call."""
         repo_root = Path("/home/user/repo")
         mock_get_root.return_value = repo_root

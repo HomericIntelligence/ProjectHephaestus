@@ -93,13 +93,13 @@ def _extract_verdict_context(review_body: str) -> str:
         if "Verdict:" in line:
             preview = line.strip()
             if preview:
-                return preview[: _VERDICT_LOG_PREVIEW_CHARS]
+                return preview[:_VERDICT_LOG_PREVIEW_CHARS]
 
     # Fall back to first non-prefix content line
     for line in lines:
         stripped = line.strip()
         if stripped and not stripped.startswith(PLAN_REVIEW_PREFIX):
-            return stripped[: _VERDICT_LOG_PREVIEW_CHARS]
+            return stripped[:_VERDICT_LOG_PREVIEW_CHARS]
 
     return ""
 

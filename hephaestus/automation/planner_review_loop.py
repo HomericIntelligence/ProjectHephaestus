@@ -22,9 +22,11 @@ from .claude_invoke import parse_review_verdict
 from .claude_models import learn_model, planner_model, reviewer_model
 from .claude_timeouts import planner_claude_timeout
 from .git_utils import issue_ref
-from .github_api import gh_issue_json
+from .github_api import gh_issue_json, gh_issue_upsert_comment
+from .models import PLAN_COMMENT_MARKER
 from .prompts import get_plan_loop_review_prompt, get_plan_prompt
-from .session_naming import AGENT_LEARNINGS, AGENT_PLAN_REVIEWER, AGENT_PLANNER
+from .review_state import PLAN_REVIEW_PREFIX
+from .session_naming import AGENT_PLAN_REVIEWER, AGENT_PLANNER, reviewer_agent
 
 logger = logging.getLogger(__name__)
 
@@ -143,9 +145,16 @@ class PlanReviewLoop:
         """Run the bounded review loop for a single issue.
 
         Pre-fetches the issue and runs advise once, then iterates:
-        plan → capture learnings → independent review (fresh session, with
-        pr-review-strict rubric) → check verdict. Terminates on the first
-        unambiguous GO or after :data:`MAX_REVIEW_ITERATIONS`.
+        plan → upsert PLAN comment → capture learnings → independent review
+        (fresh session, with pr-review-strict rubric) → upsert REVIEW comment →
+        check verdict. Terminates on the first unambiguous GO or after
+        :data:`MAX_REVIEW_ITERATIONS`.
+
+        Each iteration upserts the plan and the review in place (one comment
+        per role), so the issue holds at most one ``# Implementation Plan`` and
+        one ``## 🔍 Plan Review`` comment at all times — never the 8-10
+        appended duplicates that previously caused the reviewer to review its
+        own prior review (#455/#468/#484).
 
         Args:
             issue_number: GitHub issue number.
@@ -188,6 +197,13 @@ class PlanReviewLoop:
                 cached_issue_data=issue_data,
             )
 
+            # Upsert the single long-lived PLAN comment for this iteration so
+            # the issue always holds exactly one ``# Implementation Plan``
+            # comment instead of accumulating one per re-plan (#455/#468/#484).
+            self._upsert_plan_comment(
+                issue_number, plan, re_planned=prior_review_for_plan is not None
+            )
+
             self.status_tracker.update_slot(
                 slot_id, f"{issue_ref(issue_number)}: capturing learnings [R{iteration}]"
             )
@@ -205,6 +221,11 @@ class PlanReviewLoop:
                 iteration=iteration,
                 prior_review=review_text,
             )
+
+            # Upsert the single long-lived REVIEW comment for this iteration so
+            # the reviewer never re-reviews a stale verdict and the issue holds
+            # exactly one ``## 🔍 Plan Review`` comment.
+            self._upsert_review_comment(issue_number, review_text)
 
             verdict = parse_review_verdict(review_text)
             logger.info(
@@ -235,6 +256,79 @@ class PlanReviewLoop:
             )
 
         return plan, review_text, iterations_run, final_verdict_is_go
+
+    def _upsert_plan_comment(self, issue_number: int, plan: str, *, re_planned: bool) -> None:
+        """Upsert the single PLAN comment for the current iteration.
+
+        Ensures the issue holds exactly one ``# Implementation Plan`` comment,
+        updated in place rather than appended. The body is normalised so it
+        always begins with :data:`PLAN_COMMENT_MARKER` (the upsert helper keys
+        off ``body.startswith(marker)``), prepending the marker when the model
+        output omits it. When this plan is a re-plan driven by a prior NOGO
+        review (``re_planned`` is ``True``), a ``## Changes from review``
+        section is guaranteed to be present so the upserted plan documents what
+        changed — a short generic note is appended as a defensive fallback if
+        the model did not already include the section.
+
+        Posting failure is non-fatal: it is logged as a warning and the loop
+        continues, mirroring the fail-safe style of the rest of this module.
+
+        Args:
+            issue_number: GitHub issue number.
+            plan: The plan text returned by ``_generate_plan``.
+            re_planned: ``True`` when a prior review drove this re-plan, which
+                requires the ``## Changes from review`` section.
+
+        """
+        body = (
+            plan
+            if plan.lstrip().startswith(PLAN_COMMENT_MARKER)
+            else f"{PLAN_COMMENT_MARKER}\n\n{plan}"
+        )
+        if re_planned and "\n## Changes from review" not in f"\n{body}":
+            body = (
+                f"{body.rstrip()}\n\n## Changes from review\n\n"
+                "This plan was revised to address the prior reviewer critique.\n"
+            )
+        try:
+            gh_issue_upsert_comment(issue_number, PLAN_COMMENT_MARKER, body)
+        except Exception as e:
+            logger.warning(
+                "%s: failed to upsert plan comment (non-fatal): %s",
+                issue_ref(issue_number),
+                e,
+            )
+
+    def _upsert_review_comment(self, issue_number: int, review_text: str) -> None:
+        """Upsert the single REVIEW comment for the current iteration.
+
+        Ensures the issue holds exactly one ``## 🔍 Plan Review`` comment,
+        updated in place rather than appended. The body is normalised so it
+        always begins with :data:`PLAN_REVIEW_PREFIX` (the upsert helper keys
+        off ``body.startswith(marker)``), prepending the prefix when the model
+        output omits it.
+
+        Posting failure is non-fatal: it is logged as a warning and the loop
+        continues, mirroring the fail-safe style of the rest of this module.
+
+        Args:
+            issue_number: GitHub issue number.
+            review_text: The review text returned by ``_run_plan_review``.
+
+        """
+        body = (
+            review_text
+            if review_text.lstrip().startswith(PLAN_REVIEW_PREFIX)
+            else f"{PLAN_REVIEW_PREFIX}\n\n{review_text}"
+        )
+        try:
+            gh_issue_upsert_comment(issue_number, PLAN_REVIEW_PREFIX, body)
+        except Exception as e:
+            logger.warning(
+                "%s: failed to upsert review comment (non-fatal): %s",
+                issue_ref(issue_number),
+                e,
+            )
 
     def generate_plan(
         self,
@@ -323,10 +417,14 @@ class PlanReviewLoop:
     def capture_planner_learnings(self, issue_number: int, plan: str) -> str:
         """Ask Claude to summarize what the planner just learned.
 
-        These learnings are passed to the reviewer alongside the plan, giving
-        the reviewer extra signal about which aspects the planner is most/least
-        confident in. Failure here is non-fatal — return empty string and let
-        the review proceed without learnings.
+        Resumes the planner's own session (``AGENT_PLANNER``) rather than
+        opening a separate learnings session, so the model still "remembers"
+        the plan it just wrote and can introspect its own reasoning rather
+        than re-reading the plan cold. These learnings are passed to the
+        reviewer alongside the plan, giving the reviewer extra signal about
+        which aspects the planner is most/least confident in. Failure here is
+        non-fatal — return empty string and let the review proceed without
+        learnings.
 
         Uses ``learn_model()`` (Haiku by default) per the per-phase model
         selection in :mod:`hephaestus.automation.claude_models`.
@@ -355,7 +453,7 @@ class PlanReviewLoop:
             return self.planner._call_claude(
                 prompt,
                 model=learn_model(),
-                agent=AGENT_LEARNINGS,
+                agent=AGENT_PLANNER,
                 issue_number=issue_number,
                 timeout=120,
             )
@@ -380,9 +478,10 @@ class PlanReviewLoop:
 
         The reviewer's session is distinct from the planner's (different
         ``agent`` string in the session UUID) so it stays unbiased by the
-        planner's internal state, but it resumes itself across review
-        iterations so successive critiques compound. Uses ``reviewer_model()``
-        (Sonnet by default).
+        planner's internal state. Each iteration also uses a *fresh* reviewer
+        session via :func:`reviewer_agent` (the ``-r{iteration}`` token) so the
+        reviewer never inherits — and therefore never re-reviews — its own prior
+        verdict. Uses ``reviewer_model()`` (Sonnet by default).
 
         Args:
             issue_number: GitHub issue number.
@@ -411,7 +510,7 @@ class PlanReviewLoop:
             return self.planner._call_claude(
                 prompt,
                 model=reviewer_model(),
-                agent=AGENT_PLAN_REVIEWER,
+                agent=reviewer_agent(AGENT_PLAN_REVIEWER, iteration),
                 issue_number=issue_number,
                 timeout=planner_claude_timeout(),
             )

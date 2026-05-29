@@ -139,11 +139,21 @@ def test_continuation_phase_resumes_implementer_session(module_file: str) -> Non
 def test_planner_module_uses_its_expected_agents() -> None:
     """planner.py drives multiple call sites with distinct agents.
 
-    AGENT_PLANNER       — main planning call
-    AGENT_ADVISE        — pre-plan advice call
-    AGENT_LEARNINGS     — post-plan learnings capture
-    AGENT_PLAN_REVIEWER — in-process plan-review call (separate from the
-                          standalone plan_reviewer.py phase module)
+    Stage 1 (#455/#468/#484) changed two of these:
+
+    AGENT_PLANNER       — main planning call AND post-plan learnings capture.
+                          Learnings now RESUME the planner's own session (it
+                          previously opened a separate AGENT_LEARNINGS session)
+                          so the model still "remembers" the plan it wrote.
+    AGENT_ADVISE        — pre-plan advice call.
+    AGENT_PLAN_REVIEWER — in-process plan-review call, now wrapped in
+                          ``reviewer_agent(AGENT_PLAN_REVIEWER, iteration)`` so
+                          the reviewer gets a FRESH session every iteration and
+                          never re-reviews its own prior verdict. Because of the
+                          wrapper there is no bare ``agent=AGENT_PLAN_REVIEWER``
+                          assignment — see the dedicated assertion below.
+
+    AGENT_LEARNINGS is intentionally NO LONGER used by the planner.
     """
     # The planner package was split (#598): the strict review loop lives in
     # planner_review_loop.py. Scan both source files for AGENT_* wiring so the
@@ -152,10 +162,20 @@ def test_planner_module_uses_its_expected_agents() -> None:
         AUTOMATION_DIR / "planner_review_loop.py"
     ).read_text()
     found = set(re.findall(r"\bagent\s*=\s*(AGENT_[A-Z_]+)\b", src))
+    # Bare ``agent=AGENT_*`` assignments after Stage 1.
     expected = {
         "AGENT_PLANNER",
         "AGENT_ADVISE",
-        "AGENT_LEARNINGS",
-        "AGENT_PLAN_REVIEWER",
     }
     assert found == expected, f"planner agent wiring drifted: found={found}, expected={expected}"
+
+    # The reviewer call must use the fresh-per-iteration wrapper, not a bare
+    # ``agent=AGENT_PLAN_REVIEWER`` (which would resume the same session).
+    assert re.search(r"\bagent\s*=\s*reviewer_agent\(\s*AGENT_PLAN_REVIEWER\s*,", src), (
+        "in-loop reviewer must use agent=reviewer_agent(AGENT_PLAN_REVIEWER, iteration)"
+    )
+
+    # AGENT_LEARNINGS must no longer be wired into any planner call.
+    assert "AGENT_LEARNINGS" not in found, (
+        "learnings capture must resume AGENT_PLANNER, not open an AGENT_LEARNINGS session"
+    )

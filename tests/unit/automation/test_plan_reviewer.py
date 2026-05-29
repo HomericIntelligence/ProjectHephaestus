@@ -85,7 +85,7 @@ class TestGetLatestPlan:
         """_get_latest_plan returns plan text from matching comment."""
         comments = [
             {"body": "Some other comment"},
-            {"body": "## Implementation Plan\n\nStep 1: Do something\nStep 2: Do more"},
+            {"body": "# Implementation Plan\n\nStep 1: Do something\nStep 2: Do more"},
         ]
         with patch("hephaestus.automation.plan_reviewer._gh_call") as mock_gh:
             mock_gh.return_value = _make_gh_result({"comments": comments})
@@ -97,8 +97,8 @@ class TestGetLatestPlan:
     def test_get_latest_plan_returns_last_plan(self, reviewer: PlanReviewer) -> None:
         """_get_latest_plan returns the LAST plan comment when multiple exist."""
         comments = [
-            {"body": "## Implementation Plan\n\nFirst plan"},
-            {"body": "## Implementation Plan\n\nSecond plan (updated)"},
+            {"body": "# Implementation Plan\n\nFirst plan"},
+            {"body": "# Implementation Plan\n\nSecond plan (updated)"},
         ]
         with patch("hephaestus.automation.plan_reviewer._gh_call") as mock_gh:
             mock_gh.return_value = _make_gh_result({"comments": comments})

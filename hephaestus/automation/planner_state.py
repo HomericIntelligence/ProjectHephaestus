@@ -6,8 +6,8 @@ Owns the cheap, idempotent state queries the planner runs against GitHub:
   call per 100 issues via :func:`prefetch_issue_states`).
 - ``prefetch_comments()`` — batch-fetch all issue comments in one aliased
   GraphQL call and store them in an internal cache (#616).
-- ``has_existing_plan()`` — return ``True`` when an issue already carries one
-  of the canonical plan-comment markers (uses the cache when available).
+- ``has_existing_plan()`` — return ``True`` when an issue already carries the
+  canonical plan-comment marker (uses the cache when available).
 
 Extracted from ``planner.py`` (#598) so the coordinator class stays focused
 on the worker-pool driver. No behavior change.
@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from .git_utils import issue_ref
 from .github_api import _gh_call, prefetch_issue_states
-from .models import PLAN_COMMENT_MARKER, PLAN_COMMENT_MARKERS
+from .models import PLAN_COMMENT_MARKER
 from .review_state import PLAN_REVIEW_PREFIX, fetch_all_issue_comments_graphql
 
 if TYPE_CHECKING:
@@ -43,9 +43,7 @@ def _comments_contain_plan(comments: list[dict[str, Any]]) -> bool:
         stripped = comment.get("body", "").lstrip()
         if stripped.startswith(PLAN_REVIEW_PREFIX):
             continue
-        if stripped.startswith(PLAN_COMMENT_MARKER) or any(
-            stripped.startswith(marker) for marker in PLAN_COMMENT_MARKERS
-        ):
+        if stripped.startswith(PLAN_COMMENT_MARKER):
             return True
     return False
 

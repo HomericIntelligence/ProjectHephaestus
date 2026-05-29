@@ -25,7 +25,7 @@ from .git_utils import issue_ref
 from .github_api import gh_issue_json, gh_issue_upsert_comment
 from .models import PLAN_COMMENT_MARKER
 from .prompts import get_plan_loop_review_prompt, get_plan_prompt
-from .review_state import PLAN_REVIEW_PREFIX
+from .review_state import PLAN_REVIEW_PREFIX, VERDICT_APPROVED, VERDICT_REVISE
 from .session_naming import AGENT_PLAN_REVIEWER, AGENT_PLANNER, reviewer_agent
 
 logger = logging.getLogger(__name__)
@@ -222,11 +222,6 @@ class PlanReviewLoop:
                 prior_review=review_text,
             )
 
-            # Upsert the single long-lived REVIEW comment for this iteration so
-            # the reviewer never re-reviews a stale verdict and the issue holds
-            # exactly one ``## 🔍 Plan Review`` comment.
-            self._upsert_review_comment(issue_number, review_text)
-
             verdict = parse_review_verdict(review_text)
             logger.info(
                 "%s R%s: Verdict=%s Grade=%s",
@@ -235,6 +230,14 @@ class PlanReviewLoop:
                 verdict.verdict,
                 verdict.grade or "?",
             )
+
+            # Upsert the single long-lived REVIEW comment for this iteration so
+            # the reviewer never re-reviews a stale verdict and the issue holds
+            # exactly one ``## 🔍 Plan Review`` comment. The loop reviewer speaks
+            # GO/NOGO, but the implementer's gate (is_plan_review_approved) reads
+            # the APPROVED/REVISE/BLOCK vocabulary via review_state.VERDICT_LINE_RE,
+            # so the comment carries a canonical verdict line bridging the two.
+            self._upsert_review_comment(issue_number, review_text, verdict.is_go)
 
             if verdict.is_go:
                 logger.info(
@@ -299,7 +302,7 @@ class PlanReviewLoop:
                 e,
             )
 
-    def _upsert_review_comment(self, issue_number: int, review_text: str) -> None:
+    def _upsert_review_comment(self, issue_number: int, review_text: str, is_go: bool) -> None:
         """Upsert the single REVIEW comment for the current iteration.
 
         Ensures the issue holds exactly one ``## 🔍 Plan Review`` comment,
@@ -308,12 +311,21 @@ class PlanReviewLoop:
         off ``body.startswith(marker)``), prepending the prefix when the model
         output omits it.
 
+        The loop reviewer's prose ends in a ``Verdict: GO|NOGO`` line, but the
+        implementer's gate (:func:`is_plan_review_approved`) reads the
+        ``**Verdict: APPROVED|REVISE|BLOCK**`` vocabulary via
+        :data:`review_state.VERDICT_LINE_RE`. We append a canonical bold verdict
+        line (GO→APPROVED, NOGO→REVISE) so the gate sees an authoritative,
+        machine-readable verdict — :data:`VERDICT_LINE_RE` takes the LAST match,
+        so the appended line wins regardless of the prose above it.
+
         Posting failure is non-fatal: it is logged as a warning and the loop
         continues, mirroring the fail-safe style of the rest of this module.
 
         Args:
             issue_number: GitHub issue number.
             review_text: The review text returned by ``_run_plan_review``.
+            is_go: Whether the loop verdict was an unambiguous GO.
 
         """
         body = (
@@ -321,6 +333,8 @@ class PlanReviewLoop:
             if review_text.lstrip().startswith(PLAN_REVIEW_PREFIX)
             else f"{PLAN_REVIEW_PREFIX}\n\n{review_text}"
         )
+        canonical = VERDICT_APPROVED if is_go else VERDICT_REVISE
+        body = f"{body.rstrip()}\n\n**Verdict: {canonical}**\n"
         try:
             gh_issue_upsert_comment(issue_number, PLAN_REVIEW_PREFIX, body)
         except Exception as e:

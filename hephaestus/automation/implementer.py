@@ -524,6 +524,7 @@ class IssueImplementer:
         slot_id: int | None,
         thread_id: int | None,
         state: ImplementationState | None = None,
+        pr_number: int | None = None,
     ) -> tuple[int, str | None, str | None]:
         """Run the bounded review loop for an implementation."""
         return self.phase_runner._run_impl_review_loop(
@@ -536,6 +537,49 @@ class IssueImplementer:
             slot_id=slot_id,
             thread_id=thread_id,
             state=state,
+            pr_number=pr_number,
+        )
+
+    def _run_impl_review_step(
+        self,
+        *,
+        issue_number: int,
+        issue_title: str,
+        issue_body: str,
+        branch_name: str,
+        worktree_path: Path,
+        pr_number: int | None,
+        iteration: int,
+        prior_review: str | None,
+    ) -> tuple[str, list[str]]:
+        """Run one in-loop review (posts inline PR threads) and return its verdict."""
+        return self.phase_runner._run_impl_review_step(
+            issue_number=issue_number,
+            issue_title=issue_title,
+            issue_body=issue_body,
+            branch_name=branch_name,
+            worktree_path=worktree_path,
+            pr_number=pr_number,
+            iteration=iteration,
+            prior_review=prior_review,
+        )
+
+    def _run_address_review_step(
+        self,
+        *,
+        issue_number: int,
+        pr_number: int,
+        branch_name: str,
+        worktree_path: Path,
+        iteration: int,
+    ) -> bool:
+        """Address the posted PR threads in-loop, resuming Session 2."""
+        return self.phase_runner._run_address_review_step(
+            issue_number=issue_number,
+            pr_number=pr_number,
+            branch_name=branch_name,
+            worktree_path=worktree_path,
+            iteration=iteration,
         )
 
     def _resume_impl_with_feedback(

@@ -280,6 +280,7 @@ class TestPlanReviewVerdictGate:
                 return_value=gate_return,
             ),
             # Everything past the gate — only reached when gate returns True.
+            patch.object(impl, "_run_advise", return_value="<!-- advise step skipped: test -->"),
             patch.object(impl, "_run_claude_code", return_value="sess-1"),
             patch.object(
                 impl,
@@ -467,6 +468,7 @@ class TestExistingPrSkipsImplementation:
                 "hephaestus.automation.implementer.is_plan_review_approved",
                 return_value=True,
             ),
+            patch.object(impl, "_run_advise", return_value="<!-- advise step skipped: test -->"),
             patch.object(impl, "_run_claude_code", return_value="sess-1"),
             patch.object(impl, "_run_impl_review_loop", return_value=(1, "GO", "A")),
             patch.object(impl, "_finalize_pr", return_value=999),

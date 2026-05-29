@@ -147,6 +147,7 @@ class ImplementerOptions(BaseModel):
     skip_closed: bool = True
     auto_merge: bool = True
     dry_run: bool = False
+    enable_advise: bool = True
     enable_learn: bool = True
     enable_follow_up: bool = True
     enable_ui: bool = True
@@ -227,10 +228,12 @@ class CIDriverOptions(BaseModel):
     agent: str = "claude"
     max_workers: int = 3
     dry_run: bool = False
+    enable_advise: bool = True
+    enable_learn: bool = True
     enable_ui: bool = True
     verbose: bool = False
     max_fix_iterations: int = 1  # number of fix attempts before giving up
-    force_merge_on_stall: bool = False  # attempt squash-merge fallback if rebase auto-merge fails
+    force_merge_on_stall: bool = False  # attempt squash-merge fallback if auto-merge fails
 
 
 class DependencyGraph(BaseModel):

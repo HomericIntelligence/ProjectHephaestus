@@ -31,13 +31,15 @@ from hephaestus.agents.runtime import (
 from hephaestus.cli.utils import add_json_arg, emit_json_status
 
 from ._review_utils import find_pr_for_issue
+from .advise_runner import run_advise
 from .claude_invoke import invoke_claude_with_session
-from .claude_models import implementer_model, learn_model
+from .claude_models import advise_model, implementer_model, learn_model
 from .claude_timeouts import ci_driver_claude_timeout, learn_claude_timeout
 from .git_utils import get_repo_root, get_repo_slug, issue_ref, pr_ref, run
-from .github_api import _gh_call, gh_pr_checks
+from .github_api import _gh_call, gh_issue_json, gh_pr_checks
 from .models import CIDriverOptions, WorkerResult
-from .session_naming import AGENT_CI_DRIVER, current_trunk_githash
+from .prompts import get_advise_prompt
+from .session_naming import AGENT_ADVISE, AGENT_CI_DRIVER, current_trunk_githash
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
@@ -344,6 +346,51 @@ class CIDriver:
         finally:
             self.status_tracker.release_slot(acquired_slot)
 
+    def _run_advise(self, issue_number: int) -> str:
+        """Pull prior learnings from ProjectMnemosyne before the CI fix loop.
+
+        Stage 3's advise-first step. Runs under ``AGENT_ADVISE`` (its own cheap,
+        read-only session), gated by ``enable_advise``; the findings are
+        prepended to the CI fix-session prompt. Delegates the Mnemosyne setup +
+        prompt build to the shared :mod:`advise_runner`; any failure degrades to
+        a skip marker so the drive never aborts over missing advice.
+        """
+        issue_data = gh_issue_json(issue_number)
+        issue_title = issue_data.get("title", f"Issue #{issue_number}")
+        issue_body = issue_data.get("body", "")
+
+        def _invoke(prompt: str) -> str:
+            if is_codex(self.options.agent):
+                result = run_codex_session(
+                    prompt,
+                    cwd=self.repo_root,
+                    timeout=180,
+                    sandbox="read-only",
+                )
+                return (result.stdout or "").strip()
+            githash = current_trunk_githash(self.repo_root)
+            repo_slug = get_repo_slug(self.repo_root)
+            stdout, _ = invoke_claude_with_session(
+                repo=repo_slug,
+                issue=issue_number,
+                agent=AGENT_ADVISE,
+                githash=githash,
+                prompt=prompt,
+                model=advise_model(),
+                cwd=self.repo_root,
+                timeout=180,
+                output_format="text",
+            )
+            return (stdout or "").strip()
+
+        return run_advise(
+            issue_number=issue_number,
+            issue_title=issue_title,
+            issue_body=issue_body,
+            invoke=_invoke,
+            build_prompt=get_advise_prompt,
+        )
+
     def _attempt_ci_fixes(
         self,
         issue_number: int,
@@ -361,6 +408,16 @@ class CIDriver:
             WorkerResult on success or dry-run, None if all iterations failed.
 
         """
+        # Advise-first (#30): pull prior learnings once before the fix loop, so
+        # we only spend an advise call on PRs that actually need fixing. Fed
+        # into every fix-session prompt below.
+        advise_findings = ""
+        if self.options.enable_advise:
+            self.status_tracker.update_slot(
+                acquired_slot, f"{issue_ref(issue_number)}: advising"
+            )
+            advise_findings = self._run_advise(issue_number)
+
         for iteration in range(self.options.max_fix_iterations):
             self.status_tracker.update_slot(
                 acquired_slot,
@@ -384,7 +441,7 @@ class CIDriver:
                 f"{issue_ref(issue_number)}: running CI fix session (attempt {iteration + 1})",
             )
             fixed = self._run_ci_fix_session(
-                issue_number, pr_number, worktree_path, ci_logs, session_id
+                issue_number, pr_number, worktree_path, ci_logs, session_id, advise_findings
             )
             if fixed:
                 logger.info(
@@ -563,6 +620,7 @@ class CIDriver:
         worktree_path: Path,
         ci_logs: str,
         session_id: str | None,
+        advise_findings: str = "",
     ) -> bool:
         """Invoke Claude to fix CI failures, then push the result.
 
@@ -572,12 +630,21 @@ class CIDriver:
             worktree_path: Path to the checked-out worktree.
             ci_logs: Combined CI failure log text.
             session_id: Optional Claude session ID to resume.
+            advise_findings: Prior learnings from the advise step, prepended to
+                the prompt as context. Empty or a skip marker contributes nothing.
 
         Returns:
             True if the fix session succeeded and the branch was pushed.
 
         """
+        advise_block = ""
+        findings = advise_findings.strip()
+        if findings and not findings.startswith("<!-- advise step skipped"):
+            advise_block = (
+                "## Prior Learnings from Team Knowledge Base\n\n" f"{findings}\n\n" "---\n\n"
+            )
         prompt = (
+            f"{advise_block}"
             f"Fix the CI failures for PR {pr_ref(pr_number)} (issue {issue_ref(issue_number)}).\n\n"
             f"Working directory: {worktree_path}\n\n"
             f"CI failure logs:\n{ci_logs}\n\n"

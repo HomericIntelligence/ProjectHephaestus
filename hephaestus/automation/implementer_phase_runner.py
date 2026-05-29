@@ -43,11 +43,12 @@ from .address_review import (
     resolve_addressed_threads,
     run_address_fix_session,
 )
+from .advise_runner import run_advise
 from .claude_invoke import (
     SESSION_EXPIRED_PHRASES,
     parse_review_verdict,
 )
-from .claude_models import implementer_model, reviewer_model
+from .claude_models import advise_model, implementer_model, reviewer_model
 from .claude_timeouts import implementer_claude_timeout
 from .follow_up import parse_follow_up_items, run_follow_up_issues
 from .git_utils import issue_ref, pr_ref, run
@@ -61,6 +62,7 @@ from .models import (
 from .pr_manager import commit_changes, ensure_pr_created
 from .pr_reviewer import gather_impl_review_context, review_pr_inline
 from .prompts import (
+    get_advise_prompt,
     get_impl_loop_review_prompt,
     get_impl_resume_feedback_prompt,
     get_implementation_prompt,
@@ -80,6 +82,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 MAX_REVIEW_ITERATIONS = 3
+
+
+def _prepend_advise(advise_findings: str, prompt: str) -> str:
+    """Prepend advise findings as a context block to an implementation prompt.
+
+    Returns ``prompt`` unchanged when there are no real findings — an empty
+    string or an ``advise_runner.advise_skipped`` HTML-comment marker (which
+    records *why* advise produced nothing) carries no guidance worth injecting.
+    """
+    findings = advise_findings.strip()
+    if not findings or findings.startswith("<!-- advise step skipped"):
+        return prompt
+    return (
+        "## Prior Learnings from Team Knowledge Base\n\n"
+        f"{findings}\n\n"
+        "---\n\n"
+        f"{prompt}"
+    )
 
 
 def _claude_quota_reset_epoch(*texts: str) -> int | None:
@@ -313,33 +333,42 @@ class ImplementationPhaseRunner:
                     plan_review_not_approved=True,
                 )
 
-            # --- Stage 2 advise insertion point (#30, owned by another agent) ---
-            # The advise-first wiring runs HERE, immediately after the guards
-            # above and before the implementation session below. It must resume
-            # Session 2 (AGENT_IMPLEMENTER). Do not add the advise call in this
-            # task — leave this clean seam for the advise-first task.
-
             # Fetch issue info for context
             self.status_tracker.update_slot(slot_id, f"{issue_ref(issue_number)}: Fetching issue")
             with self.state_lock:
                 state.phase = ImplementationPhase.IMPLEMENTING
             impl._save_state(state)
 
-            # Run the selected implementation agent
             issue = self._impl_module.fetch_issue_info(issue_number)
+
+            # Advise-first (#30): pull prior learnings from ProjectMnemosyne
+            # before the implementation session. Runs under AGENT_ADVISE (its
+            # own cheap read-only session), gated by enable_advise; the findings
+            # are prepended to the implementation prompt context below.
+            advise_findings = ""
+            if self.options.enable_advise:
+                self.status_tracker.update_slot(
+                    slot_id, f"{issue_ref(issue_number)}: Advising"
+                )
+                advise_findings = impl._run_advise(issue_number, issue.title, issue.body)
+
+            # Run the selected implementation agent
             self.status_tracker.update_slot(
                 slot_id, f"{issue_ref(issue_number)}: Running {self.options.agent}"
             )
             session_id = impl._run_claude_code(
                 issue_number,
                 worktree_path,
-                get_implementation_prompt(
-                    issue_number=issue_number,
-                    issue_title=issue.title,
-                    issue_body=issue.body,
-                    branch_name=branch_name,
-                    worktree_path=str(worktree_path),
-                    repo_root=str(self.repo_root),
+                _prepend_advise(
+                    advise_findings,
+                    get_implementation_prompt(
+                        issue_number=issue_number,
+                        issue_title=issue.title,
+                        issue_body=issue.body,
+                        branch_name=branch_name,
+                        worktree_path=str(worktree_path),
+                        repo_root=str(self.repo_root),
+                    ),
                 ),
                 slot_id=slot_id,
             )
@@ -783,6 +812,50 @@ class ImplementationPhaseRunner:
             slot_id,
             agent=self.options.agent,
             session_agent=session_agent,
+        )
+
+    def _run_advise(self, issue_number: int, issue_title: str, issue_body: str) -> str:
+        """Search ProjectMnemosyne for prior learnings before implementing.
+
+        Stage 2's advise-first step. Runs under ``AGENT_ADVISE`` (a distinct,
+        cheap, read-only session) — NOT the implementer's Session 2 — so it
+        mirrors the planner's advise behavior and never pollutes the impl
+        transcript. The findings are prepended to the implementation prompt
+        context by the caller. Delegates the Mnemosyne setup + prompt build to
+        the shared :mod:`advise_runner`; any failure degrades to a skip marker.
+        """
+        _impl_mod = self._impl_module
+
+        def _invoke(prompt: str) -> str:
+            if is_codex(self.options.agent):
+                result = run_codex_text(
+                    prompt,
+                    cwd=self.repo_root,
+                    timeout=180,
+                    sandbox="read-only",
+                )
+                return (result.stdout or "").strip()
+            githash = _impl_mod.current_trunk_githash(self.repo_root)
+            repo_slug = _impl_mod.get_repo_slug(self.repo_root)
+            stdout, _ = _impl_mod.invoke_claude_with_session(
+                repo=repo_slug,
+                issue=issue_number,
+                agent=_impl_mod.AGENT_ADVISE,
+                githash=githash,
+                prompt=prompt,
+                model=advise_model(),
+                cwd=self.repo_root,
+                timeout=180,
+                output_format="text",
+            )
+            return (stdout or "").strip()
+
+        return run_advise(
+            issue_number=issue_number,
+            issue_title=issue_title,
+            issue_body=issue_body,
+            invoke=_invoke,
+            build_prompt=get_advise_prompt,
         )
 
     # ------------------------------------------------------------------

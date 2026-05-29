@@ -133,12 +133,20 @@ def test_self_agent_phase_passes_expected_agent_kwarg(
 def test_self_agent_phase_does_not_use_foreign_agent(
     module_file: str, expected_agent: str, companions: tuple[str, ...]
 ) -> None:
-    """A self-agent phase must not pass any other AGENT_* constant."""
+    """A self-agent phase must not resume any OTHER stage's session.
+
+    It may pass its own ``expected_agent`` and ``AGENT_ADVISE`` — every stage
+    opens its own cheap, read-only advise session as its first step (#30), which
+    is shared infrastructure, not a foreign stage's transcript. Resuming any
+    other stage's agent (e.g. the implementer landing on the planner's session)
+    would be the bug this guards against.
+    """
+    allowed = {expected_agent, "AGENT_ADVISE"}
     src = _read_phase_sources(module_file, companions)
     found = set(re.findall(r"\bagent\s*=\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)?(AGENT_[A-Z_]+)\b", src))
-    assert found <= {expected_agent}, (
+    assert found <= allowed, (
         f"{module_file} (and companions {companions}) uses unexpected AGENT_* "
-        f"constants: {found - {expected_agent}}; expected only {expected_agent}"
+        f"constants: {found - allowed}; expected only {allowed}"
     )
 
 
@@ -251,3 +259,32 @@ def test_per_iteration_reviewer_does_not_pin_foreign_agent(
         f"{module_file} pins unexpected AGENT_* constants via agent=: "
         f"{found - {base_agent}}; a reviewer module may only pin its own base {base_agent}"
     )
+
+
+# Advise-first (#30): each of the three stages opens its run with an /advise
+# step under AGENT_ADVISE, gated by ``enable_advise``. Each entry maps the
+# stage's source file(s) that must contain that wiring.
+ADVISE_FIRST_STAGES: list[tuple[str, tuple[str, ...]]] = [
+    # Stage 1: the planner runs advise once before the plan loop.
+    ("planner.py", ("planner_review_loop.py",)),
+    # Stage 2: the implementer runs advise before the impl session.
+    ("implementer_phase_runner.py", ()),
+    # Stage 3: the CI driver runs advise before the fix loop.
+    ("ci_driver.py", ()),
+]
+
+
+@pytest.mark.parametrize("module_file, companions", ADVISE_FIRST_STAGES)
+def test_stage_runs_advise_under_advise_agent(
+    module_file: str, companions: tuple[str, ...]
+) -> None:
+    """Every stage runs /advise under AGENT_ADVISE, gated by enable_advise.
+
+    Advise-first (#30) is the mechanism that pulls prior learnings into each
+    stage before it acts. The cheap, read-only advise session always runs under
+    ``AGENT_ADVISE`` (never the stage's own session), and every stage must let
+    operators turn it off via ``enable_advise``.
+    """
+    src = _read_phase_sources(module_file, companions)
+    assert "AGENT_ADVISE" in src, f"{module_file} must run its advise step under AGENT_ADVISE"
+    assert "enable_advise" in src, f"{module_file} must gate advise behind enable_advise"

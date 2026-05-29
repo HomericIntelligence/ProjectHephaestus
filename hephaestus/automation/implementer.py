@@ -56,7 +56,7 @@ from .models import (
 )
 from .pr_manager import commit_changes, create_pr
 from .review_state import is_plan_review_approved  # noqa: F401
-from .session_naming import AGENT_IMPLEMENTER, current_trunk_githash  # noqa: F401
+from .session_naming import AGENT_ADVISE, AGENT_IMPLEMENTER, current_trunk_githash  # noqa: F401
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
@@ -511,6 +511,10 @@ class IssueImplementer:
             slot_id,
             session_agent=session_agent,
         )
+
+    def _run_advise(self, issue_number: int, issue_title: str, issue_body: str) -> str:
+        """Run the advise-first step before implementing (delegates to runner)."""
+        return self.phase_runner._run_advise(issue_number, issue_title, issue_body)
 
     def _run_impl_review_loop(
         self,

@@ -33,6 +33,8 @@ import logging
 import subprocess
 import sys
 
+from hephaestus.cli.utils import add_json_arg, emit_json_status
+
 from .state_labels import STATE_LABEL_SPECS
 
 logger = logging.getLogger(__name__)
@@ -183,6 +185,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable DEBUG logging.",
     )
+    add_json_arg(parser)
     return parser
 
 
@@ -203,6 +206,8 @@ def main(argv: list[str] | None = None) -> int:
         repos = _gh_list_org_repos(args.org)
         if not repos:
             logger.warning("No repos returned for org %s — nothing to do.", args.org)
+            if args.json:
+                emit_json_status(0, "no-repos", org=args.org)
             return 0
         slugs = [f"{args.org}/{name}" for name in repos]
         logger.info("Ensuring state:* labels on %d repos in %s", len(slugs), args.org)
@@ -225,6 +230,13 @@ def main(argv: list[str] | None = None) -> int:
             "Ensured %d label(s) across %d repo(s).",
             total_issued,
             len(slugs),
+        )
+    if args.json:
+        emit_json_status(
+            0,
+            "dry-run" if args.dry_run else "ok",
+            repos=len(slugs),
+            labels_ensured=total_issued,
         )
     return 0
 

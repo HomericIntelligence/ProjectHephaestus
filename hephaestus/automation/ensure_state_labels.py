@@ -69,9 +69,7 @@ def _gh_list_org_repos(org: str, *, timeout: int = 60) -> list[str]:
         check=False,
     )
     if out.returncode != 0:
-        raise SystemExit(
-            f"gh repo list {org} failed (rc={out.returncode}): {out.stderr.strip()}"
-        )
+        raise SystemExit(f"gh repo list {org} failed (rc={out.returncode}): {out.stderr.strip()}")
     try:
         entries = json.loads(out.stdout or "[]")
     except json.JSONDecodeError as exc:

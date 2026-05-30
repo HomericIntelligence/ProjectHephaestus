@@ -368,9 +368,7 @@ def is_plan_review_go(  # noqa: C901  # labels-first gate with comment-scan back
         try:
             issue_data = gh_issue_json(issue_number)
             issue_labels = [
-                label.get("name", "")
-                for label in issue_data.get("labels", [])
-                if label.get("name")
+                label.get("name", "") for label in issue_data.get("labels", []) if label.get("name")
             ]
         except Exception as e:
             logger.debug(
@@ -382,9 +380,7 @@ def is_plan_review_go(  # noqa: C901  # labels-first gate with comment-scan back
             issue_labels = []
     if issue_labels is not None:
         if labels_are_plan_go(issue_labels):
-            logger.debug(
-                "Issue %s: state:plan-go label present — GO", issue_ref(issue_number)
-            )
+            logger.debug("Issue %s: state:plan-go label present — GO", issue_ref(issue_number))
             return True
         if STATE_PLAN_NO_GO in set(issue_labels):
             logger.debug(

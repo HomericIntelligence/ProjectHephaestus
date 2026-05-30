@@ -120,9 +120,7 @@ class TestNeedsPlan:
             [STATE_PLAN_NO_GO, STATE_NEEDS_PLAN],
         ],
     )
-    def test_terminal_state_wins_over_needs_plan_when_both_present(
-        self, labels: list[str]
-    ) -> None:
+    def test_terminal_state_wins_over_needs_plan_when_both_present(self, labels: list[str]) -> None:
         """Terminal label wins over needs-plan when both are present.
 
         Defensive against label churn during the reviewer's apply/remove

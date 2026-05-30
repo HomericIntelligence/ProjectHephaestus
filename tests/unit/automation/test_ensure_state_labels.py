@@ -60,9 +60,7 @@ class TestEnsureLabelsOnRepo:
         assert issued == len(STATE_LABEL_SPECS) == 3
         assert mock_run.call_count == 3
 
-    def test_passes_label_name_color_description_and_force(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_passes_label_name_color_description_and_force(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _ok_proc()
         ensure_labels_on_repo("owner/name")
         seen_labels = set()
@@ -99,9 +97,7 @@ class TestEnsureLabelsOnRepo:
 class TestGhListOrgRepos:
     """Org enumeration filters archives, forks, and Odysseus."""
 
-    def test_returns_sorted_non_archived_non_fork_names(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_returns_sorted_non_archived_non_fork_names(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _ok_proc(
             stdout=json.dumps(
                 [
@@ -144,9 +140,7 @@ class TestMain:
         # 1 detect + 3 label creates = 4 total subprocess calls.
         assert mock_run.call_count == 4
 
-    def test_main_org_enumerates_and_applies_to_each(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_main_org_enumerates_and_applies_to_each(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = [
             # gh repo list AnOrg
             _ok_proc(
@@ -168,9 +162,7 @@ class TestMain:
         mock_run.side_effect = [
             # gh repo list AnOrg
             _ok_proc(
-                stdout=json.dumps(
-                    [{"name": "OneRepo", "isArchived": False, "isFork": False}]
-                )
+                stdout=json.dumps([{"name": "OneRepo", "isArchived": False, "isFork": False}])
             ),
         ]
         rc = main(["--org", "AnOrg", "--dry-run"])
@@ -178,9 +170,7 @@ class TestMain:
         # ONLY the repo enumeration, no label creates.
         assert mock_run.call_count == 1
 
-    def test_main_specific_repo_skips_org_enumeration(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_main_specific_repo_skips_org_enumeration(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = [_ok_proc() for _ in range(3)]
         rc = main(["--repo", "owner/name"])
         assert rc == 0

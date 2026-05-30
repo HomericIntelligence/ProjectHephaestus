@@ -194,4 +194,3 @@ class PlannerStateManager:
                 "Failed to check for existing plan on %s: %s", issue_ref(issue_number), e
             )
             return False
-

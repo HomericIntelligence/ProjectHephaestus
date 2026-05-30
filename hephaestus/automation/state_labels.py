@@ -54,8 +54,7 @@ STATE_LABEL_SPECS: dict[str, dict[str, str]] = {
     STATE_PLAN_NO_GO: {
         "color": "d93f0b",  # red — blocked
         "description": (
-            "Plan-reviewer's latest verdict was NOGO (or NOGO-exhausted); "
-            "re-plan next loop."
+            "Plan-reviewer's latest verdict was NOGO (or NOGO-exhausted); re-plan next loop."
         ),
     },
     STATE_PLAN_GO: {

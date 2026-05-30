@@ -31,13 +31,10 @@ from hephaestus.automation.github_api import (
     write_secure,
 )
 from hephaestus.automation.models import IssueState
-from hephaestus.resilience.circuit_breaker import reset_all_circuit_breakers
 
-
-@pytest.fixture(autouse=True)
-def _reset_circuit_breakers() -> None:
-    """Reset all circuit breakers before each test to prevent cross-test contamination."""
-    reset_all_circuit_breakers()
+# Circuit-breaker reset is now an autouse package-scope fixture in
+# ``tests/unit/automation/conftest.py`` (#708), so it applies to every test
+# under the automation package — not just this file.
 
 
 class TestGhIssueJson:

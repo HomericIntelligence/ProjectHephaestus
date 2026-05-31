@@ -137,11 +137,17 @@ class TestSessionUUID:
         kwarg would silently end up here and produce a different UUID per
         main-bump. Making the function refuse the kwarg outright keeps the
         invariant load-bearing rather than aspirational.
+
+        Implementation note: the kwarg is invoked via ``**`` unpacking so
+        static analyzers cannot resolve the offending parameter name back
+        to the now-githash-free signatures — otherwise this very test
+        would itself be flagged as "wrong arg name" on every PR scan.
         """
+        bad_kwargs = {"githash": "abc1234"}
         with pytest.raises(TypeError):
-            session_uuid("R", 1, AGENT_PLANNER, githash="abc1234")  # type: ignore[call-arg]
+            session_uuid("R", 1, AGENT_PLANNER, **bad_kwargs)
         with pytest.raises(TypeError):
-            session_name("R", 1, AGENT_PLANNER, githash="abc1234")  # type: ignore[call-arg]
+            session_name("R", 1, AGENT_PLANNER, **bad_kwargs)
 
 
 class TestShortGithash:

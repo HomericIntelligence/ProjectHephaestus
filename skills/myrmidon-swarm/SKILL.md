@@ -175,6 +175,7 @@ Each agent gets:
 - `isolation: "worktree"` for file-modifying work
 - A self-contained prompt following the agent prompt template below
 - The correct `model` parameter for its tier
+- **A mandatory final step in its prompt: run `/hephaestus:learn` to capture any reusable learning from its own task.** Each agent captures its learnings itself, as part of its task — NOT the commander after the fact. The commander does NOT run a single post-hoc `/learn`. See the agent prompt template (it ends with a `/learn` step).
 
 ## Phase 4: Package (Delegate to Haiku for formatting, Sonnet for review)
 
@@ -189,7 +190,7 @@ After all implementation is complete:
 
 - Verify all changes are coherent and complete
 - Summarize what was accomplished
-- **MANDATORY**: Invoke `/hephaestus:learn` to capture learnings in ProjectMnemosyne — do not skip this step
+- **Learnings are captured by each AGENT during Phase 3** (every spawned agent runs `/hephaestus:learn` as the final step of its own task — see Phase 3 and the agent prompt template). The commander does NOT run a separate post-hoc `/learn`; capturing learnings is delegated, not centralized.
 - Create PR if appropriate (using the repo's PR workflow from CLAUDE.md)
 </workflow>
 
@@ -250,7 +251,7 @@ Instruct sub-agents to report back (not attempt to fix) when they encounter:
 
 **Before starting (Phase 1)**: Auto-invoke `/advise` using the Skill tool. This is mandatory.
 
-**After completing (Phase 5)**: Auto-invoke `/hephaestus:learn` to capture learnings. This is mandatory — do not skip or leave it to the user.
+**During Phase 3**: EACH spawned agent runs `/hephaestus:learn` as the final step of its own task to capture its learnings. This is mandatory and is delegated to the agents — the commander does NOT run a single `/learn` after the fact.
 
 **Clone location**: `$HOME/.agent-brain/ProjectMnemosyne/`
 
@@ -341,6 +342,7 @@ You are a [Specialist/Executor] agent in the Myrmidon swarm, working on [reposit
 2. [Specific implementation steps]
 3. Run tests: [specific test command]
 4. Run pre-commit: pre-commit run --files <changed-files>
+5. **Run `/hephaestus:learn`** to capture any reusable learning from THIS task (a fix, pattern, pitfall, or parameter worth banking). If your task produced nothing reusable, briefly note that and skip — but always consider it. This is YOUR responsibility as the agent; the commander will not do it for you.
 
 ## Rules
 - Read files before editing them
@@ -349,6 +351,7 @@ You are a [Specialist/Executor] agent in the Myrmidon swarm, working on [reposit
 - Stage only the files you changed
 - Use conventional commit format: type(scope): description
 - If you encounter something outside your scope, report it — do not attempt to fix it
+- As your final step, run `/hephaestus:learn` to capture reusable learnings from your task
 ```
 
 </agent_prompt_template>
@@ -401,8 +404,9 @@ After Phase 5, provide:
 
 ### Learnings
 - [Key decisions, surprising findings, or patterns worth capturing]
+- [Note which agents captured learnings via their own `/hephaestus:learn` step]
 
-**Now invoke `/hephaestus:learn` to save these learnings to ProjectMnemosyne. This is mandatory.**
+**Learnings were captured by each agent during Phase 3 via its own `/hephaestus:learn` step — not by the commander after the fact. Confirm the agents reported doing so; do NOT run a separate post-hoc `/learn`.**
 ```
 
 </output_format>

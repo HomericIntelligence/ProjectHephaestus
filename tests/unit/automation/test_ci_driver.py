@@ -733,7 +733,6 @@ class TestDriveGreenLearnings:
                 return_value=("ok", "sid"),
             ) as mock_invoke,
             patch("hephaestus.automation.ci_driver.get_repo_slug", return_value="ProjectX"),
-            patch("hephaestus.automation.ci_driver.current_trunk_githash", return_value="abc1234"),
         ):
             result = driver._drive_issue(123, 456, 0)
 
@@ -756,7 +755,6 @@ class TestDriveGreenLearnings:
                 side_effect=RuntimeError("boom"),
             ),
             patch("hephaestus.automation.ci_driver.get_repo_slug", return_value="ProjectX"),
-            patch("hephaestus.automation.ci_driver.current_trunk_githash", return_value="abc1234"),
         ):
             result = driver._drive_issue(123, 456, 0)
 

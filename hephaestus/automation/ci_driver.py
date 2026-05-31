@@ -48,7 +48,7 @@ from .git_utils import (
 from .github_api import _gh_call, gh_issue_json, gh_pr_checks
 from .models import CIDriverOptions, WorkerResult
 from .prompts import get_advise_prompt
-from .session_naming import AGENT_ADVISE, AGENT_CI_DRIVER, current_trunk_githash
+from .session_naming import AGENT_ADVISE, AGENT_CI_DRIVER
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
@@ -514,13 +514,11 @@ class CIDriver:
                     sandbox="read-only",
                 )
                 return (result.stdout or "").strip()
-            githash = current_trunk_githash(self.repo_root)
             repo_slug = get_repo_slug(self.repo_root)
             stdout, _ = invoke_claude_with_session(
                 repo=repo_slug,
                 issue=issue_number,
                 agent=AGENT_ADVISE,
-                githash=githash,
                 prompt=prompt,
                 model=advise_model(),
                 cwd=self.repo_root,
@@ -958,14 +956,12 @@ class CIDriver:
             # independent of the implementer's transcript. The first fix call
             # creates it via --session-id; later calls resume it. The codex
             # path above instead resumes the raw ``session_id`` it was handed.
-            githash = current_trunk_githash(self.repo_root)
             repo_slug = get_repo_slug(self.repo_root)
             try:
                 stdout, _ = invoke_claude_with_session(
                     repo=repo_slug,
                     issue=issue_number,
                     agent=AGENT_CI_DRIVER,
-                    githash=githash,
                     prompt=prompt,
                     model=implementer_model(),
                     cwd=worktree_path,
@@ -1114,7 +1110,6 @@ class CIDriver:
             "Do NOT create files under .claude-plugin/ in this repo."
         )
         try:
-            githash = current_trunk_githash(self.repo_root)
             repo_slug = get_repo_slug(self.repo_root)
             # Resume from the SAME worktree the fix session used: the Session 3
             # transcript is probed by cwd (session_jsonl_path), so a different
@@ -1124,7 +1119,6 @@ class CIDriver:
                 repo=repo_slug,
                 issue=issue_number,
                 agent=AGENT_CI_DRIVER,
-                githash=githash,
                 prompt=prompt,
                 model=learn_model(),
                 cwd=worktree_path,

@@ -946,8 +946,12 @@ class CIDriver:
         try:
             result = _gh_call(["pr", "view", str(pr_number), "--json", "baseRefName"], check=False)
             base_branch = dict(json.loads(result.stdout or "{}")).get("baseRefName") or "main"
-        except (subprocess.CalledProcessError, json.JSONDecodeError):
-            pass
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+            logger.debug(
+                "Failed to determine PR base branch for #%s; defaulting to 'main': %s",
+                pr_number,
+                exc,
+            )
         conflict_context = (
             f"This PR has a MERGE CONFLICT with `origin/{base_branch}` "
             f"(mergeStateStatus=DIRTY) — it cannot merge until the conflict is "

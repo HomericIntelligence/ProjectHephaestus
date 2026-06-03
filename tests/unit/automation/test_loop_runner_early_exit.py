@@ -581,7 +581,16 @@ class TestMainLoopsRunReporting:
             captured["code"] = code
             captured.update(kwargs)
 
-        argv = ["--json", "--repos", "r1", "--loops", str(configured_loops), "--dry-run"]
+        argv = [
+            "--json",
+            "--repos",
+            "r1",
+            "--loops",
+            str(configured_loops),
+            "--dry-run",
+            "--agent",
+            "claude",
+        ]
         with (
             patch.object(loop_runner, "_resolve_org_and_repos", return_value=("Org", ["r1"], None)),
             patch.object(loop_runner, "_clone_missing_repos"),

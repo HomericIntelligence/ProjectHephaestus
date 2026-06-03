@@ -35,6 +35,29 @@ def test_main_returns_zero_with_no_open_issues(monkeypatch: Any) -> None:
     assert rc == 0
 
 
+def test_main_resolves_agent_when_omitted(monkeypatch: Any) -> None:
+    """PlannerOptions should receive the concrete auto-detected provider."""
+    captured: dict[str, PlannerOptions] = {}
+
+    class FakePlanner:
+        def __init__(self, options: PlannerOptions) -> None:
+            captured["options"] = options
+
+        def run(self) -> dict[int, PlanResult]:
+            return {123: PlanResult(issue_number=123, success=True)}
+
+    monkeypatch.setattr("sys.argv", ["planner", "--issues", "123", "--dry-run"])
+    with (
+        patch("hephaestus.automation.planner.resolve_agent", return_value="codex") as mock_resolve,
+        patch.object(planner_mod, "Planner", FakePlanner),
+    ):
+        rc = planner_mod.main()
+
+    assert rc == 0
+    mock_resolve.assert_called_once_with(None)
+    assert captured["options"].agent == "codex"
+
+
 def test_main_returns_zero_when_rate_limited(monkeypatch: Any) -> None:
     """If issue discovery is rate-limited, ``main()`` exits cleanly with 0."""
     from hephaestus.automation.github_api import GitHubRateLimitError

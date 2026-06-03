@@ -71,6 +71,12 @@ class TestParseArgs:
         assert args.epic is None
         assert args.issues is None
         assert args.dry_run is False
+        assert args.no_advise is False
+
+    def test_no_advise_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["impl", "--no-advise"])
+        args = implementer_cli._parse_args()
+        assert args.no_advise is True
 
     def test_epic_and_issues_mutually_exclusive(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["impl", "--epic", "1", "--issues", "2"])

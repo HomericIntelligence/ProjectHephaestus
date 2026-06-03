@@ -1154,7 +1154,7 @@ class TestDefaultPhaseTimeout:
             patch.object(loop_runner, "_clone_missing_repos"),
             patch.object(loop_runner, "run_loop", side_effect=_capture),
         ):
-            main(["--repos", "Repo", "--dry-run", "--loops", "1"])
+            main(["--repos", "Repo", "--dry-run", "--loops", "1", "--agent", "claude"])
         assert captured["cfg"].phase_timeout_s == _default_phase_timeout_s()
 
     def test_main_resolves_agent_before_building_config(self) -> None:
@@ -1199,5 +1199,5 @@ class TestDefaultPhaseTimeout:
             patch.object(loop_runner, "_clone_missing_repos"),
             patch.object(loop_runner, "run_loop", side_effect=_capture),
         ):
-            main(["--repos", "Repo", "--phase-timeout", "0", "--loops", "1"])
+            main(["--repos", "Repo", "--phase-timeout", "0", "--loops", "1", "--agent", "claude"])
         assert captured["cfg"].phase_timeout_s is None

@@ -26,7 +26,7 @@ def _silence_logging(caplog: Any) -> None:
 
 def test_main_returns_zero_with_no_open_issues(monkeypatch: Any) -> None:
     """``main()`` with no --issues and no discovered issues exits 0."""
-    monkeypatch.setattr("sys.argv", ["planner", "--dry-run"])
+    monkeypatch.setattr("sys.argv", ["planner", "--dry-run", "--agent", "claude"])
     with patch(
         "hephaestus.automation.planner.gh_list_open_issues",
         return_value=[],
@@ -62,7 +62,7 @@ def test_main_returns_zero_when_rate_limited(monkeypatch: Any) -> None:
     """If issue discovery is rate-limited, ``main()`` exits cleanly with 0."""
     from hephaestus.automation.github_api import GitHubRateLimitError
 
-    monkeypatch.setattr("sys.argv", ["planner"])
+    monkeypatch.setattr("sys.argv", ["planner", "--agent", "claude"])
     with patch(
         "hephaestus.automation.planner.gh_list_open_issues",
         side_effect=GitHubRateLimitError("rate limit", reset_epoch=0),

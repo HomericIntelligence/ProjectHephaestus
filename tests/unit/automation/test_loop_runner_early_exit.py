@@ -700,7 +700,10 @@ class TestPlanReviewerAlreadyReviewedFlag:
         mock_reviewer.run.return_value = results
         captured: dict[str, int] = {}
 
-        monkeypatch.setattr("sys.argv", ["plan-reviewer", "--issues", "1", "2", "3", "4"])
+        monkeypatch.setattr(
+            "sys.argv",
+            ["plan-reviewer", "--issues", "1", "2", "3", "4", "--agent", "claude"],
+        )
         with (
             patch.object(plan_reviewer_mod, "PlanReviewer", return_value=mock_reviewer),
             patch.object(
@@ -739,7 +742,9 @@ class TestPlannerMainWorkReport:
         mock_planner.run.return_value = results
         captured: dict[str, int] = {}
 
-        monkeypatch.setattr("sys.argv", ["planner", "--issues", "10", "11", "12"])
+        monkeypatch.setattr(
+            "sys.argv", ["planner", "--issues", "10", "11", "12", "--agent", "claude"]
+        )
         with (
             patch.object(planner_mod, "Planner", return_value=mock_planner),
             patch.object(
@@ -768,7 +773,7 @@ class TestPlannerMainWorkReport:
         mock_planner.run.return_value = results
         captured: dict[str, int] = {}
 
-        monkeypatch.setattr("sys.argv", ["planner", "--issues", "10", "11"])
+        monkeypatch.setattr("sys.argv", ["planner", "--issues", "10", "11", "--agent", "claude"])
         with (
             patch.object(planner_mod, "Planner", return_value=mock_planner),
             patch.object(

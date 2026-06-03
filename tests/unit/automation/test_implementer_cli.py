@@ -48,7 +48,7 @@ class TestPatchRoutingThroughImplementer:
         Patching ``implementer.gh_list_open_issues`` / ``get_repo_root`` /
         ``IssueImplementer`` must reach the lookups inside ``main``.
         """
-        monkeypatch.setattr(sys, "argv", ["impl", "--dry-run", "--no-ui"])
+        monkeypatch.setattr(sys, "argv", ["impl", "--dry-run", "--no-ui", "--agent", "claude"])
 
         with (
             patch.object(implementer, "gh_list_open_issues", return_value=[]) as mock_list,

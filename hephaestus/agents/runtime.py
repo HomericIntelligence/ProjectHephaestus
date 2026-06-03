@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 AgentName = Literal["claude", "codex"]
 AGENT_CHOICES: tuple[AgentName, ...] = ("claude", "codex")
@@ -48,7 +48,7 @@ def resolve_agent(agent: str | None) -> AgentName:
     if agent is not None:
         if agent not in AGENT_CHOICES:
             raise ValueError(f"Unsupported agent: {agent}")
-        return cast(AgentName, agent)
+        return agent
     if shutil.which("claude"):
         return "claude"
     if shutil.which("codex"):

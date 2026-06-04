@@ -46,11 +46,7 @@ def _tracked_files() -> list[Path]:
         check=True,
         capture_output=True,
     )
-    return [
-        REPO_ROOT / path.decode()
-        for path in result.stdout.split(b"\0")
-        if path
-    ]
+    return [REPO_ROOT / path.decode() for path in result.stdout.split(b"\0") if path]
 
 
 def test_project_scripts_do_not_flip_repository_to_bare_mode() -> None:

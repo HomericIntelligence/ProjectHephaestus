@@ -38,7 +38,10 @@ def test_readme_flags_pixi_as_linux_only() -> None:
     """README must warn that the pixi dev env is Linux-only before `pixi install`."""
     text = README.read_text(encoding="utf-8")
     pixi_section_start = text.index("## Getting Started with Pixi")
-    pixi_install_pos = text.index("pixi install", pixi_section_start)
+    pixi_install_pos = text.find("pixi install", pixi_section_start)
+    assert pixi_install_pos != -1, (
+        "README must contain 'pixi install' command in the Getting Started section"
+    )
     preface = text[pixi_section_start:pixi_install_pos]
     assert "linux-64" in preface.lower() or "linux only" in preface.lower(), (
         "README must mention the linux-64 restriction before the first "

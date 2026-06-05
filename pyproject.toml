@@ -174,7 +174,7 @@ max-complexity = 10
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/integration"]
-pythonpath = [".", "scripts"]
+pythonpath = ["."]
 addopts = [
     "-v",
     "--strict-markers",

@@ -20,6 +20,7 @@ HARDCODED_DATE_RE = re.compile(r"As of \d{4}-\d{2}-\d{2}")
 
 
 def get_repo_root() -> Path:
+    """Return the repository root by walking up to the nearest ``pyproject.toml``."""
     path = Path(__file__).resolve().parent
     while path != path.parent:
         if (path / "pyproject.toml").exists():
@@ -40,6 +41,7 @@ def find_hardcoded_dates(security_md: Path) -> list[tuple[int, str]]:
 
 
 def main() -> int:
+    """Scan SECURITY.md and exit non-zero if a hard-coded date stamp is found."""
     if len(sys.argv) > 1 and sys.argv[1] in ("--help", "-h"):
         print(__doc__)
         return 0

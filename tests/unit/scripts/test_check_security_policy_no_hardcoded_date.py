@@ -9,6 +9,8 @@ from check_security_policy_no_hardcoded_date import find_hardcoded_dates
 
 
 class TestFindHardcodedDates:
+    """Tests for the ``find_hardcoded_dates`` SECURITY.md scanner."""
+
     def test_returns_empty_when_no_date(self, tmp_path: Path) -> None:
         f = tmp_path / "SECURITY.md"
         f.write_text("# Security Policy\n\nAs of the 0.9.x release line.\n")

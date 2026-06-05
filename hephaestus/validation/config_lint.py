@@ -90,7 +90,6 @@ class ConfigLinter:
 
         return len(self.errors) == 0
 
-
     def _check_formatting(self, content: str, filepath: Path) -> None:
         """Check formatting issues.
 
@@ -143,9 +142,7 @@ class ConfigLinter:
             problem = getattr(e, "problem", None) or str(e)
             mark = getattr(e, "problem_mark", None)
             if mark is not None:
-                self.errors.append(
-                    f"{filepath}:{mark.line + 1} - YAML syntax error: {problem}"
-                )
+                self.errors.append(f"{filepath}:{mark.line + 1} - YAML syntax error: {problem}")
             else:
                 self.errors.append(f"{filepath} - YAML syntax error: {problem}")
             return None

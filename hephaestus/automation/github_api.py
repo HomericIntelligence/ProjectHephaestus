@@ -1040,15 +1040,13 @@ def _fetch_batch_states(batch: list[int], owner: str, repo: str) -> dict[int, Is
     # never user data. This was smoke-tested against the live GitHub endpoint.
     var_decls = ",".join(f"$n{idx}:Int!" for idx in range(len(batch)))
     fragments = " ".join(
-        f"issue{idx}: issue(number:$n{idx}){{ number state }}"
-        for idx in range(len(batch))
+        f"issue{idx}: issue(number:$n{idx}){{ number state }}" for idx in range(len(batch))
     )
     query = (
         f"query($owner:String!,$name:String!,{var_decls})"
         f"{{repository(owner:$owner,name:$name){{{fragments}}}}}"
     )
-    args = ["api", "graphql", "-f", f"query={query}",
-            "-F", f"owner={owner}", "-F", f"name={repo}"]
+    args = ["api", "graphql", "-f", f"query={query}", "-F", f"owner={owner}", "-F", f"name={repo}"]
     for idx, num in enumerate(batch):
         args.extend(["-F", f"n{idx}={int(num)}"])
 
@@ -1344,13 +1342,20 @@ def _review_threads_for_review(pr_number: int, review_id: str) -> list[str]:
         "}"
     )
     try:
-        result = _gh_call([
-            "api", "graphql",
-            "-f", f"query={query}",
-            "-F", f"owner={owner}",
-            "-F", f"name={repo}",
-            "-F", f"number={int(pr_number)}",
-        ])
+        result = _gh_call(
+            [
+                "api",
+                "graphql",
+                "-f",
+                f"query={query}",
+                "-F",
+                f"owner={owner}",
+                "-F",
+                f"name={repo}",
+                "-F",
+                f"number={int(pr_number)}",
+            ]
+        )
         data = json.loads(result.stdout)
         _check_graphql_errors(data, f"_review_threads_for_review(pr={pr_number})")
     except (subprocess.CalledProcessError, json.JSONDecodeError, RuntimeError) as exc:
@@ -1421,13 +1426,20 @@ def gh_pr_list_unresolved_threads(
         "}"
     )
 
-    result = _gh_call([
-        "api", "graphql",
-        "-f", f"query={query}",
-        "-F", f"owner={owner}",
-        "-F", f"name={repo}",
-        "-F", f"number={int(pr_number)}",
-    ])
+    result = _gh_call(
+        [
+            "api",
+            "graphql",
+            "-f",
+            f"query={query}",
+            "-F",
+            f"owner={owner}",
+            "-F",
+            f"name={repo}",
+            "-F",
+            f"number={int(pr_number)}",
+        ]
+    )
     data = json.loads(result.stdout)
     _check_graphql_errors(data, f"gh_pr_list_unresolved_threads(pr={pr_number})")
 

@@ -246,7 +246,7 @@ class TestPrefetchIssueStates:
         assert "issue(number: 123)" not in query  # regression guard for #738
         assert "n0=123" in argv
         # owner/repo also parameterised (no f-string interpolation)
-        assert 'repository(owner:$owner,name:$name)' in query
+        assert "repository(owner:$owner,name:$name)" in query
         assert 'owner: "owner"' not in query
         assert "owner=owner" in argv and "name=repo" in argv
         assert states[123] == IssueState.OPEN
@@ -274,11 +274,15 @@ class TestPrefetchIssueStates:
         mock_repo_info.return_value = ("owner", "repo")
         mock_result = Mock()
         mock_result.stdout = json.dumps(
-            {"data": {"repository": {
-                "issue0": {"number": 11, "state": "OPEN"},
-                "issue1": {"number": 22, "state": "CLOSED"},
-                "issue2": {"number": 33, "state": "OPEN"},
-            }}}
+            {
+                "data": {
+                    "repository": {
+                        "issue0": {"number": 11, "state": "OPEN"},
+                        "issue1": {"number": 22, "state": "CLOSED"},
+                        "issue2": {"number": 33, "state": "OPEN"},
+                    }
+                }
+            }
         )
         mock_gh_call.return_value = mock_result
 

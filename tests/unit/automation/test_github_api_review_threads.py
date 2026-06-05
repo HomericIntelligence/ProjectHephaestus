@@ -1,4 +1,5 @@
 """Tests for GraphQL parameterisation in PR review-thread helpers (#738)."""
+
 from __future__ import annotations
 
 import json
@@ -56,8 +57,4 @@ class TestListUnresolvedThreadsParameterisation:
         assert "pullRequest(number:$number)" in query
         assert "pullRequest(number: 42)" not in query  # regression guard
         assert 'owner: "owner"' not in query
-        assert (
-            "owner=owner" in argv
-            and "name=repo" in argv
-            and "number=42" in argv
-        )
+        assert "owner=owner" in argv and "name=repo" in argv and "number=42" in argv

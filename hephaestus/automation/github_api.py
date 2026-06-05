@@ -1608,3 +1608,101 @@ def gh_pr_checks(
 
     logger.debug("Fetched %s CI check(s) for PR #%s", len(checks), pr_number)
     return checks
+
+
+# Common conclusions that indicate a failing CI check across gh pr list and gh pr view.
+_BAD_CI_CONCLUSIONS: frozenset[str] = frozenset(
+    {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR"}
+)
+_PENDING_CI_CONCLUSIONS: frozenset[str] = frozenset(
+    {"PENDING", "IN_PROGRESS", "QUEUED", "WAITING"}
+)
+
+
+def _derive_ci_status(checks: list[dict[str, Any]]) -> str:
+    """Reduce a ``statusCheckRollup`` list to a single CI status string.
+
+    Args:
+        checks: Raw check objects from ``gh pr list --json statusCheckRollup``
+            or ``gh pr view --json statusCheckRollup``.
+
+    Returns:
+        ``"SUCCESS"``, ``"FAILURE"``, ``"PENDING"``, or ``"UNKNOWN"``.
+
+    """
+    if not checks:
+        return "UNKNOWN"
+    conclusions = {c.get("conclusion") or c.get("state", "PENDING") for c in checks}
+    if conclusions & _BAD_CI_CONCLUSIONS:
+        return "FAILURE"
+    if conclusions & _PENDING_CI_CONCLUSIONS:
+        return "PENDING"
+    return "SUCCESS"
+
+
+def gh_pr_list_open(
+    limit: int = 100,
+    *,
+    dry_run: bool = False,
+) -> list[dict[str, Any]]:
+    """Return a list of open PRs with metadata from ``gh pr list``.
+
+    Each returned dict has keys:
+    - ``number``, ``title``, ``author`` (login), ``headRefName``, ``baseRefName``
+    - ``mergeable``, ``mergeStateStatus``
+    - ``ci_status``: string derived from ``statusCheckRollup`` — one of
+      ``"SUCCESS"``, ``"FAILURE"``, ``"PENDING"``, or ``"UNKNOWN"``.
+
+    Args:
+        limit: Maximum number of PRs to fetch (default 100).
+        dry_run: If True, return an empty list.
+
+    Returns:
+        List of PR metadata dicts, sorted by number ascending.
+
+    Raises:
+        RuntimeError: If the ``gh`` call or JSON parsing fails.
+
+    """
+    if dry_run:
+        logger.info("[dry_run] Would list open PRs")
+        return []
+
+    try:
+        result = _gh_call(
+            [
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--json",
+                "number,title,author,headRefName,baseRefName,"
+                "mergeable,mergeStateStatus,statusCheckRollup",
+                "--limit",
+                str(limit),
+            ]
+        )
+        raw = json.loads(result.stdout)
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"Failed to list open PRs: {e}") from e
+
+    out: list[dict[str, Any]] = []
+    for pr in raw:
+        author_data = pr.get("author") or {}
+        checks = pr.get("statusCheckRollup") or []
+        out.append(
+            {
+                "number": pr["number"],
+                "title": pr.get("title", ""),
+                "author": author_data.get("login", "unknown"),
+                "headRefName": pr.get("headRefName", ""),
+                "baseRefName": pr.get("baseRefName", ""),
+                "mergeable": pr.get("mergeable", "UNKNOWN"),
+                "mergeStateStatus": pr.get("mergeStateStatus", "UNKNOWN"),
+                "ci_status": _derive_ci_status(checks),
+            }
+        )
+
+    out.sort(key=lambda p: p["number"])
+    logger.info("Listed %s open PR(s)", len(out))
+    return out

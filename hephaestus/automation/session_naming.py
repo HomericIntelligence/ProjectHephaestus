@@ -40,6 +40,7 @@ AGENT_IMPLEMENTER = "implementer"
 AGENT_PR_REVIEWER = "pr-reviewer"
 AGENT_ADDRESS_REVIEW = "address-review"
 AGENT_CI_DRIVER = "ci-driver"
+AGENT_AUDIT_REVIEWER = "audit-reviewer"
 
 _ALL_AGENTS = frozenset(
     {
@@ -51,6 +52,7 @@ _ALL_AGENTS = frozenset(
         AGENT_PR_REVIEWER,
         AGENT_ADDRESS_REVIEW,
         AGENT_CI_DRIVER,
+        AGENT_AUDIT_REVIEWER,
     }
 )
 

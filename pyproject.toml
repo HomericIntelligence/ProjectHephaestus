@@ -118,6 +118,7 @@ hephaestus-validate-workflow-checkout = "hephaestus.ci.workflows:validate_workfl
 hephaestus-github-stats = "hephaestus.github.stats:main"
 hephaestus-agent-stats = "hephaestus.agents.stats:main"
 hephaestus-validate-agents = "hephaestus.agents.frontmatter:validate_agents_main"
+hephaestus-audit-prs = "hephaestus.automation.audit_reviewer:main"
 
 [project.urls]
 Homepage = "https://github.com/HomericIntelligence/ProjectHephaestus"
@@ -242,6 +243,8 @@ omit = [
     "hephaestus/automation/github_api.py",
     # pr_reviewer.py drives a full Claude session against a live PR; integration-only
     "hephaestus/automation/pr_reviewer.py",
+    # audit_reviewer.py drives a full Claude session against live PRs; integration-only
+    "hephaestus/automation/audit_reviewer.py",
 ]
 
 [tool.coverage.report]

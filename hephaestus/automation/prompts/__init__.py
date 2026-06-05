@@ -43,6 +43,10 @@ from ._strict_rubric import _STRICT_GRADING_AND_ANTI_INFLATION as _STRICT_GRADIN
 from ._strict_rubric import _STRICT_REVIEW_OUTPUT_FORMAT as _STRICT_REVIEW_OUTPUT_FORMAT
 from ._strict_rubric import _STRICT_REVIEW_RUBRIC as _STRICT_REVIEW_RUBRIC
 from .address_review import ADDRESS_REVIEW_PROMPT, get_address_review_prompt
+from .audit import (
+    AUDIT_COORDINATOR_PROMPT,
+    get_audit_coordinator_prompt,
+)
 from .advise import (
     ADVISE_PROMPT,
     CODEX_ADVISE_PROMPT,
@@ -98,4 +102,6 @@ __all__ = [
     "get_plan_review_prompt",
     "get_pr_description",
     "get_pr_review_analysis_prompt",
+    "AUDIT_COORDINATOR_PROMPT",
+    "get_audit_coordinator_prompt",
 ]

@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 
 from hephaestus.automation import prompts
+from hephaestus.automation.prompts.audit import get_audit_coordinator_prompt
 
 
 class TestImplementationPrompt:
@@ -637,6 +638,75 @@ class TestImplLoopStrictRubric:
         assert "CONTRACT VIOLATION" in out
         assert "Verdict: GO" in out
         assert "Verdict: NOGO" in out
+
+
+class TestAuditCoordinatorPrompt:
+    """Tests for the audit coordinator prompt."""
+
+    def test_renders_with_minimal_pr_list(self) -> None:
+        pr_list: list[dict[str, object]] = [
+            {
+                "number": 42,
+                "title": "Fix bug",
+                "author": "alice",
+                "headRefName": "fix-42",
+                "baseRefName": "main",
+                "mergeable": "MERGEABLE",
+                "mergeStateStatus": "CLEAN",
+                "ci_status": "SUCCESS",
+            }
+        ]
+        out = get_audit_coordinator_prompt(pr_list)
+        assert "42" in out
+        assert "alice" in out
+        assert "MERGEABLE" in out
+
+    def test_fences_pr_list_as_untrusted(self) -> None:
+        """The PR list must be fenced with nonce delimiters and carry the untrusted notice."""
+        pr_list: list[dict[str, object]] = [{"number": 1, "title": "test"}]
+        out = get_audit_coordinator_prompt(pr_list)
+        assert "BEGIN_" in out and "PR_LIST" in out
+        assert "UNTRUSTED" in out
+
+    def test_renders_with_multiple_prs(self) -> None:
+        pr_list: list[dict[str, object]] = [
+            {"number": 1, "title": "PR 1", "ci_status": "SUCCESS"},
+            {"number": 2, "title": "PR 2", "ci_status": "FAILURE"},
+            {"number": 3, "title": "PR 3", "ci_status": "PENDING"},
+        ]
+        out = get_audit_coordinator_prompt(pr_list)
+        assert "PR 1" in out
+        assert "PR 2" in out
+        assert "PR 3" in out
+
+    def test_concurrency_batching_guidance_present(self) -> None:
+        """The prompt must instruct batching at most 10 PRs at a time."""
+        pr_list: list[dict[str, object]] = [{"number": 1, "title": "test"}]
+        out = get_audit_coordinator_prompt(pr_list)
+        assert "at most 10" in out or "batches" in out.lower()
+
+    def test_coordinator_output_format_is_present(self) -> None:
+        """The JSON output block contract must be in the prompt."""
+        pr_list: list[dict[str, object]] = [{"number": 1, "title": "test"}]
+        out = get_audit_coordinator_prompt(pr_list)
+        assert '"results"' in out
+        assert '"pr_number"' in out
+        assert '"comments"' in out
+        assert '"summary"' in out
+
+    def test_subagent_guardrails_present(self) -> None:
+        """Critical guardrails must appear in the prompt."""
+        pr_list: list[dict[str, object]] = [{"number": 1, "title": "test"}]
+        out = get_audit_coordinator_prompt(pr_list)
+        assert "Do NOT background" in out
+        assert "do NOT exit early" in out
+        assert "own ONLY PR" in out
+
+    def test_allowed_tools_include_task(self) -> None:
+        """The coordinator's allowed_tools in the caller includes Task for sub-agent dispatch."""
+        pr_list: list[dict[str, object]] = [{"number": 1, "title": "test"}]
+        out = get_audit_coordinator_prompt(pr_list)
+        assert "Task" in out
 
 
 class TestAddressReviewPrompt:

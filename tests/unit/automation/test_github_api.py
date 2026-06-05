@@ -11,6 +11,7 @@ import hephaestus.automation.github_api as _github_api_module
 from hephaestus.automation.github_api import (
     GitHubRateLimitError,
     _check_graphql_errors,
+    _derive_ci_status,
     _gh_call,
     fetch_issue_info,
     gh_create_label,
@@ -25,6 +26,7 @@ from hephaestus.automation.github_api import (
     gh_list_open_issues,
     gh_pr_checks,
     gh_pr_create,
+    gh_pr_list_open,
     gh_pr_review_post,
     is_issue_closed,
     parse_issue_dependencies,
@@ -1638,6 +1640,163 @@ class TestUpsertAndDeleteComment:
         (args,) = mock_gh_call.call_args.args
         assert "DELETE" in args
         assert "/repos/o/r/issues/comments/42" in args
+
+
+class TestDeriveCiStatus:
+    """Tests for _derive_ci_status helper."""
+
+    def test_empty_checks_returns_unknown(self) -> None:
+        assert _derive_ci_status([]) == "UNKNOWN"
+
+    def test_all_success_returns_success(self) -> None:
+        checks = [
+            {"conclusion": "SUCCESS"},
+            {"conclusion": "SUCCESS"},
+            {"conclusion": "NEUTRAL"},
+        ]
+        assert _derive_ci_status(checks) == "SUCCESS"
+
+    def test_any_failure_returns_failure(self) -> None:
+        checks = [
+            {"conclusion": "SUCCESS"},
+            {"conclusion": "FAILURE"},
+        ]
+        assert _derive_ci_status(checks) == "FAILURE"
+
+    def test_timed_out_is_failure(self) -> None:
+        checks = [{"conclusion": "TIMED_OUT"}]
+        assert _derive_ci_status(checks) == "FAILURE"
+
+    def test_cancelled_is_failure(self) -> None:
+        checks = [{"conclusion": "CANCELLED"}]
+        assert _derive_ci_status(checks) == "FAILURE"
+
+    def test_action_required_is_failure(self) -> None:
+        checks = [{"conclusion": "ACTION_REQUIRED"}]
+        assert _derive_ci_status(checks) == "FAILURE"
+
+    def test_error_is_failure(self) -> None:
+        checks = [{"conclusion": "ERROR"}]
+        assert _derive_ci_status(checks) == "FAILURE"
+
+    def test_pending_returns_pending(self) -> None:
+        checks = [{"conclusion": "PENDING"}]
+        assert _derive_ci_status(checks) == "PENDING"
+
+    def test_in_progress_returns_pending(self) -> None:
+        checks = [{"conclusion": "IN_PROGRESS"}]
+        assert _derive_ci_status(checks) == "PENDING"
+
+    def test_queued_returns_pending(self) -> None:
+        checks = [{"conclusion": "QUEUED"}]
+        assert _derive_ci_status(checks) == "PENDING"
+
+    def test_waiting_returns_pending(self) -> None:
+        checks = [{"conclusion": "WAITING"}]
+        assert _derive_ci_status(checks) == "PENDING"
+
+    def test_mixed_pending_and_success_returns_pending(self) -> None:
+        checks = [
+            {"conclusion": "SUCCESS"},
+            {"conclusion": "PENDING"},
+        ]
+        assert _derive_ci_status(checks) == "PENDING"
+
+    def test_fallback_to_state_field(self) -> None:
+        """When 'conclusion' is missing, fall back to 'state' field."""
+        checks = [{"state": "FAILURE"}]
+        assert _derive_ci_status(checks) == "FAILURE"
+
+    def test_missing_both_fields_defaults_to_pending(self) -> None:
+        """When neither 'conclusion' nor 'state' is present, default to PENDING."""
+        checks = [{"name": "some-check"}]
+        assert _derive_ci_status(checks) == "PENDING"
+
+
+class TestGhPrListOpen:
+    """Tests for gh_pr_list_open function."""
+
+    def test_dry_run_returns_empty(self) -> None:
+        assert gh_pr_list_open(dry_run=True) == []
+
+    @patch("hephaestus.automation.github_api._gh_call")
+    def test_returns_sorted_pr_list(self, mock_gh_call: Any) -> None:
+        mock_result = Mock()
+        mock_result.stdout = json.dumps(
+            [
+                {
+                    "number": 5,
+                    "title": "PR five",
+                    "author": {"login": "alice"},
+                    "headRefName": "feat-5",
+                    "baseRefName": "main",
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                    "statusCheckRollup": [{"conclusion": "SUCCESS"}],
+                },
+                {
+                    "number": 1,
+                    "title": "PR one",
+                    "author": {"login": "bob"},
+                    "headRefName": "feat-1",
+                    "baseRefName": "main",
+                    "mergeable": "CONFLICTING",
+                    "mergeStateStatus": "DIRTY",
+                    "statusCheckRollup": [],
+                },
+            ]
+        )
+        mock_gh_call.return_value = mock_result
+
+        prs = gh_pr_list_open()
+
+        assert len(prs) == 2
+        assert prs[0]["number"] == 1
+        assert prs[1]["number"] == 5
+        assert prs[0]["author"] == "bob"
+        assert prs[0]["mergeable"] == "CONFLICTING"
+        assert prs[0]["ci_status"] == "UNKNOWN"
+        assert prs[1]["author"] == "alice"
+        assert prs[1]["ci_status"] == "SUCCESS"
+
+    @patch("hephaestus.automation.github_api._gh_call")
+    def test_handles_missing_author(self, mock_gh_call: Any) -> None:
+        mock_result = Mock()
+        mock_result.stdout = json.dumps(
+            [
+                {
+                    "number": 1,
+                    "title": "PR one",
+                    "author": None,
+                    "headRefName": "feat-1",
+                    "baseRefName": "main",
+                    "mergeable": "UNKNOWN",
+                    "mergeStateStatus": "UNKNOWN",
+                    "statusCheckRollup": [],
+                }
+            ]
+        )
+        mock_gh_call.return_value = mock_result
+
+        prs = gh_pr_list_open()
+
+        assert prs[0]["author"] == "unknown"
+
+    @patch("hephaestus.automation.github_api._gh_call")
+    def test_failure_raises_runtime_error(self, mock_gh_call: Any) -> None:
+        mock_gh_call.side_effect = subprocess.CalledProcessError(1, "gh")
+
+        with pytest.raises(RuntimeError, match="Failed to list open PRs"):
+            gh_pr_list_open()
+
+    @patch("hephaestus.automation.github_api._gh_call")
+    def test_json_decode_error_raises_runtime_error(self, mock_gh_call: Any) -> None:
+        mock_result = Mock()
+        mock_result.stdout = "not json"
+        mock_gh_call.return_value = mock_result
+
+        with pytest.raises(RuntimeError, match="Failed to list open PRs"):
+            gh_pr_list_open()
 
 
 class TestGhPrReviewPost:

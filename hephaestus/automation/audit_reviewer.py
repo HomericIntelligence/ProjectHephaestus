@@ -28,8 +28,14 @@ from hephaestus.cli.utils import add_json_arg, emit_json_status
 from .claude_invoke import invoke_claude_with_session
 from .claude_models import reviewer_model
 from .claude_timeouts import pr_reviewer_claude_timeout
-from .github_api import _derive_ci_status, _gh_call, gh_pr_list_open, gh_pr_review_post, write_secure
 from .git_utils import get_repo_root, get_repo_slug, pr_ref
+from .github_api import (
+    _derive_ci_status,
+    _gh_call,
+    gh_pr_list_open,
+    gh_pr_review_post,
+    write_secure,
+)
 from .session_naming import AGENT_AUDIT_REVIEWER
 
 logger = logging.getLogger(__name__)

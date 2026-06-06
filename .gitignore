@@ -4,6 +4,9 @@
 # Build artifacts
 build/
 
+# Per-issue automation scratch/learnings files (should never be committed)
+LEARNINGS_ISSUE_*.md
+
 # Auto-generated API reference (pdoc output)
 docs/api/
 

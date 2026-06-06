@@ -52,7 +52,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from hephaestus.cli.utils import add_json_arg, emit_json_status
+from hephaestus.cli.utils import add_json_arg, add_version_arg, emit_json_status
 
 _GDB_PREFIX_TOKEN_RE = re.compile(r"[A-Za-z0-9_./:=,@+~\-]+")
 
@@ -315,6 +315,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="arguments passed to the command verbatim",
     )
     add_json_arg(parser)
+    add_version_arg(parser)
     return parser
 
 

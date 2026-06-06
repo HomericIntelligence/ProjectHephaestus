@@ -154,7 +154,6 @@ bypass a misfiring hook locally use
 | `hephaestus-validate-agents` | Internal | Repo CI agent-frontmatter validator |
 | `hephaestus-check-cli-tier-docs` | Internal | Enforces this very table; added in #766 |
 
-
 ## Public API
 
 The following symbols are part of the stable public API and are covered by

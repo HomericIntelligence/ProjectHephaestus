@@ -506,7 +506,10 @@ def test_build_phase_argv_forwards_resolved_agent() -> None:
 
 
 def test_build_phase_argv_drive_green_includes_issues() -> None:
-    """drive-green passes explicit cfg.issues, but not open_issues (uses PR-discovery by default)."""
+    """drive-green passes explicit cfg.issues, but not open_issues (uses PR-discovery by default).
+
+    PR-discovery auto-discovers failing PRs; open_issues is only used by other phases.
+    """
     cfg = LoopConfig(issues=[7, 8])
     with patch.object(loop_runner, "_resolve_phase_bin", return_value=("/py", ["script.py"])):
         argv = loop_runner._build_phase_argv("drive-green", cfg, open_issues=[1, 2])

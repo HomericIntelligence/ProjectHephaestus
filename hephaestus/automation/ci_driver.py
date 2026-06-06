@@ -459,11 +459,16 @@ class CIDriver:
         try:
             result = _gh_call(
                 [
-                    "pr", "list",
-                    "--repo", f"{owner}/{repo}",
-                    "--state", "open",
-                    "--limit", "1000",
-                    "--json", "number,isDraft,statusCheckRollup,mergeStateStatus",
+                    "pr",
+                    "list",
+                    "--repo",
+                    f"{owner}/{repo}",
+                    "--state",
+                    "open",
+                    "--limit",
+                    "1000",
+                    "--json",
+                    "number,isDraft,statusCheckRollup,mergeStateStatus",
                 ],
             )
             pulls: list[dict[str, Any]] = json.loads(result.stdout or "[]")
@@ -474,7 +479,8 @@ class CIDriver:
             logger.warning(
                 "Failing-PR discovery hit gh's 1000-PR cap on %s/%s — "
                 "additional failing PRs may exist and are not visible to this run.",
-                owner, repo,
+                owner,
+                repo,
             )
         failing: dict[int, int] = {}
         for pr in pulls:
@@ -486,7 +492,8 @@ class CIDriver:
         if failing:
             logger.info(
                 "Discovered %s open failing PR(s): %s",
-                len(failing), sorted(failing),
+                len(failing),
+                sorted(failing),
             )
         return failing
 

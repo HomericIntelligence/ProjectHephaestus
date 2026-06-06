@@ -636,11 +636,17 @@ def _count_failing_prs(org: str, repo: str) -> int:
     try:
         out = subprocess.run(
             [
-                "gh", "pr", "list",
-                "--repo", f"{org}/{repo}",
-                "--state", "open",
-                "--limit", "1000",
-                "--json", "number,isDraft,statusCheckRollup,mergeStateStatus",
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                f"{org}/{repo}",
+                "--state",
+                "open",
+                "--limit",
+                "1000",
+                "--json",
+                "number,isDraft,statusCheckRollup,mergeStateStatus",
             ],
             capture_output=True,
             text=True,
@@ -1100,9 +1106,7 @@ def _process_repo_inner(
                     PhaseResult(name=phase, skipped=True, skip_reason="no failing PRs")
                 )
                 continue
-            LOG.info(
-                "[%s] phase %s has %d failing PR(s) — running", repo, phase, failing
-            )
+            LOG.info("[%s] phase %s has %d failing PR(s) — running", repo, phase, failing)
 
         phase_result = run_phase(
             repo=repo,

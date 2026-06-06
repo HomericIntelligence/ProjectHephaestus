@@ -94,7 +94,7 @@ class TestCountFailingPrs:
     def test_count_failing_prs_returns_zero_on_timeout(self) -> None:
         """Returns 0 on timeout (fail-closed)."""
         with patch("hephaestus.automation.loop_runner.subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.TimeoutExpired(cmd='gh', timeout=30)
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="gh", timeout=30)
             result = _count_failing_prs("MyOrg", "MyRepo")
         assert result == 0
 

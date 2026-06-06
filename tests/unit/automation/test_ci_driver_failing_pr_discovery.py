@@ -154,9 +154,7 @@ class TestDiscoverFailingPrs:
         assert result == {1: 1}
         assert 2 not in result
 
-    def test_discover_failing_prs_includes_blocked_merge_state(
-        self, ci_driver: CIDriver
-    ) -> None:
+    def test_discover_failing_prs_includes_blocked_merge_state(self, ci_driver: CIDriver) -> None:
         """PRs with BLOCKED merge state are discovered."""
         mock_output = [
             {
@@ -190,9 +188,7 @@ class TestDiscoverFailingPrs:
                 result = ci_driver._discover_failing_prs()
         assert result == {}
 
-    def test_discover_failing_prs_returns_empty_on_gh_error(
-        self, ci_driver: CIDriver
-    ) -> None:
+    def test_discover_failing_prs_returns_empty_on_gh_error(self, ci_driver: CIDriver) -> None:
         """Discovery returns empty dict on gh command failure."""
         import subprocess
 
@@ -223,9 +219,7 @@ class TestDiscoverFailingPrs:
         assert len(result) == 1000
         mock_logger.warning.assert_called()
 
-    def test_discover_failing_prs_returns_empty_on_invalid_json(
-        self, ci_driver: CIDriver
-    ) -> None:
+    def test_discover_failing_prs_returns_empty_on_invalid_json(self, ci_driver: CIDriver) -> None:
         """Discovery returns empty dict on invalid JSON."""
         with patch("hephaestus.automation.ci_driver.get_repo_info") as mock_repo_info:
             mock_repo_info.return_value = ("MyOrg", "MyRepo")
@@ -254,9 +248,7 @@ class TestDiscoverPrsUnion:
                     result = ci_driver._discover_prs([])
         assert result == {10: 10, 20: 20}
 
-    def test_discover_prs_skips_failing_path_when_issues_scoped(
-        self, ci_driver: CIDriver
-    ) -> None:
+    def test_discover_prs_skips_failing_path_when_issues_scoped(self, ci_driver: CIDriver) -> None:
         """Failing-PR discovery is NOT invoked when --issues is provided."""
         ci_driver.options.issues = [100]
 
@@ -269,9 +261,7 @@ class TestDiscoverPrsUnion:
         mock_failing.assert_not_called()
         assert result == {100: 200}
 
-    def test_discover_prs_dedupes_across_bot_and_failing(
-        self, ci_driver: CIDriver
-    ) -> None:
+    def test_discover_prs_dedupes_across_bot_and_failing(self, ci_driver: CIDriver) -> None:
         """A PR already discovered via bot path is not re-added from failing path."""
         ci_driver.options.issues = []
         ci_driver.options.include_bot_prs = True
@@ -289,9 +279,7 @@ class TestDiscoverPrsUnion:
 class TestIsBotPrModeForSyntheticKey:
     """Tests for _is_bot_pr_mode with failing PR synthetic keys."""
 
-    def test_is_bot_pr_mode_holds_for_synthetic_failing_pr_key(
-        self, ci_driver: CIDriver
-    ) -> None:
+    def test_is_bot_pr_mode_holds_for_synthetic_failing_pr_key(self, ci_driver: CIDriver) -> None:
         """Failing PRs use synthetic-key invariant: pr_num == issue_num."""
         pr_num = 50
         assert ci_driver._is_bot_pr_mode(pr_num, pr_num)

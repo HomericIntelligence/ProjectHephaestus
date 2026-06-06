@@ -1,13 +1,11 @@
 """Tests for hephaestus/validation/cli_tier_docs.py."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from hephaestus.utils.helpers import get_repo_root
 from hephaestus.validation.cli_tier_docs import (
-    TierDocFinding,
     find_violations,
     load_documented_tiers,
     load_pyproject_scripts,
@@ -17,10 +15,14 @@ from hephaestus.validation.cli_tier_docs import (
 
 class TestFindViolations:
     def test_no_findings_when_aligned(self) -> None:
-        assert find_violations({"hephaestus-foo": "pkg.mod:main"}, {"hephaestus-foo": "Stable"}) == []
+        assert (
+            find_violations({"hephaestus-foo": "pkg.mod:main"}, {"hephaestus-foo": "Stable"}) == []
+        )
 
     def test_missing_from_docs(self) -> None:
-        v = find_violations({"hephaestus-foo": "pkg.mod:main"}, {"hephaestus-foo-other": "Internal"})
+        v = find_violations(
+            {"hephaestus-foo": "pkg.mod:main"}, {"hephaestus-foo-other": "Internal"}
+        )
         assert len(v) == 2  # one missing-from-docs, one missing-from-pyproject
         kinds = sorted(f.kind for f in v)
         assert kinds == ["missing-from-docs", "missing-from-pyproject"]

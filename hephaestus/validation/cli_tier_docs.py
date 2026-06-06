@@ -13,6 +13,7 @@ Usage::
     hephaestus-check-cli-tier-docs --json
     hephaestus-check-cli-tier-docs --repo-root /path/to/repo
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,7 +30,7 @@ from hephaestus.utils.helpers import get_repo_root
 VALID_TIERS: frozenset[str] = frozenset({"Stable", "Provisional", "Internal"})
 _SECTION_HEADER_RE = re.compile(r"^##\s+Console-Script Stability Tiers", re.IGNORECASE)
 _TABLE_HEADER_RE = re.compile(r"^\|\s*CLI\s*\|\s*Tier\s*\|", re.IGNORECASE)
-_TABLE_SEPARATOR_RE = re.compile(r"^\|[\s\-:|]+$")
+_TABLE_SEPARATOR_RE = re.compile(r"^\|[\s\-:|]+\|?\s*$")
 _TABLE_ROW_RE = re.compile(r"^\|\s*`?(hephaestus-[a-z0-9-]+)`?\s*\|\s*([A-Za-z]+)\s*\|")
 
 
@@ -82,9 +83,7 @@ def load_documented_tiers(compatibility_path: Path) -> dict[str, str]:
     return tiers
 
 
-def find_violations(
-    scripts: dict[str, str], tiers: dict[str, str]
-) -> list[TierDocFinding]:
+def find_violations(scripts: dict[str, str], tiers: dict[str, str]) -> list[TierDocFinding]:
     findings: list[TierDocFinding] = []
     # Guard against silent regex regression (Decision 4): if pyproject has
     # entries but the table parsed zero rows, fail loudly rather than reporting
@@ -105,14 +104,16 @@ def find_violations(
     for cli in sorted(set(scripts) - set(tiers)):
         findings.append(
             TierDocFinding(
-                cli, "missing-from-docs",
+                cli,
+                "missing-from-docs",
                 f"{cli} is in pyproject.toml [project.scripts] but has no row in COMPATIBILITY.md",
             )
         )
     for cli in sorted(set(tiers) - set(scripts)):
         findings.append(
             TierDocFinding(
-                cli, "missing-from-pyproject",
+                cli,
+                "missing-from-pyproject",
                 f"{cli} has a tier row in COMPATIBILITY.md but is not in pyproject.toml [project.scripts]",
             )
         )
@@ -120,7 +121,8 @@ def find_violations(
         if tiers[cli] not in VALID_TIERS:
             findings.append(
                 TierDocFinding(
-                    cli, "invalid-tier",
+                    cli,
+                    "invalid-tier",
                     f"{cli} has tier '{tiers[cli]}'; must be one of {sorted(VALID_TIERS)}",
                 )
             )

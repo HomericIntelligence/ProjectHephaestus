@@ -409,6 +409,8 @@ class TestTimeoutHandling:
     def test_get_resign_email_with_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """get_resign_email handles TimeoutExpired by trying next config source."""
         monkeypatch.delenv("FLEET_GIT_EMAIL", raising=False)
+        # Isolate resolution from the #1025 GPG-key-match guard.
+        monkeypatch.setenv("FLEET_SKIP_EMAIL_KEY_CHECK", "1")
 
         call_count = [0]
 
@@ -429,6 +431,8 @@ class TestTimeoutHandling:
     def test_get_resign_email_uses_metadata_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """get_resign_email uses METADATA_TIMEOUT."""
         monkeypatch.delenv("FLEET_GIT_EMAIL", raising=False)
+        # Isolate resolution from the #1025 GPG-key-match guard.
+        monkeypatch.setenv("FLEET_SKIP_EMAIL_KEY_CHECK", "1")
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="test@example.com\n")

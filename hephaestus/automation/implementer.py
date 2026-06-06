@@ -57,7 +57,7 @@ from . import (  # noqa: F401  # test-patch shim — see contract above
 from ._review_utils import find_pr_for_issue  # noqa: F401  # test-patch shim
 
 # Patched by: tests/unit/automation/test_implementer_loop.py:{324,346,366,388}
-# Runtime call site: phase runner's claude-invocation code path (via ``_impl_module``)
+# Runtime call site: ``implementer_phase_runner.py:{855,1305,1580}`` (via ``_impl_module``)
 from .claude_invoke import invoke_claude_with_session  # noqa: F401  # test-patch shim
 from .curses_ui import CursesUI, ThreadLogManager
 from .dependency_resolver import CyclicDependencyError, DependencyResolver

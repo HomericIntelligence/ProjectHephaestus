@@ -1614,9 +1614,7 @@ def gh_pr_checks(
 _BAD_CI_CONCLUSIONS: frozenset[str] = frozenset(
     {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR"}
 )
-_PENDING_CI_CONCLUSIONS: frozenset[str] = frozenset(
-    {"PENDING", "IN_PROGRESS", "QUEUED", "WAITING"}
-)
+_PENDING_CI_CONCLUSIONS: frozenset[str] = frozenset({"PENDING", "IN_PROGRESS", "QUEUED", "WAITING"})
 
 
 def _derive_ci_status(checks: list[dict[str, Any]]) -> str:

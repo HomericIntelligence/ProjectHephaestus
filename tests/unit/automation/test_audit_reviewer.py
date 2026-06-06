@@ -46,7 +46,7 @@ class TestParseCoordinatorResults:
     def test_returns_last_json_block_when_multiple(self) -> None:
         text = (
             '```json\n{"results": [{"pr_number": 1}]}\n```\n'
-            'more text\n'
+            "more text\n"
             '```json\n{"results": [{"pr_number": 2}, {"pr_number": 3}]}\n```'
         )
         results = audit_reviewer._parse_coordinator_results(text)
@@ -103,10 +103,10 @@ class TestParseCoordinatorResults:
     def test_extracts_results_with_extra_fields(self) -> None:
         """Results dict may carry extra fields beyond pr_number/comments/summary."""
         text = (
-            '```json\n'
+            "```json\n"
             '{"results": [{"pr_number": 1, "comments": [], "summary": "ok",'
             ' "extra_field": "ignored"}]}\n'
-            '```'
+            "```"
         )
         results = audit_reviewer._parse_coordinator_results(text)
         assert len(results) == 1
@@ -141,16 +141,12 @@ class TestPostAuditResults:
         assert posted == {1: True, 2: True}
 
     def test_dry_run_does_nothing(self) -> None:
-        results: list[dict[str, Any]] = [
-            {"pr_number": 1, "comments": [], "summary": "test"}
-        ]
+        results: list[dict[str, Any]] = [{"pr_number": 1, "comments": [], "summary": "test"}]
         posted = audit_reviewer.post_audit_results(results, dry_run=True)
         assert posted == {1: False}
 
     def test_skips_missing_pr_number(self) -> None:
-        results: list[dict[str, Any]] = [
-            {"comments": [], "summary": "no pr_number key"}
-        ]
+        results: list[dict[str, Any]] = [{"comments": [], "summary": "no pr_number key"}]
         posted = audit_reviewer.post_audit_results(results)
         assert posted == {}
 
@@ -168,9 +164,7 @@ class TestPostAuditResults:
     @patch("hephaestus.automation.audit_reviewer.gh_pr_review_post")
     def test_posting_failure_is_recorded(self, mock_post: Any) -> None:
         mock_post.side_effect = RuntimeError("API down")
-        results: list[dict[str, Any]] = [
-            {"pr_number": 1, "comments": [], "summary": "test"}
-        ]
+        results: list[dict[str, Any]] = [{"pr_number": 1, "comments": [], "summary": "test"}]
         posted = audit_reviewer.post_audit_results(results)
         assert posted == {1: False}
 
@@ -400,8 +394,7 @@ class TestRunAuditCoordinator:
         mock_repo_root.return_value = tmp_path
         mock_repo_slug.return_value = "test-repo"
         mock_invoke.return_value = (
-            '```json\n{"results": [{"pr_number": 1, "comments": [],'
-            ' "summary": "LGTM"}]}\n```',
+            '```json\n{"results": [{"pr_number": 1, "comments": [], "summary": "LGTM"}]}\n```',
             "session-sid",
         )
 
@@ -433,12 +426,14 @@ class TestRunAuditCoordinator:
         mock_repo_root.return_value = tmp_path
         mock_repo_slug.return_value = "test-repo"
         # When output_format="json", stdout is a JSON dict with "result" key
-        wrapped_json = json.dumps({
-            "result": (
-                '```json\n{"results": [{"pr_number": 1, "comments": [],'
-                ' "summary": "LGTM"}]}\n```'
-            )
-        })
+        wrapped_json = json.dumps(
+            {
+                "result": (
+                    '```json\n{"results": [{"pr_number": 1, "comments": [],'
+                    ' "summary": "LGTM"}]}\n```'
+                )
+            }
+        )
         mock_invoke.return_value = (wrapped_json, "session-sid")
 
         results = audit_reviewer.run_audit_coordinator(
@@ -635,9 +630,7 @@ class TestAuditReviewerRun:
         ]
         mock_post.return_value = {42: True}
 
-        with patch.object(
-            audit_reviewer.AuditReviewer, "_fetch_prs_by_number"
-        ) as mock_fetch:
+        with patch.object(audit_reviewer.AuditReviewer, "_fetch_prs_by_number") as mock_fetch:
             mock_fetch.return_value = [
                 {
                     "number": 42,
@@ -650,9 +643,7 @@ class TestAuditReviewerRun:
                     "ci_status": "SUCCESS",
                 },
             ]
-            reviewer = audit_reviewer.AuditReviewer(
-                agent="claude", pr_numbers=[42]
-            )
+            reviewer = audit_reviewer.AuditReviewer(agent="claude", pr_numbers=[42])
             exit_code = reviewer.run()
 
         assert exit_code == 0

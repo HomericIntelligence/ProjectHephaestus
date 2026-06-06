@@ -24,6 +24,7 @@ pytestmark = pytest.mark.integration
 # Module importability
 # ---------------------------------------------------------------------------
 
+
 class TestAuditReviewerImportable:
     """The audit reviewer module must be importable without errors."""
 
@@ -47,14 +48,13 @@ class TestAuditReviewerImportable:
             "_parse_coordinator_results",
         ]
         for name in expected:
-            assert hasattr(audit_reviewer, name), (
-                f"audit_reviewer.{name} not found"
-            )
+            assert hasattr(audit_reviewer, name), f"audit_reviewer.{name} not found"
 
 
 # ---------------------------------------------------------------------------
 # _parse_coordinator_results — integration-level smoke
 # ---------------------------------------------------------------------------
+
 
 class TestParseCoordinatorResultsIntegration:
     """End-to-end parsing of realistic coordinator output."""
@@ -132,6 +132,7 @@ class TestParseCoordinatorResultsIntegration:
 # write_audit_report — integration-level smoke
 # ---------------------------------------------------------------------------
 
+
 class TestWriteAuditReportIntegration:
     """End-to-end audit report writing."""
 
@@ -142,9 +143,7 @@ class TestWriteAuditReportIntegration:
         results = [
             {
                 "pr_number": 100,
-                "comments": [
-                    {"path": "a.py", "line": 1, "side": "RIGHT", "body": "nit"}
-                ],
+                "comments": [{"path": "a.py", "line": 1, "side": "RIGHT", "body": "nit"}],
                 "summary": "One nit",
             }
         ]
@@ -184,6 +183,7 @@ class TestWriteAuditReportIntegration:
 # print_audit_summary — integration-level smoke
 # ---------------------------------------------------------------------------
 
+
 class TestPrintAuditSummaryIntegration:
     """End-to-end summary printing."""
 
@@ -195,9 +195,7 @@ class TestPrintAuditSummaryIntegration:
             {"pr_number": 100, "comments": [], "summary": "LGTM"},
             {
                 "pr_number": 101,
-                "comments": [
-                    {"path": "x.py", "line": 1, "side": "RIGHT", "body": "bug"}
-                ],
+                "comments": [{"path": "x.py", "line": 1, "side": "RIGHT", "body": "bug"}],
                 "summary": "Has issues",
             },
         ]
@@ -223,6 +221,7 @@ class TestPrintAuditSummaryIntegration:
 # ---------------------------------------------------------------------------
 # AuditReviewer construction
 # ---------------------------------------------------------------------------
+
 
 class TestAuditReviewerConstruction:
     """AuditReviewer must be constructable with various parameter combinations."""

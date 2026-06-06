@@ -148,12 +148,8 @@ def run_audit_coordinator(
     except subprocess.CalledProcessError as e:
         stdout = e.stdout or ""
         stderr = e.stderr or ""
-        log_file.write_text(
-            f"EXIT CODE: {e.returncode}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
-        )
-        raise RuntimeError(
-            f"Audit coordinator failed: {e.stderr or e.stdout}"
-        ) from e
+        log_file.write_text(f"EXIT CODE: {e.returncode}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}")
+        raise RuntimeError(f"Audit coordinator failed: {e.stderr or e.stdout}") from e
     except subprocess.TimeoutExpired as e:
         log_file.write_text(f"TIMEOUT after {e.timeout}s\n\nOutput:\n{e.output or ''}")
         raise RuntimeError("Audit coordinator timed out") from e
@@ -189,9 +185,7 @@ def post_audit_results(
             comments = []
 
         if dry_run:
-            logger.info(
-                "[dry_run] Would post audit review on PR %s", pr_ref(pr_number)
-            )
+            logger.info("[dry_run] Would post audit review on PR %s", pr_ref(pr_number))
             posted[pr_number] = False
             continue
 

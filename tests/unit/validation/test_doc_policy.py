@@ -517,6 +517,20 @@ class TestFormatTextReport:
         report = format_text_report([finding], verbose=True)
         assert "--label" in report
 
+    def test_non_verbose_omits_content(self, tmp_path: Path) -> None:
+        """Non-verbose mode should omit the raw violating line content."""
+        finding = Finding(
+            file="foo/bar.md",
+            line=10,
+            content="gh pr create --label bug",
+            rule="no-label-in-pr-create",
+            severity=Severity.CRITICAL,
+            description="labels prohibited",
+        )
+        report = format_text_report([finding], verbose=False)
+        # content line with "--label bug" should not appear (description will appear)
+        assert "gh pr create --label bug" not in report
+
 
 # ---------------------------------------------------------------------------
 # Regression: skills/ directory merge-strategy compliance
@@ -547,20 +561,6 @@ class TestSkillFilesMergeStrategy:
             "skills/ contains wrong-merge-strategy violations:\n"
             + "\n".join(f"  {f.file}:{f.line} — {f.content.strip()}" for f in merge_findings)
         )
-
-    def test_non_verbose_omits_content(self, tmp_path: Path) -> None:
-        """Non-verbose mode should omit the raw violating line content."""
-        finding = Finding(
-            file="foo/bar.md",
-            line=10,
-            content="gh pr create --label bug",
-            rule="no-label-in-pr-create",
-            severity=Severity.CRITICAL,
-            description="labels prohibited",
-        )
-        report = format_text_report([finding], verbose=False)
-        # content line with "--label bug" should not appear (description will appear)
-        assert "gh pr create --label bug" not in report
 
 
 class TestFormatJsonReport:

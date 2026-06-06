@@ -223,8 +223,7 @@ class TestCursesUI:
         ui = self._make_ui()
         ui.stdscr = MagicMock()
 
-        with patch("hephaestus.automation.curses_ui.contextlib.suppress"):
-            next_row = ui._draw_separator(start_row=4, height=10, width=80)
+        next_row = ui._draw_separator(start_row=4, height=10, width=80)
 
         assert next_row == 5
 

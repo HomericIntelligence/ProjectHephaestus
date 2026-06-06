@@ -129,14 +129,8 @@ class CIDriver:
         # Empty --issues is allowed: bot-PR discovery (#848) may still
         # surface open Dependabot PRs to drive. Only abort if ALL input
         # sources are off: no issues, no direct PRs, and no bot discovery.
-        if (
-            not self.options.issues
-            and not self.options.prs
-            and not self.options.include_bot_prs
-        ):
-            logger.warning(
-                "No issues, no direct PRs, and bot-PR discovery disabled"
-            )
+        if not self.options.issues and not self.options.prs and not self.options.include_bot_prs:
+            logger.warning("No issues, no direct PRs, and bot-PR discovery disabled")
             return {}
 
         # Pre-discover PRs — only submit workers for issues that have an open PR.
@@ -504,9 +498,7 @@ class CIDriver:
                 )
                 continue
             if not self._validate_pr_open(pr_num):
-                logger.warning(
-                    "Direct PR #%s is not OPEN or does not exist; skipping", pr_num
-                )
+                logger.warning("Direct PR #%s is not OPEN or does not exist; skipping", pr_num)
                 continue
             deduped[pr_num] = pr_num
             self.shared_pr_issues.setdefault(pr_num, [pr_num])

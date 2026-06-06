@@ -28,9 +28,7 @@ class TestParseArgsPrs:
 
     def test_prs_combined_with_issues(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """--prs and --issues can be used together."""
-        monkeypatch.setattr(
-            sys, "argv", ["ci", "--issues", "918", "--prs", "661", "662"]
-        )
+        monkeypatch.setattr(sys, "argv", ["ci", "--issues", "918", "--prs", "661", "662"])
         args = ci_driver._parse_args()
         assert args.issues == [918]
         assert args.prs == [661, 662]
@@ -57,12 +55,8 @@ class TestDiscoverPrsDirectMode:
         driver.options.prs = [661, 662]
 
         # Mock _validate_pr_open to return True for these PRs
-        with patch.object(
-            driver, "_validate_pr_open", return_value=True
-        ) as mock_validate:
-            with patch.object(
-                driver, "_find_pr_for_issue", return_value=None
-            ):
+        with patch.object(driver, "_validate_pr_open", return_value=True) as mock_validate:
+            with patch.object(driver, "_find_pr_for_issue", return_value=None):
                 result = driver._discover_prs([])
 
         assert 661 in result.values()
@@ -79,12 +73,8 @@ class TestDiscoverPrsDirectMode:
         """Direct PRs populate shared_pr_issues[pr] = [pr]."""
         driver.options.prs = [661]
 
-        with patch.object(
-            driver, "_validate_pr_open", return_value=True
-        ):
-            with patch.object(
-                driver, "_find_pr_for_issue", return_value=None
-            ):
+        with patch.object(driver, "_validate_pr_open", return_value=True):
+            with patch.object(driver, "_find_pr_for_issue", return_value=None):
                 driver._discover_prs([])
 
         assert driver.shared_pr_issues.get(661) == [661]
@@ -100,9 +90,7 @@ class TestDiscoverPrsDirectMode:
             "_find_pr_for_issue",
             return_value=661,
         ):
-            with patch.object(
-                driver, "_validate_pr_open", return_value=True
-            ) as mock_validate:
+            with patch.object(driver, "_validate_pr_open", return_value=True) as mock_validate:
                 result = driver._discover_prs([918])
 
         # PR 661 should appear exactly once, keyed by issue 918 (from issue path)
@@ -124,9 +112,7 @@ class TestDiscoverPrsDirectMode:
             "_find_pr_for_issue",
             return_value=999,
         ):
-            with patch.object(
-                driver, "_validate_pr_open", return_value=True
-            ):
+            with patch.object(driver, "_validate_pr_open", return_value=True):
                 result = driver._discover_prs([918])
 
         # Issue 918 should map to PR 999
@@ -144,12 +130,8 @@ class TestDiscoverPrsDirectMode:
         def validate_side_effect(pr_num):
             return pr_num != 662  # 662 is closed/non-existent
 
-        with patch.object(
-            driver, "_validate_pr_open", side_effect=validate_side_effect
-        ):
-            with patch.object(
-                driver, "_find_pr_for_issue", return_value=None
-            ):
+        with patch.object(driver, "_validate_pr_open", side_effect=validate_side_effect):
+            with patch.object(driver, "_find_pr_for_issue", return_value=None):
                 result = driver._discover_prs([])
 
         # Valid PRs included
@@ -163,12 +145,8 @@ class TestDiscoverPrsDirectMode:
         driver.options.prs = [661]
         driver.options.include_bot_prs = False
 
-        with patch.object(
-            driver, "_validate_pr_open", return_value=True
-        ):
-            with patch.object(
-                driver, "_find_pr_for_issue", return_value=None
-            ):
+        with patch.object(driver, "_validate_pr_open", return_value=True):
+            with patch.object(driver, "_find_pr_for_issue", return_value=None):
                 result = driver._discover_prs([])
 
         assert result.get(661) == 661
@@ -178,12 +156,8 @@ class TestDiscoverPrsDirectMode:
         driver.options.prs = [661]
         driver.options.include_bot_prs = False
 
-        with patch.object(
-            driver, "_validate_pr_open", return_value=True
-        ):
-            with patch.object(
-                driver, "_find_pr_for_issue", return_value=None
-            ):
+        with patch.object(driver, "_validate_pr_open", return_value=True):
+            with patch.object(driver, "_find_pr_for_issue", return_value=None):
                 result = driver._discover_prs([])
 
         assert result.get(661) == 661
@@ -194,27 +168,21 @@ class TestRunGateWithPrs:
 
     def test_run_gate_does_not_abort_with_prs(self) -> None:
         """run() gate does not abort when --prs is supplied (only issues+bot are checked)."""
-        # The gate logic is: abort only if issues AND prs AND include_bot_prs are all empty
-        # With prs=[661], the gate should pass
-        options = CIDriverOptions(
-            issues=[], prs=[661], include_bot_prs=False
-        )
-        # We can't easily mock the full run() without mocking ThreadPoolExecutor,
-        # so we just verify the gate condition is correct
-        # The gate check is: if not issues and not prs and not include_bot_prs: return {}
-        # With prs=[661], this should NOT trigger the early return
-        should_abort = (
-            not options.issues
-            and not options.prs
-            and not options.include_bot_prs
-        )
-        assert should_abort is False
+        options = CIDriverOptions(issues=[], prs=[661], include_bot_prs=False)
+        driver = CIDriver(options)
+
+        # Mock _discover_prs to return {661: 661} and _sweep_orphaned_arming_records
+        # to avoid network I/O
+        with patch.object(driver, "_discover_prs", return_value={661: 661}):
+            with patch.object(driver, "_sweep_orphaned_arming_records"):
+                result = driver.run()
+
+        # Verify the gate did not abort by checking result is not an empty dict
+        assert result != {}
 
     def test_run_gate_aborts_with_no_issues_no_prs_no_bot_prs(self) -> None:
         """run() aborts when all sources are empty."""
-        options = CIDriverOptions(
-            issues=[], prs=[], include_bot_prs=False
-        )
+        options = CIDriverOptions(issues=[], prs=[], include_bot_prs=False)
         driver = CIDriver(options)
         result = driver.run()
         assert result == {}
@@ -227,12 +195,8 @@ class TestMainPrsFlow:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """main() threads --prs into CIDriverOptions.prs."""
-        monkeypatch.setattr(
-            sys, "argv", ["ci", "--prs", "661", "662", "--dry-run", "--force-run"]
-        )
-        with patch(
-            "hephaestus.automation.ci_driver.CIDriver"
-        ) as mock_driver_class:
+        monkeypatch.setattr(sys, "argv", ["ci", "--prs", "661", "662", "--dry-run", "--force-run"])
+        with patch("hephaestus.automation.ci_driver.CIDriver") as mock_driver_class:
             with patch(
                 "hephaestus.automation.ci_driver._evaluate_run_result",
                 return_value=0,
@@ -251,16 +215,10 @@ class TestMainPrsFlow:
         options = call_args[0][0]
         assert options.prs == [661, 662]
 
-    def test_main_prs_json_output_includes_open_prs(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_main_prs_json_output_includes_open_prs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """--prs --json output includes open PRs from result."""
-        monkeypatch.setattr(
-            sys, "argv", ["ci", "--prs", "661", "662", "--json", "--force-run"]
-        )
-        with patch(
-            "hephaestus.automation.ci_driver.CIDriver"
-        ) as mock_driver_class:
+        monkeypatch.setattr(sys, "argv", ["ci", "--prs", "661", "662", "--json", "--force-run"])
+        with patch("hephaestus.automation.ci_driver.CIDriver") as mock_driver_class:
             with patch(
                 "hephaestus.automation.ci_driver._evaluate_run_result",
                 return_value=0,
@@ -272,9 +230,13 @@ class TestMainPrsFlow:
 
                 ci_driver.main()
 
-        # _evaluate_run_result should be called with the results and options
+        # Verify that _evaluate_run_result was called with a result dict
+        # containing the PR keys 661 and 662
         call_args = mock_eval.call_args
         assert call_args is not None
+        result_dict = call_args[0][0]
+        assert 661 in result_dict
+        assert 662 in result_dict
 
 
 class TestValidatePrOpen:
@@ -285,12 +247,8 @@ class TestValidatePrOpen:
         options = CIDriverOptions()
         driver = CIDriver(options)
 
-        with patch(
-            "hephaestus.automation.ci_driver._gh_call"
-        ) as mock_gh_call:
-            mock_gh_call.return_value.stdout = json.dumps(
-                {"state": "OPEN", "number": 661}
-            )
+        with patch("hephaestus.automation.ci_driver._gh_call") as mock_gh_call:
+            mock_gh_call.return_value.stdout = json.dumps({"state": "OPEN", "number": 661})
             result = driver._validate_pr_open(661)
 
         assert result is True
@@ -300,12 +258,8 @@ class TestValidatePrOpen:
         options = CIDriverOptions()
         driver = CIDriver(options)
 
-        with patch(
-            "hephaestus.automation.ci_driver._gh_call"
-        ) as mock_gh_call:
-            mock_gh_call.return_value.stdout = json.dumps(
-                {"state": "CLOSED", "number": 661}
-            )
+        with patch("hephaestus.automation.ci_driver._gh_call") as mock_gh_call:
+            mock_gh_call.return_value.stdout = json.dumps({"state": "CLOSED", "number": 661})
             result = driver._validate_pr_open(661)
 
         assert result is False
@@ -315,12 +269,22 @@ class TestValidatePrOpen:
         options = CIDriverOptions()
         driver = CIDriver(options)
 
-        with patch(
-            "hephaestus.automation.ci_driver._gh_call"
-        ) as mock_gh_call:
+        with patch("hephaestus.automation.ci_driver._gh_call") as mock_gh_call:
             import subprocess
+
             mock_gh_call.side_effect = subprocess.CalledProcessError(1, "gh")
             result = driver._validate_pr_open(999)
+
+        assert result is False
+
+    def test_validate_pr_open_returns_false_for_empty_stdout(self):
+        """_validate_pr_open returns False when stdout is None (empty response)."""
+        options = CIDriverOptions()
+        driver = CIDriver(options)
+
+        with patch("hephaestus.automation.ci_driver._gh_call") as mock_gh_call:
+            mock_gh_call.return_value.stdout = None
+            result = driver._validate_pr_open(661)
 
         assert result is False
 
@@ -329,12 +293,8 @@ class TestValidatePrOpen:
         options = CIDriverOptions()
         driver = CIDriver(options)
 
-        with patch(
-            "hephaestus.automation.ci_driver._gh_call"
-        ) as mock_gh_call:
-            mock_gh_call.return_value.stdout = json.dumps(
-                {"state": "OPEN", "number": 661}
-            )
+        with patch("hephaestus.automation.ci_driver._gh_call") as mock_gh_call:
+            mock_gh_call.return_value.stdout = json.dumps({"state": "OPEN", "number": 661})
             driver._validate_pr_open(661)
 
         mock_gh_call.assert_called_once()

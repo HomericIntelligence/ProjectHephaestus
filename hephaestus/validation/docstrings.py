@@ -161,7 +161,7 @@ def _context_label(node: ast.AST) -> str:
         return "module"
     if isinstance(node, ast.ClassDef):
         return f"class {node.name}"
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
         return f"def {node.name}"
     return "unknown"
 
@@ -170,7 +170,7 @@ def _docstring_nodes(tree: ast.Module) -> list[tuple[ast.AST, str, int]]:
     """Extract ``(node, docstring_text, line_number)`` for all docstring-bearing nodes."""
     results: list[tuple[ast.AST, str, int]] = []
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         body = getattr(node, "body", [])
         if not body:

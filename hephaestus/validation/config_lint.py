@@ -223,7 +223,7 @@ class ConfigLinter:
         # Check for duplicate values (may indicate copy-paste errors)
         seen_values: dict[Any, str] = {}
         for key, value in values:
-            if isinstance(value, (int, float, str)) and value != "":
+            if isinstance(value, int | float | str) and value != "":
                 if value in seen_values:
                     self.suggestions.append(
                         f"{filepath} - Duplicate value '{value}' "
@@ -243,7 +243,7 @@ class ConfigLinter:
         for param, (min_val, max_val) in self.perf_thresholds.items():
             if param in config:
                 value = config[param]
-                if isinstance(value, (int, float)) and (value < min_val or value > max_val):
+                if isinstance(value, int | float) and (value < min_val or value > max_val):
                     self.warnings.append(
                         f"{filepath} - '{param}' value {value} "
                         f"outside recommended range ({min_val}-{max_val})"

@@ -72,7 +72,7 @@ def extract_cvss_score(severity_list: list[dict[str, Any]]) -> float | None:
     scores: list[float] = []
     for entry in severity_list:
         score_str = entry.get("score", "")
-        if isinstance(score_str, (int, float)):
+        if isinstance(score_str, int | float):
             scores.append(float(score_str))
         elif isinstance(score_str, str) and CVSS_PATTERN.match(score_str):
             pass

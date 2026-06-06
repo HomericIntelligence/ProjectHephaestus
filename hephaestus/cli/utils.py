@@ -246,13 +246,13 @@ def format_output(data: Any, format_type: str = "text") -> str:
         import json
 
         return json.dumps(data, indent=2)
-    elif format_type == "table" and isinstance(data, (list, tuple)):
+    elif format_type == "table" and isinstance(data, list | tuple):
         if data and isinstance(data[0], dict):
             # Dict rows to table
             headers = list(data[0].keys()) if data else []
             rows = [[str(row.get(h, "")) for h in headers] for row in data]
             return format_table(rows, headers)
-        elif data and isinstance(data[0], (list, tuple)):
+        elif data and isinstance(data[0], list | tuple):
             # Already in row format
             return format_table(data)
         else:
@@ -260,7 +260,7 @@ def format_output(data: Any, format_type: str = "text") -> str:
             return "\n".join(str(item) for item in data)
     else:
         # Default text format
-        if isinstance(data, (list, tuple)):
+        if isinstance(data, list | tuple):
             return "\n".join(str(item) for item in data)
         elif isinstance(data, dict):
             lines = []

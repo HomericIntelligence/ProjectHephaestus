@@ -70,7 +70,7 @@ def is_transient_subprocess_error(error: BaseException) -> bool:
 
     if isinstance(error, TRANSIENT_SUBPROCESS_ERRORS):
         # For generic OSError/SubprocessError, check for transient patterns
-        if isinstance(error, (OSError, subprocess.SubprocessError)):
+        if isinstance(error, OSError | subprocess.SubprocessError):
             # Build searchable text from all available error info
             parts = [str(error).lower()]
             if isinstance(error, subprocess.CalledProcessError):

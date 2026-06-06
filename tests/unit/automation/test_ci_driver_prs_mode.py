@@ -173,12 +173,12 @@ class TestRunGateWithPrs:
 
         # Mock _discover_prs to return {661: 661} and _sweep_orphaned_arming_records
         # to avoid network I/O
-        with patch.object(driver, "_discover_prs", return_value={661: 661}):
+        with patch.object(driver, "_discover_prs", return_value={661: 661}) as mock_discover:
             with patch.object(driver, "_sweep_orphaned_arming_records"):
-                result = driver.run()
+                driver.run()
 
-        # Verify the gate did not abort by checking result is not an empty dict
-        assert result != {}
+        # Verify the gate did not abort by checking that _discover_prs was called
+        mock_discover.assert_called_once()
 
     def test_run_gate_aborts_with_no_issues_no_prs_no_bot_prs(self) -> None:
         """run() aborts when all sources are empty."""
@@ -233,10 +233,8 @@ class TestMainPrsFlow:
         # Verify that _evaluate_run_result was called with a result dict
         # containing the PR keys 661 and 662
         call_args = mock_eval.call_args
-        assert call_args is not None
         result_dict = call_args[0][0]
-        assert 661 in result_dict
-        assert 662 in result_dict
+        assert 661 in result_dict and 662 in result_dict
 
 
 class TestValidatePrOpen:

@@ -11,7 +11,7 @@ allowed-tools: [Read, Bash, Grep, Glob, Agent]
 Performs a fast health check of the current repository to catch showstoppers, examining **every source file** via a Myrmidon swarm — no sampling.
 
 > ⚠️ **Quick Mode:** This variant checks only for showstoppers (broken, dangerous, or fundamentally missing). Defaults to PASS unless a critical blocker is found.
-> **Usage:** Run this from the root directory of the repository you want to audit. This variant dispatches one Sonnet agent per audit section (15 sections → 3 waves of 5 agents, max 5 concurrent) so the entire file tree is covered without overflowing one agent's context.
+> **Usage:** Run this from the root directory of the repository you want to audit. This variant dispatches one Sonnet agent per section (8 sections → 2 waves of 4 agents, max 5 concurrent) so the entire file tree is covered without overflowing one agent's context.
 **vs. /repo-analyze-quick:** `repo-analyze-quick` peeks at 3–5 source files. `repo-analyze-quick-full` dispatches one Sonnet agent per section and reads every file at the showstopper-detection level. Use this variant on repos large enough that sampling might miss an exposed secret or broken test.
 
 ---
@@ -21,7 +21,9 @@ You are a security and stability auditor performing a fast health check. Your jo
 </system>
 
 <task>
-$task_paragraph
+Perform a fast health check of the current repository to catch showstoppers.
+
+Analyze each section defined below. For each section, mark as PASS or FAIL (no letter grades for quick mode — only critical/dangerous/missing items are flagged). Conclude with a summary and a final PASS / FAIL verdict.
 </task>
 
 <development_principles>
@@ -60,7 +62,6 @@ You MUST evaluate every section through the lens of these core development princ
   </principle>
 </development_principles>
 
-
 <grading_rubric>
 Keep it simple. Default is B. Be generous.
 
@@ -74,7 +75,6 @@ Keep it simple. Default is B. Be generous.
 Only report CRITICAL findings. Skip everything else.
 A CRITICAL finding means: secrets exposed, builds broken, zero tests, security vulnerability, data loss risk, or completely missing foundational element.
 </grading_rubric>
-
 
 <sections>
 Glance at these 8 areas. Do not go deep. Just check for showstoppers.
@@ -112,24 +112,22 @@ Glance at these 8 areas. Do not go deep. Just check for showstoppers.
   </section>
 </sections>
 
-
 ## Methodology
 
 **Coverage:** Every file in the repository.
 
 Step 1: Inventory all source files via `find` into a temporary file.
 
-Step 2: Dispatch 15 agents in 3 waves of 5 (max 5 concurrent per the Myrmidon swarm constraint):
-- Wave 1 agents: Sections 1–5
-- Wave 2 agents: Sections 6–10
-- Wave 3 agents: Sections 11–15
+Step 2: Dispatch 8 agents in 2 waves of 4 (max 5 concurrent per the Myrmidon swarm constraint):
+
+- Wave 1 agents: Sections 1–4
+- Wave 2 agents: Sections 5–8
 
 Each section agent receives the full file inventory and focuses deeply on files relevant to its section.
 
 Step 3: Compile each agent's report into the final assessment. If a section agent did not return, re-dispatch it before finalizing the report.
 
 Full coverage ensures no bugs are missed due to sampling limitations.
-
 
 <output_format>
 Structure your report as follows. Keep it SHORT. No filler.
@@ -234,12 +232,12 @@ Status: 🟢 A-B (healthy) | 🟡 C-D (needs attention) | 🔴 F (critical)
 ## 📊 Coverage Report
 
 **Swarm dispatch summary:**
+
 - Total files inventoried: N
 - Sections dispatched: 15 agents in 3 waves of 5
 - Files with read errors (coverage gaps): [list or "none"]
 
 ---
-
 
 <analysis_instructions>
 Follow these steps when performing the quick audit:

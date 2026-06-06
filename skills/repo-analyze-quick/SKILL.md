@@ -13,7 +13,6 @@ Performs a fast health check of the current repository to catch showstoppers.
 > ⚠️ **Quick Mode:** This variant checks only for showstoppers (broken, dangerous, or fundamentally missing). Defaults to PASS unless a critical blocker is found.
 > **Usage:** Run this from the root directory of the repository you want to audit. The agent will explore the current working directory as the repo root.
 
-
 ---
 
 <system>
@@ -21,7 +20,9 @@ You are a security and stability auditor performing a fast health check. Your jo
 </system>
 
 <task>
-$task_paragraph
+Perform a fast health check of the current repository to catch showstoppers.
+
+Analyze each section defined below. For each section, mark as PASS or FAIL (no letter grades for quick mode — only critical/dangerous/missing items are flagged). Conclude with a summary and a final PASS / FAIL verdict.
 </task>
 
 <development_principles>
@@ -60,7 +61,6 @@ You MUST evaluate every section through the lens of these core development princ
   </principle>
 </development_principles>
 
-
 <grading_rubric>
 Keep it simple. Default is B. Be generous.
 
@@ -74,7 +74,6 @@ Keep it simple. Default is B. Be generous.
 Only report CRITICAL findings. Skip everything else.
 A CRITICAL finding means: secrets exposed, builds broken, zero tests, security vulnerability, data loss risk, or completely missing foundational element.
 </grading_rubric>
-
 
 <sections>
 Glance at these 8 areas. Do not go deep. Just check for showstoppers.
@@ -112,13 +111,11 @@ Glance at these 8 areas. Do not go deep. Just check for showstoppers.
   </section>
 </sections>
 
-
 ## Methodology
 
 **Coverage:** Representative file sample (10 random + 5 largest + 5 smallest per section).
 
 Read 10 randomly selected files, the 5 largest files, and the 5 smallest files from each section's file bucket. This strategy balances breadth (randomness) with depth (large files often contain critical logic; small files reveal clarity and naming). Fast turnaround; representative findings.
-
 
 <output_format>
 Structure your report as follows. Keep it SHORT. No filler.
@@ -219,8 +216,6 @@ Status: 🟢 A-B (healthy) | 🟡 C-D (needs attention) | 🔴 F (critical)
 ```
 
 </output_format>
-
-
 
 <analysis_instructions>
 Follow these steps when performing the quick audit:

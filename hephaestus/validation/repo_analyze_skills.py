@@ -76,15 +76,23 @@ def _quick_warning() -> str:
     )
 
 
-def _usage_for_coverage(coverage_report: str) -> str:
-    """Generate the usage paragraph based on coverage mode."""
+def _usage_for_coverage(coverage_report: str, sections_file: str = "") -> str:
+    """Generate the usage paragraph based on coverage mode and section count."""
     if coverage_report:
-        return (
-            "Run this from the root directory of the repository you want to audit. "
-            "This variant dispatches one Sonnet agent per audit section (15 sections "
-            "→ 3 waves of 5 agents, max 5 concurrent) so the entire file tree is "
-            "covered without overflowing one agent's context."
-        )
+        if "8" in sections_file:
+            return (
+                "Run this from the root directory of the repository you want to audit. "
+                "This variant dispatches one Sonnet agent per section (8 sections "
+                "→ 2 waves of 4 agents, max 5 concurrent) so the entire file tree is "
+                "covered without overflowing one agent's context."
+            )
+        else:
+            return (
+                "Run this from the root directory of the repository you want to audit. "
+                "This variant dispatches one Sonnet agent per audit section (15 sections "
+                "→ 3 waves of 5 agents, max 5 concurrent) so the entire file tree is "
+                "covered without overflowing one agent's context."
+            )
     else:
         return (
             "Run this from the root directory of the repository you want to audit. "
@@ -111,7 +119,9 @@ def _render(variant: dict[str, str]) -> str:
         task_paragraph=_task_for_mode(variant["template"]),
         strict_warning=_strict_warning() if "strict" in variant["template"] else "",
         quick_warning=_quick_warning() if "quick" in variant["template"] else "",
-        usage_paragraph=_usage_for_coverage(variant.get("coverage_report", "")),
+        usage_paragraph=_usage_for_coverage(
+            variant.get("coverage_report", ""), variant.get("sections", "")
+        ),
     )
 
 

@@ -28,8 +28,10 @@ def test_check_mode_passes_on_clean_tree() -> None:
 
 
 def test_generator_is_idempotent() -> None:
-    """Running --write twice produces no diff on the second run."""
+    """Running --write once then --check passes (generator is idempotent)."""
+    # Write once
     assert main(["--write"]) == 0
+    # Check should pass (no drift detected)
     assert main(["--check"]) == 0
 
 

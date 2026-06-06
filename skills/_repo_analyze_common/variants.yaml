@@ -103,7 +103,7 @@ variants:
     rubric: rubric_quick.md
     sections: sections_8.md
     output_format: output_format_quick.md
-    methodology: methodology_full.md
+    methodology: methodology_full_8.md
     coverage_report: coverage_report_block.md
     h1_suffix: " (Full Coverage)"
     intro: >-

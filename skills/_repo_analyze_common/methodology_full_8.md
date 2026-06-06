@@ -4,11 +4,9 @@
 
 Step 1: Inventory all source files via `find` into a temporary file.
 
-Step 2: Dispatch 15 agents in 3 waves of 5 (max 5 concurrent per the Myrmidon swarm constraint):
-
-- Wave 1 agents: Sections 1–5
-- Wave 2 agents: Sections 6–10
-- Wave 3 agents: Sections 11–15
+Step 2: Dispatch 8 agents in 2 waves of 4 (max 5 concurrent per the Myrmidon swarm constraint):
+- Wave 1 agents: Sections 1–4
+- Wave 2 agents: Sections 5–8
 
 Each section agent receives the full file inventory and focuses deeply on files relevant to its section.
 

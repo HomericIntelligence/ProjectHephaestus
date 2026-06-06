@@ -92,14 +92,6 @@ bandit = ">=1.9.4,<2"
 # a re-review trigger so a suppression is never silently permanent. Re-review
 # the whole list every dependency bump (or quarterly, whichever comes first).
 #
-# CVE-2026-3219 (pip): unfixable — the flaw is in a library pip vendors and there
-#   is no released pip we can pin that drops the vulnerable copy. pip is bundled
-#   by the runner's Python; we never declare it as a dependency.
-#   Re-review: drop when a fixed pip ships and the runner Python carries it.
-# CVE-2026-6357 (pip): not-yet-packaged — fixed in pip 26.1 (we run 26.0.1), but
-#   pip is supplied by the runner Python and our deps don't pin it, so we cannot
-#   force the bump ourselves.
-#   Re-review: drop when the runner Python ships pip >= 26.1.
 # CVE-2026-44431 (urllib3): not-yet-packaged — fixed in urllib3 2.7.0; that
 #   release is not on conda-forge yet, so the locked env cannot reach it.
 #   Re-review: drop when conda-forge publishes urllib3 >= 2.7.0.
@@ -112,7 +104,7 @@ bandit = ">=1.9.4,<2"
 #   transitive dependency of pygithub (we never import it directly), so there is no
 #   version bump or code change that resolves it. Ignored as unfixable + disputed.
 #   Re-review: drop if pyjwt publishes a fixed release or pygithub drops the dep.
-pip-audit = "pip-audit --ignore-vuln CVE-2026-3219 --ignore-vuln CVE-2026-6357 --ignore-vuln CVE-2026-44431 --ignore-vuln CVE-2026-44432 --ignore-vuln PYSEC-2025-183"
+pip-audit = "pip-audit --ignore-vuln CVE-2026-44431 --ignore-vuln CVE-2026-44432 --ignore-vuln PYSEC-2025-183"
 sast = "bandit -c pyproject.toml -r hephaestus scripts --severity-level medium"
 
 [environments]

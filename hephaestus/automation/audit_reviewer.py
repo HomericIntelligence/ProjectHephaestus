@@ -146,6 +146,9 @@ def run_audit_coordinator(
             )
             response = result.stdout or ""
         else:
+            # issue=0 is a safe sentinel for batch-audit context (no single issue).
+            # session_name() converts to "0" and validates as non-empty; the UUIDv5
+            # session persists across invocations of the same coordinator.
             stdout, _ = invoke_claude_with_session(
                 repo=get_repo_slug(get_repo_root()),
                 issue=0,
@@ -207,8 +210,9 @@ class AuditReviewer:
         except RuntimeError as exc:
             logger.error("Coordinator failed: %s", exc)
             return 1, []
-        report = write_audit_report(self.state_dir, audits)
-        logger.info("Audit report written to %s", report)
+        if not self.dry_run:
+            report = write_audit_report(self.state_dir, audits)
+            logger.info("Audit report written to %s", report)
         print_audit_summary(audits)
         for a in audits:
             try:

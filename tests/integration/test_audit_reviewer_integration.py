@@ -20,7 +20,9 @@ class TestAuditReviewerIntegration:
 
     def test_module_importable(self) -> None:
         """Verify the audit_reviewer module is importable."""
-        import hephaestus.automation.audit_reviewer  # noqa: F401
+        from hephaestus.automation.audit_reviewer import AuditReviewer as ImportedReviewer
+
+        assert ImportedReviewer is not None
 
     def test_audit_reviewer_class_exported_from_package(self) -> None:
         """Verify AuditReviewer is exported from hephaestus.automation."""
@@ -30,10 +32,8 @@ class TestAuditReviewerIntegration:
 
     def test_parse_coordinator_results_public(self) -> None:
         """Verify _parse_coordinator_results is accessible at module level."""
-        import hephaestus.automation.audit_reviewer as audit_mod
-
-        assert hasattr(audit_mod, "_parse_coordinator_results")
-        assert callable(audit_mod._parse_coordinator_results)
+        assert _parse_coordinator_results is not None
+        assert callable(_parse_coordinator_results)
 
     def test_parse_realistic_multi_pr_output(self) -> None:
         """Test parsing realistic agent output with multiple PR blocks."""

@@ -621,7 +621,7 @@ class ImplementationPhaseRunner:
             with self.state_lock:
                 state.learn_completed = retro_success
             impl._save_state(state)
-            if retro_success and self.options.agent != "codex":
+            if retro_success and not is_codex(self.options.agent):
                 self._compact_implementer_session(issue_number, worktree_path)
 
         # Follow-up issues phase (after LEARN, before COMPLETED)

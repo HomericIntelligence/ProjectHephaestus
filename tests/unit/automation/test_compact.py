@@ -4,10 +4,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import pytest
-
 from hephaestus.automation.learn import compact_session
-from hephaestus.automation.session_naming import session_uuid, AGENT_CI_DRIVER
+from hephaestus.automation.session_naming import AGENT_CI_DRIVER, session_uuid
 
 
 class TestCompactSession:

@@ -124,15 +124,15 @@ def load_nats_config(
             data["durable_name"] = env_durable
 
         env_initial = os.environ.get("NATS_INITIAL_BACKOFF_SECONDS")
-        if env_initial:
+        if env_initial is not None:
             data["initial_backoff_seconds"] = float(env_initial)
 
         env_max = os.environ.get("NATS_MAX_BACKOFF_SECONDS")
-        if env_max:
+        if env_max is not None:
             data["max_backoff_seconds"] = float(env_max)
 
         env_mult = os.environ.get("NATS_BACKOFF_MULTIPLIER")
-        if env_mult:
+        if env_mult is not None:
             data["backoff_multiplier"] = float(env_mult)
 
     return NATSConfig(**data)

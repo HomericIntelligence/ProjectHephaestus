@@ -168,7 +168,7 @@ def validate_agent_flags(parser: argparse.ArgumentParser, args: argparse.Namespa
         parser.error(
             "--agent=claude does not honor "
             + ", ".join(offending)
-            + " (these flag values only apply to --agent=codex)"
+            + " (these flag values are not supported by the claude agent)"
         )
 
 

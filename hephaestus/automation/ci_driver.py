@@ -465,7 +465,6 @@ class CIDriver:
                     "--limit", "1000",
                     "--json", "number,isDraft,statusCheckRollup,mergeStateStatus",
                 ],
-                check=False,
             )
             pulls: list[dict[str, Any]] = json.loads(result.stdout or "[]")
         except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:

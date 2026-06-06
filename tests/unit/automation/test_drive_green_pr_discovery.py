@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
-from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -20,7 +20,7 @@ from hephaestus.automation.loop_runner import (
 
 
 def _ok(name: str) -> PhaseResult:
-    """Helper to create a successful phase result."""
+    """Create a successful phase result."""
     return PhaseResult(name=name, rc=0, elapsed_s=0.1)
 
 
@@ -94,7 +94,7 @@ class TestCountFailingPrs:
     def test_count_failing_prs_returns_zero_on_timeout(self) -> None:
         """Returns 0 on timeout (fail-closed)."""
         with patch("hephaestus.automation.loop_runner.subprocess.run") as mock_run:
-            mock_run.side_effect = TimeoutError()
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd='gh', timeout=30)
             result = _count_failing_prs("MyOrg", "MyRepo")
         assert result == 0
 

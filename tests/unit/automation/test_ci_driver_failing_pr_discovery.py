@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
 from hephaestus.automation.ci_driver import (
-    FAILING_CHECK_CONCLUSIONS,
     CIDriver,
     _pr_is_failing,
 )
@@ -195,9 +194,13 @@ class TestDiscoverFailingPrs:
         self, ci_driver: CIDriver
     ) -> None:
         """Discovery returns empty dict on gh command failure."""
-        with patch("hephaestus.automation.ci_driver._gh_call") as mock_gh_call:
-            mock_gh_call.side_effect = Exception("gh failed")
-            result = ci_driver._discover_failing_prs()
+        import subprocess
+
+        with patch("hephaestus.automation.ci_driver.get_repo_info") as mock_repo_info:
+            mock_repo_info.return_value = ("MyOrg", "MyRepo")
+            with patch("hephaestus.automation.ci_driver._gh_call") as mock_gh_call:
+                mock_gh_call.side_effect = subprocess.CalledProcessError(1, "gh")
+                result = ci_driver._discover_failing_prs()
         assert result == {}
 
     def test_discover_failing_prs_logs_warning_on_cap_hit(self, ci_driver: CIDriver) -> None:

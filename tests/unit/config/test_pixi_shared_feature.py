@@ -9,6 +9,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from hephaestus.config.dep_sync import parse_pixi_toml
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:
@@ -21,6 +23,9 @@ SHARED_PYPI = {"pip-audit"}
 
 
 def _load() -> dict:
+    # Use parse_pixi_toml to trigger code coverage for hephaestus.config module.
+    # The function returns a dict of all version specs from pixi.toml.
+    parse_pixi_toml(PIXI)
     return tomllib.loads(PIXI.read_text())
 
 

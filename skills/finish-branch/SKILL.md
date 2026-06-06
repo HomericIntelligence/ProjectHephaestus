@@ -100,7 +100,7 @@ EOF
 )"
 
 # Enable auto-merge (mandatory under repo PR policy)
-gh pr merge --auto --rebase
+gh pr merge --auto --squash
 ```
 
 Then: Cleanup worktree (Step 5)

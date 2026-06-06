@@ -517,6 +517,37 @@ class TestFormatTextReport:
         report = format_text_report([finding], verbose=True)
         assert "--label" in report
 
+
+# ---------------------------------------------------------------------------
+# Regression: skills/ directory merge-strategy compliance
+# ---------------------------------------------------------------------------
+
+
+class TestSkillFilesMergeStrategy:
+    """Regression tests for skills/ directory merge-strategy compliance (issue #721)."""
+
+    def test_no_skill_file_uses_rebase_merge_strategy(self) -> None:
+        """Every skills/**/*.md must comply with the squash-only merge policy.
+
+        Regression test for issue #721: skills/finish-branch/SKILL.md:103 hardcoded
+        `gh pr merge --auto --rebase`, which fails the pr-policy CI gate.
+        """
+        from hephaestus.utils.helpers import get_repo_root
+
+        repo_root = get_repo_root()
+        skills_dir = repo_root / "skills"
+        assert skills_dir.is_dir(), "skills/ directory must exist"
+
+        findings: list[Finding] = []
+        for md_file in sorted(skills_dir.rglob("*.md")):
+            findings.extend(scan_file(md_file, repo_root))
+
+        merge_findings = [f for f in findings if f.rule == "wrong-merge-strategy"]
+        assert merge_findings == [], (
+            "skills/ contains wrong-merge-strategy violations:\n"
+            + "\n".join(f"  {f.file}:{f.line} — {f.content.strip()}" for f in merge_findings)
+        )
+
     def test_non_verbose_omits_content(self, tmp_path: Path) -> None:
         """Non-verbose mode should omit the raw violating line content."""
         finding = Finding(

@@ -63,7 +63,8 @@ The block above is a JSON array where each element has:
    - "You own ONLY PR #{{number}}.  Do not read or touch any other PR's data."
    - "Return your result as valid JSON in this exact format:
       ```json
-      {{"comments": [{{"path": "...", "line": N, "side": "RIGHT", "body": "..."}}], "summary": "..."}}
+      {{"comments": [{{"path": "...", "line": N, "side": "RIGHT", \
+"body": "..."}}], "summary": "..."}}
       ```"
    - "`line` must be an integer that exists in the diff.  `side` must be `RIGHT`."
    - "If the PR looks fine with no issues to flag, return

@@ -172,7 +172,7 @@ def run_audit_coordinator(
         raise RuntimeError("Audit coordinator timed out") from e
 
     audits = _parse_coordinator_results(response)
-    if response.strip() and _FENCE_RE.search(response) is None:
+    if response.strip() and not audits:
         raise RuntimeError("Coordinator returned no parseable JSON block")
     return audits
 
@@ -231,7 +231,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--pr-numbers",
-        nargs="*",
+        nargs="+",
         type=int,
         default=[],
         help="Audit only these PR numbers (default: all open).",

@@ -257,7 +257,10 @@ class TestRunAuditCoordinator:
         prs = [{"number": 100, "title": "Test"}]
         mock_root.return_value = Path(".")
         mock_slug.return_value = "test/repo"
-        mock_invoke.return_value = ('```json\n{"audits": []}\n```', "")
+        mock_invoke.return_value = (
+            '```json\n{"audits": [{"pr_number": 100, "verdict": "GO"}]}\n```',
+            "",
+        )
         run_audit_coordinator(prs=prs, agent="claude", state_dir=tmp_path)
         assert mock_invoke.called
 
@@ -271,7 +274,9 @@ class TestRunAuditCoordinator:
     ) -> None:
         prs = [{"number": 100, "title": "Test"}]
         mock_root.return_value = Path(".")
-        mock_codex.return_value = mock.Mock(stdout='```json\n{"audits": []}\n```')
+        mock_codex.return_value = mock.Mock(
+            stdout='```json\n{"audits": [{"pr_number": 100, "verdict": "GO"}]}\n```'
+        )
         run_audit_coordinator(prs=prs, agent="codex", state_dir=tmp_path)
         assert mock_codex.called
 

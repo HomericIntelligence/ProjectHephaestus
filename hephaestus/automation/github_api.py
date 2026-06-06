@@ -1243,9 +1243,10 @@ def fetch_issue_info(issue_number: int) -> IssueInfo:
 def fetch_open_prs() -> list[dict[str, Any]]:
     """Return every open PR's metadata via ``gh pr list`` (no row limit).
 
-    Uses ``--limit 0`` (gh's documented 'no cap' sentinel) so the audit
-    reviewer's 'ALL open PRs' contract is honored even on repos with >200
-    open PRs.
+    Uses ``--limit 2147483647`` (INT_MAX) to honor the audit reviewer's
+    'ALL open PRs' contract on repos with >200 open PRs. The gh CLI
+    does not support a true no-cap sentinel; INT_MAX avoids pagination
+    overhead while accommodating any realistic repo size.
     """
     result = _gh_call(
         [
@@ -1256,7 +1257,7 @@ def fetch_open_prs() -> list[dict[str, Any]]:
             "--json",
             "number,title,headRefName,url,isDraft",
             "--limit",
-            "0",
+            "2147483647",
         ]
     )
     return json.loads(result.stdout or "[]")

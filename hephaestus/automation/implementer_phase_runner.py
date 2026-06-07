@@ -1310,6 +1310,7 @@ class ImplementationPhaseRunner:
             plan_text=plan_text,
             plan_review_text=plan_review_text,
             diff_text=diff_text,
+            include_nitpicks=self.options.include_nitpicks,
         )
         try:
             return review_pr_inline(

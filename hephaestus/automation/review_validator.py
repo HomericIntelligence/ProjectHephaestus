@@ -230,6 +230,9 @@ def validate_prior_comments_addressed(
             f"Re-opening {len(comments)} prior review comment(s) the current diff does not address."
         ),
         dry_run=False,
+        # #1083: if the line already carries a bot comment, edit it in place
+        # rather than stacking a duplicate re-open thread.
+        dedupe_existing=True,
     )
     logger.info(
         "PR %s R%s: re-opened %s unaddressed review comment(s)",

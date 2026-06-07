@@ -159,6 +159,9 @@ class TestValidatePriorCommentsAddressed:
             patch.object(
                 review_validator, "gh_pr_review_post", return_value=["NEW_THREAD"]
             ) as post,
+            # b.py thread is "addressed" → the validator resolves it; mock so no
+            # real gh call (which would trip the github-api circuit breaker).
+            patch.object(review_validator, "gh_pr_resolve_thread"),
         ):
             reopened, is_clean = review_validator.validate_prior_comments_addressed(
                 pr_number=42,
@@ -189,6 +192,9 @@ class TestValidatePriorCommentsAddressed:
         with (
             patch.object(review_validator, "_run_validation_session", return_value=unaddressed),
             patch.object(review_validator, "gh_pr_review_post") as post,
+            # Both real threads are "addressed" (the unaddressed item has no
+            # path) → the validator resolves them; mock to avoid real gh calls.
+            patch.object(review_validator, "gh_pr_resolve_thread"),
         ):
             reopened, is_clean = review_validator.validate_prior_comments_addressed(
                 pr_number=42,

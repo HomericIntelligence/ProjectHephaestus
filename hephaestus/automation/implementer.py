@@ -45,8 +45,14 @@ from hephaestus.agents.runtime import (
 # correct as of the commit that introduced them; if they have drifted,
 # re-run ``grep -rn 'patch.*implementer\.<symbol>' tests/``.
 # ---------------------------------------------------------------------------
-# Patched by: tests/unit/automation/test_implementer_loop.py:{865,879}
-# Runtime call site: ``implementer_phase_runner.py:1199`` (via ``_impl_module``)
+# NOTE: ``review_state`` is accessed as a *module reference*, not patched via
+# ``patch("implementer.review_state")``.  Re-exporting it here ensures the
+# runtime lookup at ``implementer_phase_runner.py:1199``
+# (``_impl_module.review_state``) resolves to the real module object.
+# Tests control ``review_state`` behaviour by patching its internal functions
+# directly (not by replacing the module reference):
+#   monkeypatch.setattr(review_state_mod, "_fetch_issue_comments_graphql", …)
+#   → test_implementer_loop.py:{865,879}
 from . import (  # noqa: F401  # test-patch shim — see contract above
     review_state,
 )
@@ -136,7 +142,7 @@ from .pr_manager import commit_changes, create_pr
 
 # Patched by: tests/unit/automation/test_implementer.py:{278,358,394,467};
 #             tests/unit/automation/test_implementer_loop.py:560
-# Runtime call site: ``implementer_phase_runner`` via ``_impl_module``
+# Runtime call site: ``implementer_phase_runner.py:314`` (via ``_impl_module``)
 from .review_state import is_plan_review_go  # noqa: F401  # test-patch shim
 
 # Patched by: tests/unit/automation/test_implementer_loop.py:{316,318};

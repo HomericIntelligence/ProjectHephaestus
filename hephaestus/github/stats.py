@@ -168,7 +168,11 @@ def get_prs_stats(start_date: str, end_date: str, author: str | None, repo: str)
             "-f",
             f"qOpen={base_query} state:open",
             "--jq",
-            "[.data.total.issueCount // 0, .data.merged.issueCount // 0, .data.open.issueCount // 0]",
+            (
+                "[.data.total.issueCount // 0,"
+                " .data.merged.issueCount // 0,"
+                " .data.open.issueCount // 0]"
+            ),
         ],
         capture_output=True,
         text=True,

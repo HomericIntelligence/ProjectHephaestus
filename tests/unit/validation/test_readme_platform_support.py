@@ -37,7 +37,10 @@ def test_readme_links_to_platform_support_section() -> None:
 def test_readme_flags_pixi_as_linux_only() -> None:
     """README must warn that the pixi dev env is Linux-only before `pixi install`."""
     text = README.read_text(encoding="utf-8")
-    pixi_section_start = text.index("## Getting Started with Pixi")
+    pixi_section_start = text.find("## Getting Started with Pixi")
+    assert pixi_section_start != -1, (
+        "README must contain a '## Getting Started with Pixi' section heading"
+    )
     pixi_install_pos = text.find("pixi install", pixi_section_start)
     assert pixi_install_pos != -1, (
         "README must contain 'pixi install' command in the Getting Started section"

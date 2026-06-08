@@ -178,6 +178,48 @@ codex plugin add hephaestus@project-hephaestus
 
 The Codex manifest lives in [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json), and the marketplace entry lives in [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json).
 
+### Installing in Another Project
+
+ProjectHephaestus is published to PyPI as `homericintelligence-hephaestus`.
+The wheel is pure-Python and installs on Linux, macOS, and Windows
+(see `requires-python` in [`pyproject.toml`](pyproject.toml)). This is
+the supported install path for non-Linux platforms.
+
+**Using pip:**
+
+```bash
+pip install homericintelligence-hephaestus
+```
+
+**Using Pixi:**
+
+Add to `pyproject.toml`:
+
+```toml
+[project]
+dependencies = [
+    "homericintelligence-hephaestus>=0.9,<1",
+]
+```
+
+Or add a PyPI entry to `pixi.toml`:
+
+```toml
+[pypi-dependencies]
+homericintelligence-hephaestus = ">=0.9,<1"
+```
+
+Then run `pixi install` to resolve the dependency.
+
+After 1.0 ships, bump these constraints to `>=1.0,<2`.
+
+**For local development (path dependency):**
+
+```toml
+[pypi-dependencies]
+homericintelligence-hephaestus = { path = "../ProjectHephaestus", editable = true }
+```
+
 ## Key Features
 
 ### General Utilities (`hephaestus.utils`)

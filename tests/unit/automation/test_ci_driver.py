@@ -2527,12 +2527,18 @@ class TestRunDriveGreenCompact:
     def driver(self, tmp_path: Path) -> CIDriver:
         """Create a CIDriver instance for testing."""
         options = CIDriverOptions(
-            repo_root=str(tmp_path),
             agent="claude",
             enable_advise=False,
             dry_run=False,
         )
-        return CIDriver(options)
+        with (
+            patch("hephaestus.automation.ci_driver.get_repo_root", return_value=tmp_path),
+            patch("hephaestus.automation.ci_driver.WorktreeManager"),
+            patch("hephaestus.automation.ci_driver.StatusTracker"),
+        ):
+            d = CIDriver(options)
+            d.state_dir = tmp_path
+        return d
 
     def test_drive_green_compact_runs_once_per_merged_event(
         self, driver: CIDriver, tmp_path: Path

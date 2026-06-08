@@ -41,12 +41,12 @@ def _get_tomllib() -> types.ModuleType:
     try:
         import tomllib  # Python 3.11+
 
-        return tomllib
+        return tomllib  # type: ignore[no-any-return]
     except ModuleNotFoundError:  # pragma: no cover — only on Python 3.10
         try:
             import tomli as tomllib  # type: ignore[no-redef, unused-ignore]
 
-            return tomllib  # type: ignore[return-value]
+            return tomllib  # type: ignore[no-any-return]
         except ModuleNotFoundError as exc:
             raise RuntimeError(
                 "tomllib (stdlib, Python 3.11+) or tomli (pip install tomli) required."

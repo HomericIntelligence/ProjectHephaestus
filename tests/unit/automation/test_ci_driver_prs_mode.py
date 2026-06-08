@@ -196,18 +196,19 @@ class TestMainPrsFlow:
     ) -> None:
         """main() threads --prs into CIDriverOptions.prs."""
         monkeypatch.setattr(sys, "argv", ["ci", "--prs", "661", "662", "--dry-run", "--force-run"])
-        with patch("hephaestus.automation.ci_driver.CIDriver") as mock_driver_class:
-            with patch(
-                "hephaestus.automation.ci_driver._evaluate_run_result",
-                return_value=0,
-            ):
-                mock_instance = MagicMock()
-                mock_instance.run.return_value = {}
-                mock_instance.open_prs_remaining = []
-                mock_driver_class.return_value = mock_instance
+        with patch("hephaestus.automation.ci_driver.resolve_agent", return_value="claude"):
+            with patch("hephaestus.automation.ci_driver.CIDriver") as mock_driver_class:
+                with patch(
+                    "hephaestus.automation.ci_driver._evaluate_run_result",
+                    return_value=0,
+                ):
+                    mock_instance = MagicMock()
+                    mock_instance.run.return_value = {}
+                    mock_instance.open_prs_remaining = []
+                    mock_driver_class.return_value = mock_instance
 
-                # Import and call main
-                ci_driver.main()
+                    # Import and call main
+                    ci_driver.main()
 
         # Verify CIDriver was instantiated with options.prs=[661, 662]
         call_args = mock_driver_class.call_args
@@ -218,17 +219,18 @@ class TestMainPrsFlow:
     def test_main_prs_json_output_includes_open_prs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """--prs --json output includes open PRs from result."""
         monkeypatch.setattr(sys, "argv", ["ci", "--prs", "661", "662", "--json", "--force-run"])
-        with patch("hephaestus.automation.ci_driver.CIDriver") as mock_driver_class:
-            with patch(
-                "hephaestus.automation.ci_driver._evaluate_run_result",
-                return_value=0,
-            ) as mock_eval:
-                mock_instance = MagicMock()
-                mock_instance.run.return_value = {661: None, 662: None}
-                mock_instance.open_prs_remaining = [661, 662]
-                mock_driver_class.return_value = mock_instance
+        with patch("hephaestus.automation.ci_driver.resolve_agent", return_value="claude"):
+            with patch("hephaestus.automation.ci_driver.CIDriver") as mock_driver_class:
+                with patch(
+                    "hephaestus.automation.ci_driver._evaluate_run_result",
+                    return_value=0,
+                ) as mock_eval:
+                    mock_instance = MagicMock()
+                    mock_instance.run.return_value = {661: None, 662: None}
+                    mock_instance.open_prs_remaining = [661, 662]
+                    mock_driver_class.return_value = mock_instance
 
-                ci_driver.main()
+                    ci_driver.main()
 
         # Verify that _evaluate_run_result was called with a result dict
         # containing the PR keys 661 and 662

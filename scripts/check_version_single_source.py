@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """CLI shim — implementation lives in ``hephaestus.scripts_lib.check_version_single_source``."""
+
 from hephaestus.scripts_lib.check_version_single_source import main
 
 if __name__ == "__main__":

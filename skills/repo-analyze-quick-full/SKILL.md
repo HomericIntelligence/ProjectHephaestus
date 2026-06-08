@@ -62,6 +62,7 @@ You MUST evaluate every section through the lens of these core development princ
   </principle>
 </development_principles>
 
+
 <grading_rubric>
 Keep it simple. Default is B. Be generous.
 
@@ -75,6 +76,7 @@ Keep it simple. Default is B. Be generous.
 Only report CRITICAL findings. Skip everything else.
 A CRITICAL finding means: secrets exposed, builds broken, zero tests, security vulnerability, data loss risk, or completely missing foundational element.
 </grading_rubric>
+
 
 <sections>
 Glance at these 8 areas. Do not go deep. Just check for showstoppers.
@@ -112,6 +114,7 @@ Glance at these 8 areas. Do not go deep. Just check for showstoppers.
   </section>
 </sections>
 
+
 ## Methodology
 
 **Coverage:** Every file in the repository.
@@ -119,7 +122,6 @@ Glance at these 8 areas. Do not go deep. Just check for showstoppers.
 Step 1: Inventory all source files via `find` into a temporary file.
 
 Step 2: Dispatch 8 agents in 2 waves of 4 (max 5 concurrent per the Myrmidon swarm constraint):
-
 - Wave 1 agents: Sections 1–4
 - Wave 2 agents: Sections 5–8
 
@@ -128,6 +130,7 @@ Each section agent receives the full file inventory and focuses deeply on files 
 Step 3: Compile each agent's report into the final assessment. If a section agent did not return, re-dispatch it before finalizing the report.
 
 Full coverage ensures no bugs are missed due to sampling limitations.
+
 
 <output_format>
 Structure your report as follows. Keep it SHORT. No filler.
@@ -234,10 +237,11 @@ Status: 🟢 A-B (healthy) | 🟡 C-D (needs attention) | 🔴 F (critical)
 **Swarm dispatch summary:**
 
 - Total files inventoried: N
-- Sections dispatched: 15 agents in 3 waves of 5
+- Sections dispatched: [agents in waves, per methodology above]
 - Files with read errors (coverage gaps): [list or "none"]
 
 ---
+
 
 <analysis_instructions>
 Follow these steps when performing the quick audit:

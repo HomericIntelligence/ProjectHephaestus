@@ -3,7 +3,7 @@
 **Swarm dispatch summary:**
 
 - Total files inventoried: N
-- Sections dispatched: 15 agents in 3 waves of 5
+- Sections dispatched: [agents in waves, per methodology above]
 - Files with read errors (coverage gaps): [list or "none"]
 
 ---

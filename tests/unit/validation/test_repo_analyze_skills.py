@@ -28,11 +28,26 @@ def test_check_mode_passes_on_clean_tree() -> None:
 
 
 def test_generator_is_idempotent() -> None:
-    """Running --write once then --check passes (generator is idempotent)."""
-    # Write once
-    assert main(["--write"]) == 0
-    # Check should pass (no drift detected)
-    assert main(["--check"]) == 0
+    """Running --write once then --check passes (generator is idempotent).
+
+    Backs up and restores all six SKILL.md files in a try/finally so a mid-write
+    failure does not leave the working tree dirty.  Note: concurrent test runs still
+    race on the same paths; solving that fully requires threading --out-dir into
+    main(), which is a more invasive change deferred to a follow-up.
+    """
+    # Snapshot committed SKILL.md content so a mid-write failure doesn't dirty the tree
+    snapshots: dict[str, bytes] = {}
+    for name in EXPECTED_VARIANTS:
+        skill_md = SKILLS_DIR / name / "SKILL.md"
+        if skill_md.exists():
+            snapshots[name] = skill_md.read_bytes()
+    try:
+        assert main(["--write"]) == 0
+        assert main(["--check"]) == 0
+    finally:
+        # Restore original files regardless of outcome
+        for name, content in snapshots.items():
+            (SKILLS_DIR / name / "SKILL.md").write_bytes(content)
 
 
 def test_check_mode_fails_on_partial_tampering(capsys) -> None:

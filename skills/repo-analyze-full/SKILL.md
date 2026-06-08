@@ -61,6 +61,7 @@ You MUST evaluate every section through the lens of these core development princ
   </principle>
 </development_principles>
 
+
 <grading_rubric>
 Apply this rubric consistently across ALL sections:
 
@@ -78,6 +79,7 @@ For each section, output:
   3. A "Findings" list (issues, graded as CRITICAL / MAJOR / MINOR / NITPICK)
   4. Principle references (which development principles are relevant and how they apply)
 </grading_rubric>
+
 
 <audit_sections>
 
@@ -392,6 +394,7 @@ For each section, output:
 
 </audit_sections>
 
+
 ## Methodology
 
 **Coverage:** Every file in the repository.
@@ -409,6 +412,7 @@ Each section agent receives the full file inventory and focuses deeply on files 
 Step 3: Compile each agent's report into the final assessment. If a section agent did not return, re-dispatch it before finalizing the report.
 
 Full coverage ensures no bugs are missed due to sampling limitations.
+
 
 <output_format>
 Structure your report EXACTLY as follows. Use markdown formatting throughout.
@@ -521,10 +525,11 @@ Status indicators: 🟢 A-B (healthy) | 🟡 C (needs attention) | 🔴 D-F (cri
 **Swarm dispatch summary:**
 
 - Total files inventoried: N
-- Sections dispatched: 15 agents in 3 waves of 5
+- Sections dispatched: [agents in waves, per methodology above]
 - Files with read errors (coverage gaps): [list or "none"]
 
 ---
+
 
 <analysis_instructions>
 Follow these steps when performing the audit:

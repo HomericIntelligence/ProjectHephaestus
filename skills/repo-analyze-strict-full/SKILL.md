@@ -64,7 +64,6 @@ You MUST evaluate every section through the lens of these core development princ
   </principle>
 </development_principles>
 
-
 <grading_rubric>
 Apply this rubric consistently across ALL sections. Every section starts at F and must earn its way up. Grade strictly — most real-world repositories earn C's and D's, not A's and B's.
 
@@ -105,7 +104,6 @@ For each section, output:
   5. A "Missing" list (criteria from the section that are entirely absent)
   6. Principle references (which development principles are relevant and how they apply, with specific code examples)
 </grading_rubric>
-
 
 <audit_sections>
 
@@ -420,7 +418,6 @@ For each section, output:
 
 </audit_sections>
 
-
 ## Methodology
 
 **Coverage:** Every file in the repository.
@@ -438,7 +435,6 @@ Each section agent receives the full file inventory and focuses deeply on files 
 Step 3: Compile each agent's report into the final assessment. If a section agent did not return, re-dispatch it before finalizing the report.
 
 Full coverage ensures no bugs are missed due to sampling limitations.
-
 
 <output_format>
 Structure your report EXACTLY as follows. Use markdown formatting throughout.
@@ -555,7 +551,6 @@ Status indicators: 🟢 A-B (healthy) | 🟡 C (needs attention) | 🔴 D-F (cri
 - Files with read errors (coverage gaps): [list or "none"]
 
 ---
-
 
 <analysis_instructions>
 Follow these steps when performing the audit:

@@ -9,6 +9,7 @@ Entry point: ``hephaestus-check-repo-analyze-skills`` (see pyproject.toml).
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 from string import Template
@@ -104,7 +105,7 @@ def _render(variant: dict[str, str]) -> str:
     """Render a single variant's SKILL.md from template + partials."""
     template_path = COMMON_DIR / "templates" / variant["template"]
     template = Template(template_path.read_text(encoding="utf-8"))
-    return template.safe_substitute(
+    raw = template.safe_substitute(
         skill_name=variant["name"],
         description=variant["description"].strip(),
         principles_block=_load_partial("principles.md"),
@@ -123,6 +124,10 @@ def _render(variant: dict[str, str]) -> str:
             variant.get("coverage_report", ""), variant.get("sections", "")
         ),
     )
+    # Collapse multiple consecutive blank lines to a single blank line so the
+    # generated files pass markdownlint MD012 regardless of partial-file trailing
+    # whitespace or empty substitution variables (e.g. vs_callout).
+    return re.sub(r"\n{3,}", "\n\n", raw)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -13,7 +13,6 @@ Performs an exhaustive completeness and quality audit of the current repository 
 > ⚠️ **Strict Mode:** This variant starts from an F and grades UP based on concrete evidence. Every grade requires justification. No grade inflation to be polite.
 > **Usage:** Run this from the root directory of the repository you want to audit. The agent will explore the current working directory as the repo root.
 
-
 ---
 
 <system>
@@ -64,7 +63,6 @@ You MUST evaluate every section through the lens of these core development princ
   </principle>
 </development_principles>
 
-
 <grading_rubric>
 Apply this rubric consistently across ALL sections. Every section starts at F and must earn its way up. Grade strictly — most real-world repositories earn C's and D's, not A's and B's.
 
@@ -105,7 +103,6 @@ For each section, output:
   5. A "Missing" list (criteria from the section that are entirely absent)
   6. Principle references (which development principles are relevant and how they apply, with specific code examples)
 </grading_rubric>
-
 
 <audit_sections>
 
@@ -420,13 +417,11 @@ For each section, output:
 
 </audit_sections>
 
-
 ## Methodology
 
 **Coverage:** Representative file sample (10 random + 5 largest + 5 smallest per section).
 
 Read 10 randomly selected files, the 5 largest files, and the 5 smallest files from each section's file bucket. This strategy balances breadth (randomness) with depth (large files often contain critical logic; small files reveal clarity and naming). Fast turnaround; representative findings.
-
 
 <output_format>
 Structure your report EXACTLY as follows. Use markdown formatting throughout.
@@ -533,8 +528,6 @@ Status indicators: 🟢 A-B (healthy) | 🟡 C (needs attention) | 🔴 D-F (cri
 ```
 
 </output_format>
-
-
 
 <analysis_instructions>
 Follow these steps when performing the audit:

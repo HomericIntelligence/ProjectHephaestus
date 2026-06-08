@@ -1260,7 +1260,7 @@ def fetch_open_prs() -> list[dict[str, Any]]:
             "2147483647",
         ]
     )
-    return json.loads(result.stdout or "[]")
+    return cast(list[dict[str, Any]], json.loads(result.stdout or "[]"))
 
 
 def write_secure(path: Path, content: str) -> None:

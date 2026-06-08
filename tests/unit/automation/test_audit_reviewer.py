@@ -394,16 +394,19 @@ class TestAuditReviewerRun:
         _, _ = reviewer.run()
         assert mock_fetch_nums.called
 
+    @mock.patch("hephaestus.automation.audit_reviewer.gh_pr_review_post")
     @mock.patch("hephaestus.automation.audit_reviewer.fetch_open_prs")
     @mock.patch("hephaestus.automation.audit_reviewer.run_audit_coordinator")
     def test_dry_run_passes_dry_run_to_gh_pr_review_post(
-        self, mock_coord: mock.Mock, mock_fetch: mock.Mock
+        self, mock_coord: mock.Mock, mock_fetch: mock.Mock, mock_post: mock.Mock
     ) -> None:
         mock_fetch.return_value = [{"number": 100, "title": "Test"}]
         mock_coord.return_value = [{"pr_number": 100, "verdict": "GO", "summary": "Good"}]
         reviewer = AuditReviewer(dry_run=True)
         _, _ = reviewer.run()
         assert mock_coord.call_args[1]["dry_run"] is True
+        mock_post.assert_called_once()
+        assert mock_post.call_args[1]["dry_run"] is True
 
     def test_state_dir_default_under_build(self, tmp_path: Path) -> None:
         reviewer = AuditReviewer()

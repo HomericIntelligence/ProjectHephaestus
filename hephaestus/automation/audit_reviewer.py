@@ -196,6 +196,9 @@ class AuditReviewer:
 
     def run(self) -> tuple[int, list[dict[str, Any]]]:
         """Run the coordinator audit and post a summary review per PR."""
+        # __post_init__ guarantees state_dir is set; narrow type for mypy.
+        if self.state_dir is None:  # pragma: no cover
+            raise RuntimeError("state_dir unexpectedly None after __post_init__")
         prs = _fetch_prs_by_number(self.pr_numbers) if self.pr_numbers else fetch_open_prs()
         if not prs:
             logger.info("No PRs to audit")

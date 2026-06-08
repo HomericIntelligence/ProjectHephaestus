@@ -9,13 +9,12 @@ preceding non-blank line is exactly the marker
 
 Usage: python -m hephaestus.validation.skill_merge_method
 """
+
 import re
 import sys
 from pathlib import Path
 
-HARDCODED = re.compile(
-    r"gh\s+pr\s+merge\b[^\n]*--auto\b[^\n]*--(rebase|squash|merge)\b"
-)
+HARDCODED = re.compile(r"gh\s+pr\s+merge\b[^\n]*--auto\b[^\n]*--(rebase|squash|merge)\b")
 MARKER = "<!-- merge-method-allowed: example -->"
 FENCE = re.compile(r"^\s*```")
 
@@ -37,6 +36,15 @@ def _block_is_marked(lines: list[str], idx: int) -> bool:
 
 
 def scan(root: Path) -> list[tuple[Path, int, str]]:
+    """Scan skill files for hardcoded gh pr merge methods.
+
+    Args:
+        root: Repository root directory
+
+    Returns:
+        List of (path, line_number, line_text) tuples for violations
+
+    """
     findings: list[tuple[Path, int, str]] = []
     for path in sorted((root / "skills").glob("*/SKILL.md")):
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -50,6 +58,12 @@ def scan(root: Path) -> list[tuple[Path, int, str]]:
 
 
 def main() -> int:
+    """Entry point for skill merge method linter.
+
+    Returns:
+        0 if no violations found, 1 otherwise
+
+    """
     repo_root = Path(__file__).resolve().parents[2]
     findings = scan(repo_root)
     if not findings:

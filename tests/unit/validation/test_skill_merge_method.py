@@ -13,6 +13,7 @@ def _make_skill(tmp_path: Path, name: str, body: str) -> Path:
 
 
 def test_flags_hardcoded_rebase(tmp_path: Path) -> None:
+    """Verify detection of hardcoded --rebase flag."""
     _make_skill(tmp_path, "bad", "```bash\ngh pr merge --auto --rebase\n```\n")
     findings = scan(tmp_path)
     assert len(findings) == 1
@@ -20,12 +21,14 @@ def test_flags_hardcoded_rebase(tmp_path: Path) -> None:
 
 
 def test_flags_hardcoded_squash_and_merge(tmp_path: Path) -> None:
-    _make_skill(tmp_path, "bad1", '```bash\ngh pr merge $P --auto --squash --repo X/Y\n```\n')
+    """Verify detection of hardcoded --squash and --merge flags."""
+    _make_skill(tmp_path, "bad1", "```bash\ngh pr merge $P --auto --squash --repo X/Y\n```\n")
     _make_skill(tmp_path, "bad2", "```bash\ngh pr merge --auto --merge\n```\n")
     assert len(scan(tmp_path)) == 2
 
 
 def test_allows_marked_example_block(tmp_path: Path) -> None:
+    """Verify that marked example blocks are excluded from linting."""
     _make_skill(
         tmp_path,
         "good",
@@ -40,6 +43,7 @@ def test_allows_marked_example_block(tmp_path: Path) -> None:
 
 
 def test_marker_only_applies_to_immediate_block(tmp_path: Path) -> None:
+    """Verify that marker only exempts the immediately following code block."""
     _make_skill(
         tmp_path,
         "tricky",
@@ -62,6 +66,7 @@ def test_marker_only_applies_to_immediate_block(tmp_path: Path) -> None:
 
 
 def test_clean_repo_passes(tmp_path: Path) -> None:
+    """Verify that repos with no violations pass the check."""
     _make_skill(tmp_path, "fine", "# nothing to see here\n")
     assert scan(tmp_path) == []
 

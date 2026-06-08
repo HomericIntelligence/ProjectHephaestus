@@ -171,11 +171,12 @@ class TestRunGateWithPrs:
         options = CIDriverOptions(issues=[], prs=[661], include_bot_prs=False)
         driver = CIDriver(options)
 
-        # Mock _discover_prs to return {661: 661} and _sweep_orphaned_arming_records
-        # to avoid network I/O
+        # Mock _discover_prs, _sweep_orphaned_arming_records, and _drive_issue
+        # to avoid network I/O (circuit breaker would trip on real _gh_call)
         with patch.object(driver, "_discover_prs", return_value={661: 661}) as mock_discover:
             with patch.object(driver, "_sweep_orphaned_arming_records"):
-                driver.run()
+                with patch.object(driver, "_drive_issue", return_value=None):
+                    driver.run()
 
         # Verify the gate did not abort by checking that _discover_prs was called
         mock_discover.assert_called_once()

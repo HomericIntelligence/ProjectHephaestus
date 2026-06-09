@@ -113,49 +113,44 @@ def test_run_codex_session_returns_session_id_and_last_message(tmp_path: Path) -
 def test_run_codex_session_recovers_last_message_on_wrapper_timeout(tmp_path: Path) -> None:
     """If Codex writes the final answer but its wrapper hangs, keep the answer."""
 
-    def fake_popen(cmd: list[str], **kwargs: Any) -> _FakeCodexPopen:
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+        output_path.write_text("final answer", encoding="utf-8")
         stdout = (
             '{"type":"session_meta","payload":{"id":"019e1e57-7652-7892-b1ca-c31c93d4b160"}}\n'
             '{"type":"agent_message","message":"fallback"}\n'
         )
-        return _FakeCodexPopen(
-            cmd,
-            proc_stdout=stdout,
-            final_message="final answer",
-            hang=True,
-            **kwargs,
-        )
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"], output=stdout, stderr="")
 
-    with (
-        patch("hephaestus.agents.runtime.codex_approval_args", return_value=[]),
-        patch.dict("os.environ", {"HEPH_CODEX_FINAL_MESSAGE_GRACE": "0"}),
-        patch("subprocess.Popen", side_effect=fake_popen),
-    ):
-        result = agent_runtime.run_codex_session(
-            "prompt",
-            cwd=tmp_path,
-            timeout=30,
-            sandbox="workspace-write",
-        )
+    with patch("hephaestus.agents.runtime.codex_approval_args", return_value=[]):
+        with patch("subprocess.run", side_effect=fake_run):
+            result = agent_runtime.run_codex_session(
+                "prompt",
+                cwd=tmp_path,
+                timeout=30,
+                sandbox="workspace-write",
+            )
 
     assert result.session_id == "019e1e57-7652-7892-b1ca-c31c93d4b160"
     assert result.stdout == "final answer"
-    assert "final message" in result.stderr
+    assert "timed out" in result.stderr
 
 
 def test_run_codex_session_timeout_without_last_message_still_raises(tmp_path: Path) -> None:
     """A real Codex timeout with no completed message must still fail."""
 
-    def fake_popen(cmd: list[str], **kwargs: Any) -> _FakeCodexPopen:
-        return _FakeCodexPopen(cmd, proc_stdout="", final_message="", hang=True, **kwargs)
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+        output_path.write_text("", encoding="utf-8")
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"], output="", stderr="")
 
     with patch("hephaestus.agents.runtime.codex_approval_args", return_value=[]):
-        with patch("subprocess.Popen", side_effect=fake_popen):
+        with patch("subprocess.run", side_effect=fake_run):
             with pytest.raises(subprocess.TimeoutExpired):
                 agent_runtime.run_codex_session(
                     "prompt",
                     cwd=tmp_path,
-                    timeout=1,
+                    timeout=30,
                     sandbox="workspace-write",
                 )
 

@@ -2275,7 +2275,12 @@ class TestGhPrReviewPost:
         )
 
         mock_update.assert_not_called()
-        assert self._posted_comments(mock_write) == []
+        mock_write.assert_not_called()
+        assert not any(
+            "repos/owner/repo/pulls/7/reviews" in str(arg)
+            for call in mock_gh_call.call_args_list
+            for arg in (call.args[0] if call.args else call.kwargs.get("args", []))
+        )
 
     @patch("hephaestus.automation.github_api.gh_pr_update_review_comment")
     @patch("hephaestus.automation.github_api.gh_pr_inline_comment_index")

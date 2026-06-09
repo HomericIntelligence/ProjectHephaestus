@@ -1690,9 +1690,11 @@ def gh_pr_review_post(
         dedupe_existing: When True (#1083), a comment whose ``(path, line)``
             already has an unresolved bot review comment is EDITED in place
             (the new body is appended) rather than posted as a duplicate thread.
-            Only the genuinely new comments are posted as fresh threads. Fails
-            open: if the existing-comment index cannot be fetched, every comment
-            is posted as before.
+            Only the genuinely new comments are posted as fresh threads. If
+            dedupe/editing consumes every inline comment, no summary-only review
+            is posted; a duplicate-only re-review should be a no-op, not another
+            review submission. Fails open: if the existing-comment index cannot
+            be fetched, every comment is posted as before.
 
     Returns:
         List of created review thread IDs (empty on dry_run or if no comments)
@@ -1735,8 +1737,15 @@ def gh_pr_review_post(
     # that already has an unresolved bot comment, append the new body to that
     # comment and drop it from the to-post set. Fails open (posts everything) if
     # the existing-comment index can't be fetched.
+    had_inline_comments = bool(comments)
     if comments and dedupe_existing:
         comments = _edit_or_keep_comments(pr_number, comments)
+        if had_inline_comments and not comments:
+            logger.info(
+                "PR #%s: skipped duplicate-only PR review after existing-line dedupe",
+                pr_number,
+            )
+            return []
 
     review_comments = [
         {

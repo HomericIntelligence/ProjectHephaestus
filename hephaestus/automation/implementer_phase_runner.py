@@ -643,7 +643,12 @@ class ImplementationPhaseRunner:
         impl = self.impl
         # Learn phase (after CREATING_PR, before COMPLETED)
         can_resume_session = self._can_resume_state_session(state)
-        if self.options.enable_learn and can_resume_session and state.session_id:
+        if (
+            self.options.enable_learn
+            and not state.learn_completed
+            and can_resume_session
+            and state.session_id
+        ):
             if slot_id is not None:
                 self.status_tracker.update_slot(
                     slot_id, f"{issue_ref(issue_number)}: Running learn"
@@ -1211,6 +1216,7 @@ class ImplementationPhaseRunner:
             slot_id=slot_id,
             thread_id=thread_id,
         )
+        impl._run_post_pr_followup(issue_number, worktree_path, state, slot_id)
 
         impl._log(
             "info",

@@ -1435,6 +1435,62 @@ class TestReviewExistingPrShortCircuit:
         mock_loop.assert_called_once()
         mock_verdict.assert_called_once()
 
+    @pytest.mark.parametrize("learn_completed", [False, True])
+    def test_existing_pr_runs_post_review_learn_when_needed(
+        self,
+        implementer: IssueImplementer,
+        tmp_path: Path,
+        learn_completed: bool,
+    ) -> None:
+        """Existing-PR review mirrors fresh PR follow-up and does not repeat learn."""
+        implementer.options.enable_learn = True
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir(exist_ok=True)
+        state = ImplementationState(
+            issue_number=1,
+            session_id="codex-session-1",
+            session_agent="codex",
+            learn_completed=learn_completed,
+        )
+        implementer.options.agent = "codex"
+        with (
+            patch(
+                "hephaestus.automation.implementer_phase_runner.pr_has_implementation_state_label",
+                return_value=(False, False),
+            ),
+            patch.object(implementer.status_tracker, "update_slot"),
+            patch("hephaestus.automation.implementer.get_pr_head_branch", return_value="b"),
+            patch.object(
+                implementer.worktree_manager, "create_worktree", return_value=worktree_path
+            ),
+            patch(
+                "hephaestus.automation.implementer_phase_runner.is_clean_working_tree",
+                return_value=True,
+            ),
+            patch("hephaestus.automation.implementer_phase_runner.sync_worktree_to_remote_branch"),
+            patch.object(implementer, "_save_state"),
+            patch("hephaestus.automation.implementer.fetch_issue_info") as mock_issue,
+            patch.object(implementer, "_run_advise"),
+            patch.object(implementer, "_run_impl_review_loop", return_value=(1, "GO", "A")),
+            patch.object(implementer.phase_runner, "_apply_impl_review_verdict"),
+            patch.object(implementer.phase_runner, "_run_learn", return_value=True) as mock_learn,
+        ):
+            mock_issue.return_value.title = "title"
+            mock_issue.return_value.body = "body"
+            implementer.phase_runner._review_existing_pr(
+                issue_number=1,
+                existing_pr=555,
+                branch_name="1-auto-impl",
+                state=state,
+                slot_id=None,
+                thread_id=None,
+            )
+
+        if learn_completed:
+            mock_learn.assert_not_called()
+        else:
+            mock_learn.assert_called_once()
+
     def test_no_go_falls_back_to_assumed_branch_when_lookup_fails(
         self, implementer: IssueImplementer, tmp_path: Path
     ) -> None:

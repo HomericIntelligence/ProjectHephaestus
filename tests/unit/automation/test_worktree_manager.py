@@ -721,6 +721,25 @@ class TestCreateWorktreeBranchCollision:
 
     @patch("hephaestus.automation.worktree_manager.run")
     @patch("hephaestus.automation.worktree_manager.get_repo_root")
+    def test_branch_lookup_failure_aborts_before_worktree_add(
+        self, mock_get_root: Any, mock_run: Any, tmp_path: Any
+    ) -> None:
+        """If branch ownership cannot be listed, fail closed before adding."""
+        mock_get_root.return_value = tmp_path
+        mock_run.return_value.stdout = "origin/main"
+        manager = WorktreeManager()
+
+        with patch.object(manager, "list_worktrees", side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError, match="Cannot safely determine"):
+                manager.create_worktree(725, "708-auto-impl")
+
+        add_calls = [
+            c for c in mock_run.call_args_list if c[0] and c[0][0][:3] == ["git", "worktree", "add"]
+        ]
+        assert add_calls == []
+
+    @patch("hephaestus.automation.worktree_manager.run")
+    @patch("hephaestus.automation.worktree_manager.get_repo_root")
     def test_stale_local_branch_without_unique_commits_fast_forwards_to_base(
         self, mock_get_root: Any, mock_run: Any, tmp_path: Any
     ) -> None:
@@ -750,7 +769,7 @@ class TestCreateWorktreeBranchCollision:
             str(manager.base_dir / "issue-1109"),
             "1109-auto-impl",
         ]
-        assert ["git", "branch", "-f", "1109-auto-impl", "origin/main"] in argvs
+        assert ["git", "branch", "-f", "1109-auto-impl", manager.base_branch] in argvs
         assert add_argv in argvs
 
     @patch("hephaestus.automation.worktree_manager.run")

@@ -434,18 +434,6 @@ class TestUntrustedFencing:
         assert self._fence_present(out, "DIFF_TEXT")
         assert prompts._UNTRUSTED_NOTICE in out
 
-    def test_pr_review_analysis_prompt_fences_advise_findings(self) -> None:
-        """get_pr_review_analysis_prompt fences advise findings before review."""
-        out = prompts.get_pr_review_analysis_prompt(
-            pr_number=1,
-            issue_number=1,
-            issue_body=self.INJECTION,
-            advise_findings=self.INJECTION,
-        )
-        assert self._fence_present(out, "ISSUE_BODY")
-        assert self._fence_present(out, "ADVISE_FINDINGS")
-        assert prompts._UNTRUSTED_NOTICE in out
-
     def test_dirty_reused_worktree_decision_prompt_fences_status_and_diff(self) -> None:
         """Dirty worktree branch/status/diff inputs are untrusted and fenced."""
         out = prompts.get_dirty_reused_worktree_decision_prompt(

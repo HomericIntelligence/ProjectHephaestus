@@ -447,6 +447,7 @@ class TestEnsureMnemosyne:
         mnemosyne_root.mkdir()
 
         with patch("subprocess.run") as mock_run:
+
             def run_existing(cmd: list[str], **_: object) -> MagicMock:
                 if "rev-parse" in cmd:
                     return MagicMock(returncode=0, stdout="true\n", stderr="")
@@ -490,6 +491,7 @@ class TestEnsureMnemosyne:
         mnemosyne_root.mkdir()
 
         with patch("subprocess.run") as mock_run:
+
             def run_existing(cmd: list[str], **_: object) -> MagicMock:
                 if "rev-parse" in cmd:
                     return MagicMock(returncode=0, stdout="true\n", stderr="")
@@ -516,6 +518,7 @@ class TestEnsureMnemosyne:
         mnemosyne_root.mkdir()
 
         with patch("subprocess.run") as mock_run:
+
             def run_existing(cmd: list[str], **_: object) -> MagicMock:
                 if "rev-parse" in cmd:
                     return MagicMock(returncode=0, stdout="true\n", stderr="")

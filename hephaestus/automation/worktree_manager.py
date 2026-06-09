@@ -40,6 +40,14 @@ _AUTOMATION_PROMPT_PREFIXES = (
 )
 
 
+def _loop_trunk_githash() -> str | None:
+    """Return the loop-provided trunk commit-ish when available."""
+    trunk = os.environ.get("HEPH_TRUNK_GITHASH", "").strip()
+    if not trunk or trunk == "unknown":
+        return None
+    return trunk
+
+
 class WorktreeDirtyError(Exception):
     """Raised when a worktree cannot be removed because it contains uncommitted changes."""
 

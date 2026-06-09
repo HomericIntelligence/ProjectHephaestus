@@ -2366,6 +2366,110 @@ class CIDriver:
             return False
         return True
 
+    def _git_stdout_for_push_guard(
+        self,
+        worktree_path: Path,
+        issue_number: int,
+        argv: list[str],
+        failure_message: str,
+    ) -> str | None:
+        """Run a git inspection command for the CI pre-push guard."""
+        try:
+            result = run(argv, cwd=worktree_path, capture_output=True, check=False)
+        except subprocess.CalledProcessError as exc:
+            logger.error(
+                "Issue #%s: %s: %s",
+                issue_number,
+                failure_message,
+                (exc.stderr or exc.stdout or "")[:300],
+            )
+            return None
+        if result.returncode != 0:
+            logger.error(
+                "Issue #%s: %s: %s",
+                issue_number,
+                failure_message,
+                (result.stderr or result.stdout or "")[:300],
+            )
+            return None
+        return result.stdout or ""
+
+    def _ci_fix_head_is_pushable(
+        self,
+        worktree_path: Path,
+        issue_number: int,
+        *,
+        base_ref: str = "origin/main",
+    ) -> bool:
+        """Return True when the post-agent worktree is safe to push.
+
+        ``_head_advanced`` only proves HEAD changed. A conflict-resolution agent
+        can still leave the index unmerged, leave tracked files uncommitted, or
+        accidentally detach at the base branch itself. None of those states may
+        be pushed to the PR head.
+        """
+        unmerged = self._git_stdout_for_push_guard(
+            worktree_path,
+            issue_number,
+            ["git", "diff", "--name-only", "--diff-filter=U"],
+            "failed to inspect merge state before push",
+        )
+        if unmerged is None:
+            return False
+        unmerged_paths = [line for line in unmerged.splitlines() if line.strip()]
+        if unmerged_paths:
+            logger.error(
+                "Issue #%s: refusing to push CI fix with unresolved merge paths: %s",
+                issue_number,
+                ", ".join(unmerged_paths[:10]),
+            )
+            return False
+
+        status = self._git_stdout_for_push_guard(
+            worktree_path,
+            issue_number,
+            ["git", "status", "--porcelain"],
+            "failed to inspect worktree status before push",
+        )
+        if status is None:
+            return False
+        tracked_dirty = [
+            line for line in status.splitlines() if line.strip() and not line.startswith("?? ")
+        ]
+        if tracked_dirty:
+            logger.error(
+                "Issue #%s: refusing to push CI fix with uncommitted tracked changes: %s",
+                issue_number,
+                ", ".join(tracked_dirty[:10]),
+            )
+            return False
+
+        ahead = self._git_stdout_for_push_guard(
+            worktree_path,
+            issue_number,
+            ["git", "rev-list", "--count", f"{base_ref}..HEAD"],
+            f"failed to inspect HEAD ahead of {base_ref} before push",
+        )
+        if ahead is None:
+            return False
+        try:
+            ahead_count = int(ahead.strip() or "0")
+        except ValueError:
+            logger.error(
+                "Issue #%s: refusing to push CI fix with invalid ahead count: %r",
+                issue_number,
+                ahead,
+            )
+            return False
+        if ahead_count <= 0:
+            logger.error(
+                "Issue #%s: refusing to push CI fix because HEAD has no commits ahead of %s",
+                issue_number,
+                base_ref,
+            )
+            return False
+        return True
+
     def _run_ci_fix_session(  # noqa: C901  # provider resume/fallback paths are intentionally coupled
         self,
         issue_number: int,
@@ -2517,6 +2621,8 @@ class CIDriver:
                         session_id=session_id,
                     ):
                         return False
+                if not self._ci_fix_head_is_pushable(worktree_path, issue_number):
+                    return False
                 try:
                     push_current_branch_with_lease_on_divergence(
                         worktree_path,
@@ -2580,6 +2686,8 @@ class CIDriver:
                         session_id=session_id,
                     ):
                         return False
+                if not self._ci_fix_head_is_pushable(worktree_path, issue_number):
+                    return False
                 try:
                     push_current_branch_with_lease_on_divergence(
                         worktree_path,

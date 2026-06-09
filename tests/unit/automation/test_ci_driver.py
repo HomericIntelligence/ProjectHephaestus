@@ -282,6 +282,7 @@ def test_codex_ci_fix_session_falls_back_to_fresh_on_resume_failure(
             "hephaestus.automation.ci_driver.push_current_branch_with_lease_on_divergence"
         ) as mock_push,
         patch("hephaestus.automation.ci_driver.sync_worktree_to_remote_branch") as mock_sync,
+        patch.object(driver, "_ci_fix_head_is_pushable", return_value=True),
         patch("hephaestus.automation.ci_driver.run", side_effect=pre_post_sequence),
     ):
         result = driver._run_ci_fix_session(
@@ -355,6 +356,50 @@ def test_codex_ci_fix_session_skips_push_when_head_did_not_advance(
     # And we must NOT have attempted a push — the prior bug was that a silent
     # no-op push exited 0 and the driver logged "pushed CI fixes" anyway.
     mock_push.assert_not_called()
+
+
+def test_ci_fix_head_not_pushable_with_unmerged_index(
+    driver: CIDriver,
+    tmp_path: Path,
+) -> None:
+    """A semantic conflict resolution is not pushable until the index is merged."""
+    with patch(
+        "hephaestus.automation.ci_driver.run",
+        return_value=MagicMock(
+            stdout="hephaestus/automation/loop_runner.py\n",
+            stderr="",
+            returncode=0,
+        ),
+    ):
+        assert driver._ci_fix_head_is_pushable(tmp_path, 993) is False
+
+
+def test_ci_fix_head_not_pushable_when_head_is_base_only(
+    driver: CIDriver,
+    tmp_path: Path,
+) -> None:
+    """Do not push detached origin/main over the PR branch after a failed rebase."""
+    responses = [
+        MagicMock(stdout="", stderr="", returncode=0),  # no unmerged paths
+        MagicMock(stdout="?? uv.lock\n", stderr="", returncode=0),  # generated untracked file
+        MagicMock(stdout="0\n", stderr="", returncode=0),  # no commits ahead of origin/main
+    ]
+    with patch("hephaestus.automation.ci_driver.run", side_effect=responses):
+        assert driver._ci_fix_head_is_pushable(tmp_path, 993) is False
+
+
+def test_ci_fix_head_pushable_with_clean_committed_pr_head(
+    driver: CIDriver,
+    tmp_path: Path,
+) -> None:
+    """A clean committed PR head remains pushable even with untracked tool output."""
+    responses = [
+        MagicMock(stdout="", stderr="", returncode=0),
+        MagicMock(stdout="?? uv.lock\n", stderr="", returncode=0),
+        MagicMock(stdout="1\n", stderr="", returncode=0),
+    ]
+    with patch("hephaestus.automation.ci_driver.run", side_effect=responses):
+        assert driver._ci_fix_head_is_pushable(tmp_path, 993) is True
 
 
 def test_codex_ci_advise_uses_codex_prompt_builder(driver: CIDriver) -> None:

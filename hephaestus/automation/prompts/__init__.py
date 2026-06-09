@@ -52,10 +52,12 @@ from .advise import (
 )
 from .follow_up import FOLLOW_UP_PROMPT, get_follow_up_prompt
 from .implementation import (
+    DIRTY_REUSED_WORKTREE_DECISION_PROMPT,
     DIRTY_REUSED_WORKTREE_PROMPT,
     IMPL_LOOP_REVIEW_PROMPT,
     IMPL_RESUME_FEEDBACK_PROMPT,
     IMPLEMENTATION_PROMPT,
+    get_dirty_reused_worktree_decision_prompt,
     get_dirty_reused_worktree_prompt,
     get_impl_loop_review_prompt,
     get_impl_resume_feedback_prompt,
@@ -81,6 +83,7 @@ __all__ = [
     "ADDRESS_REVIEW_PROMPT",
     "ADVISE_PROMPT",
     "CODEX_ADVISE_PROMPT",
+    "DIRTY_REUSED_WORKTREE_DECISION_PROMPT",
     "DIRTY_REUSED_WORKTREE_PROMPT",
     "FOLLOW_UP_PROMPT",
     "IMPLEMENTATION_PROMPT",
@@ -95,6 +98,7 @@ __all__ = [
     "get_advise_prompt_builder",
     "get_codex_advise_prompt",
     "get_comment_difficulty_prompt",
+    "get_dirty_reused_worktree_decision_prompt",
     "get_dirty_reused_worktree_prompt",
     "get_follow_up_prompt",
     "get_impl_loop_review_prompt",

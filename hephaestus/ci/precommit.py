@@ -40,9 +40,7 @@ _yaml: Any | None = None
 try:
     import yaml as _pyyaml
 except ModuleNotFoundError:
-    pass
-else:
-    _yaml = _pyyaml
+    _yaml = None
 
 # ---------------------------------------------------------------------------
 # Benchmark helpers

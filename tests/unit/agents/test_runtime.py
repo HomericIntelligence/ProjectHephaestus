@@ -155,7 +155,7 @@ def test_run_codex_session_timeout_without_last_message_still_raises(tmp_path: P
                 agent_runtime.run_codex_session(
                     "prompt",
                     cwd=tmp_path,
-                    timeout=0.1,
+                    timeout=1,
                     sandbox="workspace-write",
                 )
 
@@ -206,7 +206,7 @@ def test_resume_codex_session_uses_exec_resume(tmp_path: Path) -> None:
             "019e1e57-7652-7892-b1ca-c31c93d4b160",
             "feedback",
             cwd=tmp_path,
-            timeout=0.1,
+            timeout=1,
         )
 
     assert captured_cmd[:4] == [

@@ -28,7 +28,7 @@ from hephaestus.cli.utils import add_json_arg, format_output
 try:
     import yaml as _yaml
 except ModuleNotFoundError:
-    _yaml = None  # type: ignore[assignment]
+    _yaml = None
 
 #: Compiled regex that matches a ``---`` frontmatter block at the start of a file.
 FRONTMATTER_PATTERN: re.Pattern[str] = re.compile(r"^---\s*\n(.*?\n)---\s*\n", re.DOTALL)

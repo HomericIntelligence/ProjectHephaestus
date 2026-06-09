@@ -32,7 +32,7 @@ from hephaestus.cli.utils import add_json_arg, emit_json_status, format_output
 try:
     import yaml as _yaml
 except ModuleNotFoundError:
-    _yaml = None  # type: ignore[assignment]
+    _yaml = None
 
 # Security limit: skip workflow files larger than 1 MB
 _MAX_FILE_SIZE = 1_048_576

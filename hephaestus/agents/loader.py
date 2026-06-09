@@ -23,7 +23,7 @@ from hephaestus.agents.frontmatter import extract_frontmatter_raw
 try:
     import yaml as _yaml
 except ModuleNotFoundError:
-    _yaml = None  # type: ignore[assignment]
+    _yaml = None
 
 
 class AgentInfo:

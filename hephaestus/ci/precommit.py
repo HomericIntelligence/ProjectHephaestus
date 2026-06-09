@@ -39,7 +39,7 @@ _tomllib = import_tomllib()
 try:
     import yaml as _yaml
 except ModuleNotFoundError:
-    _yaml = None  # type: ignore[assignment]
+    _yaml = None
 
 # ---------------------------------------------------------------------------
 # Benchmark helpers

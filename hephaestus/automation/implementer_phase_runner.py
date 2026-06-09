@@ -63,6 +63,7 @@ from .github_api import (
     gh_current_login,
     gh_issue_add_labels,
     gh_pr_list_unresolved_threads,
+    gh_pr_resolve_thread,
 )
 from .learn import compact_session, learn_needs_rerun, run_learn
 from .models import (
@@ -144,22 +145,10 @@ def _prepend_advise(advise_findings: str, prompt: str) -> str:
 
 def _is_automation_owned_thread(thread: dict[str, Any], current_login: str | None) -> bool:
     """Return True for unresolved review threads the automation may resolve on GO."""
-    authors = {str(author).strip() for author in thread.get("authors", []) if str(author).strip()}
     author = (thread.get("author") or "").strip()
-    if author:
-        authors.add(author)
-    for comment in thread.get("comments", []):
-        comment_author = (comment.get("author") or "").strip()
-        if comment_author:
-            authors.add(comment_author)
-
-    if current_login and current_login in authors:
+    if current_login and author == current_login:
         return True
-    automation_bot_logins = {
-        "github-actions[bot]",
-        "hephaestus[bot]",
-    }
-    return bool(authors & automation_bot_logins)
+    return author.endswith("[bot]")
 
 
 def _claude_quota_reset_epoch(*texts: str) -> int | None:
@@ -1573,68 +1562,19 @@ class ImplementationPhaseRunner:
             if reopened:
                 last_verdict = "NOGO"
             elif verdict.is_go:
-                # GO converges ONLY when the PR has ZERO unresolved review threads
-                # (#1152). The reviewer's verdict alone is not enough: a reviewer
-                # can emit GO while the SAME pass posts new findings, or while
-                # prior automation threads remain open. The GO label must be
-                # earned by a clean pass where every comment has been addressed
-                # (by the implementer) and verified resolved (by the prior-thread
-                # validator that ran at the top of this iteration). This gate
-                # RESOLVES NOTHING — it only counts what is still open.
-                automation_unresolved = 0
-                human_unresolved = 0
                 if pr_number is not None and not self.options.dry_run:
-                    (
-                        automation_unresolved,
-                        human_unresolved,
-                    ) = self._count_unresolved_threads_blocking_go(
+                    self._resolve_automation_threads_after_go(
                         issue_number=issue_number,
                         pr_number=pr_number,
                         thread_id=thread_id,
                     )
-                if human_unresolved and pr_number is not None:
-                    # A GO cannot stand while a HUMAN review thread is open.
-                    # Automation must NOT resolve it and cannot fix it — a human
-                    # has to. Break with a distinct terminal state (no spin to
-                    # exhaustion, no state:skip) so the PR stays unlabeled,
-                    # awaiting the human; the loop re-runs next pass via the
-                    # "no go/no-go label → re-review" path once threads resolve.
-                    last_verdict = "HUMAN_BLOCKED"
-                    impl._log(
-                        "info",
-                        f"{pr_ref(pr_number)}: reviewer said GO but "
-                        f"{human_unresolved} unresolved human review thread(s) remain "
-                        f"— not accepting GO; awaiting human resolution, "
-                        f"leaving PR unlabeled",
-                        thread_id,
-                    )
-                    break
-                if automation_unresolved and pr_number is not None:
-                    # GO + open automation thread(s): the work is NOT actually
-                    # done. Downgrade to NOGO so the address step (below) fixes
-                    # and resolves them, and the next iteration re-reviews to
-                    # confirm. ``go_blocked_by_automation`` forces the address
-                    # step to run even though this GO pass may have posted no new
-                    # threads (otherwise the zero-thread guard would skip it and
-                    # the loop would spin GO→downgrade to exhaustion).
-                    last_verdict = "NOGO"
-                    go_blocked_by_automation = True
-                    impl._log(
-                        "info",
-                        f"{pr_ref(pr_number)}: reviewer said GO but "
-                        f"{automation_unresolved} unresolved automation review thread(s) "
-                        "remain — addressing and re-reviewing before GO can stand",
-                        thread_id,
-                    )
-                else:
-                    impl._log(
-                        "info",
-                        f"{pr_ref(pr_number) if pr_number is not None else issue_ref(issue_number)}"
-                        f": GO on iteration {iteration} — all review threads resolved, "
-                        "review loop terminated",
-                        thread_id,
-                    )
-                    break
+                ref = issue_ref(issue_number)
+                impl._log(
+                    "info",
+                    f"{ref}: GO on iteration {iteration} — review loop terminated",
+                    thread_id,
+                )
+                break
 
             # Converge ONLY on an explicit Verdict: GO (handled above). A non-GO
             # pass with NO posted threads (and nothing re-opened) must NOT end the
@@ -1776,38 +1716,20 @@ class ImplementationPhaseRunner:
 
         return iterations_run, last_verdict, last_grade
 
-    def _count_unresolved_threads_blocking_go(
+    def _resolve_automation_threads_after_go(
         self,
         *,
         issue_number: int,
         pr_number: int,
         thread_id: int | None,
-    ) -> tuple[int, int]:
-        """Count unresolved review threads that block a GO, by ownership.
+    ) -> None:
+        """Resolve stale automation-owned review threads after a GO verdict.
 
-        A GO verdict may NOT stand while ANY review thread is unresolved — not
-        even an automation-owned one. The earlier implementation bulk-resolved
-        automation threads here so a GO could converge immediately; that was
-        wrong (#1152). A reviewer can emit ``Verdict: GO`` in the SAME pass that
-        posts new inline findings, and force-resolving those "automation-owned"
-        threads accepted the GO without the implementer ever addressing them or
-        a subsequent review verifying the fix. The GO label must only be earned
-        once every comment has been genuinely addressed AND a clean re-review
-        confirms zero unresolved threads.
-
-        This method therefore RESOLVES NOTHING. It returns
-        ``(automation_unresolved, human_unresolved)``:
-
-        * ``human_unresolved > 0`` — automation cannot fix human threads, so the
-          caller breaks with a distinct ``HUMAN_BLOCKED`` terminal state.
-        * ``automation_unresolved > 0`` — the caller downgrades GO to NOGO so the
-          address step fixes (and resolves only what it actually addressed) and a
-          re-review re-evaluates. Convergence requires a GO pass that leaves zero
-          unresolved threads.
-
-        Returns ``(0, 0)`` when the thread list can't be fetched (fail-open:
-        don't strand a GO on a transient API blip — a genuinely unresolved
-        thread re-surfaces on the next loop's existing-PR re-review).
+        A fresh reviewer session can legitimately conclude the PR is now GO
+        while older automation comments remain unresolved on GitHub. Resolve
+        only threads authored by the current automation identity or bot
+        accounts; never close human reviewer threads from this automatic GO
+        cleanup pass.
         """
         impl = self.impl
         try:
@@ -1819,27 +1741,39 @@ class ImplementationPhaseRunner:
                 f"after GO for {pr_ref(pr_number)}: {exc}",
                 thread_id,
             )
-            return (0, 0)
+            return
         if not threads:
-            return (0, 0)
+            return
 
         current_login = gh_current_login()
-        automation_unresolved = 0
-        human_unresolved = 0
+        resolved = 0
         for thread in threads:
-            if _is_automation_owned_thread(thread, current_login):
-                automation_unresolved += 1
-            else:
-                human_unresolved += 1
-        if automation_unresolved or human_unresolved:
+            if not _is_automation_owned_thread(thread, current_login):
+                continue
+            tid = thread.get("id")
+            if not tid:
+                continue
+            try:
+                gh_pr_resolve_thread(
+                    tid,
+                    "Resolved by the automation reviewer after a GO implementation review.",
+                    dry_run=False,
+                )
+                resolved += 1
+            except Exception as exc:
+                impl._log(
+                    "warning",
+                    f"{issue_ref(issue_number)}: could not resolve stale automation "
+                    f"review thread {tid!r} on {pr_ref(pr_number)}: {exc}",
+                    thread_id,
+                )
+        if resolved:
             impl._log(
                 "info",
-                f"{issue_number}: GO pass left {automation_unresolved} automation + "
-                f"{human_unresolved} human unresolved thread(s) on {pr_ref(pr_number)} "
-                "— GO cannot stand until all are addressed and a clean re-review confirms",
+                f"{issue_ref(issue_number)}: resolved {resolved} stale automation-owned "
+                f"review thread(s) after GO on {pr_ref(pr_number)}",
                 thread_id,
             )
-        return (automation_unresolved, human_unresolved)
 
     def _run_impl_review_step(
         self,

@@ -1475,6 +1475,10 @@ def gh_current_login() -> str | None:
     return login or None
 
 
+def gh_pr_inline_comment_index(pr_number: int) -> dict[tuple[str, Any], tuple[str, str]]:
+    """Map ``(path, line)`` → ``(comment_node_id, body)`` for unresolved bot threads.
+
+
 ReviewCommentIndexKey = tuple[str, Any] | tuple[str, Any, str]
 
 
@@ -1627,50 +1631,6 @@ def gh_pr_update_review_comment(comment_node_id: str, body: str) -> None:
 
 _ADDITIONAL_REVIEW_NOTE_DELIMITER = "\n\n---\n_Additional review note (same line):_\n\n"
 
-_REVIEW_COMMENT_DEDUPE_STOPWORDS = {
-    "about",
-    "actual",
-    "after",
-    "again",
-    "also",
-    "another",
-    "because",
-    "before",
-    "being",
-    "cannot",
-    "changed",
-    "comment",
-    "coverage",
-    "current",
-    "future",
-    "only",
-    "please",
-    "production",
-    "proves",
-    "regression",
-    "sibling",
-    "still",
-    "suite",
-    "that",
-    "this",
-    "where",
-    "with",
-    "without",
-    "would",
-}
-
-_REVIEW_COMMENT_SIGNATURE_TOKENS = {
-    "claude",
-    "codex",
-    "is_codex",
-    "review_text",
-    "run_codex_text",
-    "stderr",
-    "stdout",
-    "summary",
-    "verdict",
-}
-
 
 def _normalize_review_comment_body(body: str) -> str:
     """Normalize a review comment body for duplicate-content comparison."""
@@ -1680,29 +1640,11 @@ def _normalize_review_comment_body(body: str) -> str:
     return " ".join(normalized.split())
 
 
-def _review_comment_keyword_tokens(body: str) -> set[str]:
-    """Return content-bearing tokens for same-line review duplicate checks."""
-    normalized = _normalize_review_comment_body(body)
-    tokens: set[str] = set()
-    for token in re.findall(r"[a-z0-9_#./-]+", normalized):
-        candidates = [token]
-        if any(sep in token for sep in "./-"):
-            candidates.extend(part for part in re.split(r"[./-]+", token) if part)
-        for candidate in candidates:
-            if len(candidate) < 4 and not candidate.startswith("#"):
-                continue
-            if candidate in _REVIEW_COMMENT_DEDUPE_STOPWORDS:
-                continue
-            tokens.add(candidate)
-    return tokens
-
-
 def _review_comment_already_covers(existing_body: str, new_body: str) -> bool:
     """Return True when an existing same-line comment already covers ``new_body``."""
     new_norm = _normalize_review_comment_body(new_body)
     if not new_norm:
         return True
-    new_tokens = _review_comment_keyword_tokens(new_body)
     parts = existing_body.split(_ADDITIONAL_REVIEW_NOTE_DELIMITER)
     for part in parts:
         existing_norm = _normalize_review_comment_body(part)
@@ -1712,40 +1654,20 @@ def _review_comment_already_covers(existing_body: str, new_body: str) -> bool:
             return True
         if SequenceMatcher(None, existing_norm, new_norm).ratio() >= 0.82:
             return True
-        existing_tokens = _review_comment_keyword_tokens(part)
-        if new_tokens and existing_tokens:
-            overlap = existing_tokens & new_tokens
-            # Re-review wording varies, but true duplicates keep the same code
-            # identifiers and defect nouns. Compare against the smaller set so
-            # a shorter restatement of the same finding is still suppressed.
-            overlap_ratio = len(overlap) / min(len(existing_tokens), len(new_tokens))
-            if len(overlap) >= 6 and overlap_ratio >= 0.6:
-                return True
-            signature_overlap = overlap & _REVIEW_COMMENT_SIGNATURE_TOKENS
-            if len(overlap) >= 6 and len(signature_overlap) >= 3:
-                return True
     return False
 
 
 def _edit_or_keep_comments(pr_number: int, comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Edit comments whose line already has an UNRESOLVED bot comment; keep the rest.
+    """Edit comments whose line already has a bot comment; return the rest.
 
-    For each comment whose ``(path, line)`` matches an UNRESOLVED existing bot
-    thread, skip it if the existing body already covers the same finding, else
-    rewrite that thread's comment to ``existing_body + new_body`` (a single edit
-    preserving the original text, #1085) and drop it from the returned list.
-
-    Findings on fresh lines — including lines whose only prior comment is a
-    RESOLVED thread — are returned unchanged for posting. Dedup is deliberately
-    NOT done against resolved history (#1152 reversed #1116): a resolved thread
-    is supposed to mean the finding was *fixed and verified*, so if the reviewer
-    re-raises it the resolution was wrong and the finding MUST re-surface as a
-    fresh thread — otherwise a force-resolved-but-unaddressed finding is
-    silently suppressed, leaving the GO gate with zero unresolved threads and
-    letting the PR converge with the issue still unfixed.
-
-    Fails open: an empty index returns *comments* unchanged, and an edit that
-    raises falls back to posting that comment fresh.
+    For each comment whose ``(path, line)`` is in the existing-comment index,
+    first skip it if the existing body already covers the same finding. If the
+    finding is genuinely new, rewrite the existing comment to
+    ``existing_body + new_body`` (a single edit that preserves the original
+    text, #1085) and drop it from the returned list. Comments on fresh lines
+    are returned unchanged for posting. Fails open: an empty index returns
+    *comments* unchanged, and an edit that raises falls back to posting that
+    comment fresh.
     """
     editable_index = gh_pr_inline_comment_index(pr_number)
     wont_fix_lines = gh_pr_wont_fix_line_index(pr_number)
@@ -1779,14 +1701,14 @@ def _edit_or_keep_comments(pr_number: int, comments: list[dict[str, Any]]) -> li
         # #1085: updatePullRequestReviewComment REPLACES the body, so concatenate
         # the existing body + the new note. Passing only the suffix would destroy
         # the original comment.
-        existing_id, existing_body = editable
+        existing_id, existing_body = existing
+        body = c.get("body") or ""
         if _review_comment_already_covers(existing_body, body):
             logger.info(
-                "PR #%s: skipped duplicate same-line review comment on %s:%s (%s)",
+                "PR #%s: skipped duplicate same-line review comment on %s:%s",
                 pr_number,
-                path,
-                line,
-                side,
+                key[0],
+                key[1],
             )
             continue
         combined = f"{existing_body}{_ADDITIONAL_REVIEW_NOTE_DELIMITER}{body}"

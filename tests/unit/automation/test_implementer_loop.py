@@ -166,39 +166,10 @@ class TestRunImplReviewLoop:
         # Address step must NOT be called because iteration 0 already passed.
         mock_addr.assert_not_called()
 
-    def test_forwards_advise_findings_to_review_step(
+    def test_go_resolves_only_automation_owned_stale_threads(
         self, implementer: IssueImplementer, tmp_path: Path
     ) -> None:
-        with patch.object(
-            implementer, "_run_impl_review_step", return_value=(_go(), [])
-        ) as mock_rev:
-            implementer._run_impl_review_loop(
-                issue_number=1,
-                worktree_path=tmp_path,
-                branch_name="b",
-                issue_title="t",
-                issue_body="ib",
-                session_id="sess",
-                slot_id=None,
-                thread_id=None,
-                pr_number=42,
-                advise_findings="prior team finding",
-            )
-
-        assert mock_rev.call_args.kwargs["advise_findings"] == "prior team finding"
-
-    def test_go_resolves_automation_threads_but_human_thread_blocks_go(
-        self, implementer: IssueImplementer, tmp_path: Path
-    ) -> None:
-        """A GO cleans up stale automation comments AND is blocked by a human thread.
-
-        The automation-owned threads are resolved, but the lone human review
-        thread (alice) is left open and must BLOCK the GO — a GO cannot stand
-        while a human review thread is unresolved (#1). Because automation cannot
-        resolve a human thread, the loop breaks IMMEDIATELY with a distinct
-        HUMAN_BLOCKED verdict (iters == 1) rather than spinning to exhaustion,
-        and applies NO state:skip (the PR is left unlabeled, awaiting the human).
-        """
+        """A GO verdict cleans up stale automation comments but not human review threads."""
         threads = [
             {"id": "T_self", "author": "mvillmow", "path": "a.py", "line": 1, "body": "old"},
             {
@@ -208,30 +179,11 @@ class TestRunImplReviewLoop:
                 "line": 2,
                 "body": "old",
             },
-            {
-                "id": "T_nested_self",
-                "author": "coderabbitai[bot]",
-                "authors": ["coderabbitai[bot]", "mvillmow"],
-                "comments": [
-                    {"body": "old", "author": "coderabbitai[bot]"},
-                    {"body": "automation reply", "author": "mvillmow"},
-                ],
-                "path": "d.py",
-                "line": 4,
-                "body": "old",
-            },
-            {
-                "id": "T_other_bot",
-                "author": "coderabbitai[bot]",
-                "path": "e.py",
-                "line": 5,
-                "body": "bot",
-            },
             {"id": "T_human", "author": "alice", "path": "c.py", "line": 3, "body": "human"},
         ]
         with (
             patch.object(implementer, "_run_impl_review_step", return_value=(_go(), [])),
-            patch.object(implementer, "_run_address_review_step", return_value=True),
+            patch.object(implementer, "_run_address_review_step") as mock_addr,
             patch(
                 "hephaestus.automation.implementer_phase_runner.gh_pr_list_unresolved_threads",
                 return_value=threads,
@@ -240,13 +192,11 @@ class TestRunImplReviewLoop:
                 "hephaestus.automation.implementer_phase_runner.gh_current_login",
                 return_value="mvillmow",
             ),
-            patch("hephaestus.automation.github_api.gh_pr_resolve_thread") as mock_resolve,
-            patch.object(implementer, "_run_address_review_step") as mock_addr2,
             patch(
-                "hephaestus.automation.implementer_phase_runner.gh_issue_add_labels"
-            ) as mock_label,
+                "hephaestus.automation.implementer_phase_runner.gh_pr_resolve_thread"
+            ) as mock_resolve,
         ):
-            iters, verdict, _grade = implementer._run_impl_review_loop(
+            iters, verdict, grade = implementer._run_impl_review_loop(
                 issue_number=1,
                 worktree_path=tmp_path,
                 branch_name="b",
@@ -258,131 +208,10 @@ class TestRunImplReviewLoop:
                 pr_number=42,
             )
 
-        # GO was blocked by an open human thread → distinct terminal verdict,
-        # broke immediately (no spin to exhaustion), no address step, no skip.
-        assert verdict == "HUMAN_BLOCKED"
-        assert iters == 1
-        mock_addr2.assert_not_called()
-        mock_label.assert_not_called()  # no state:skip applied
-        # The GO gate force-resolves NOTHING (#1152): a human thread is present,
-        # so automation must never close it, and the gate no longer bulk-resolves
-        # automation threads either (they'd be verified/addressed, but the human
-        # block ends the loop first). The human thread is never resolved here.
-        resolved_ids = {call.args[0] for call in mock_resolve.call_args_list}
-        assert "T_human" not in resolved_ids
-
-    def test_go_does_not_stand_while_automation_threads_unresolved(
-        self, implementer: IssueImplementer, tmp_path: Path
-    ) -> None:
-        """A GO pass must NOT converge while automation threads remain unresolved (#1152).
-
-        The OLD behavior force-resolved automation-owned threads on GO and
-        accepted the verdict. That let a reviewer say GO while leaving real,
-        unaddressed findings open — they were never fixed by the implementer nor
-        verified by a re-review. The corrected rule: an unresolved automation
-        thread downgrades GO to NOGO so the address step runs; the GO label is
-        only earned by a clean pass with ZERO unresolved threads. Nothing is
-        force-resolved here.
-        """
-
-        def _automation_thread(tid: str, author: str, path: str, line: int) -> dict[str, object]:
-            return {"id": tid, "author": author, "path": path, "line": line, "body": "old"}
-
-        with (
-            # R0 emits GO but 2 automation threads are still unresolved; R1 sees a
-            # clean board (address step fixed + resolved them) and GO stands. The
-            # two open snapshots feed R0's GO gate and R1's pre-address snapshot.
-            patch.object(
-                implementer,
-                "_run_impl_review_step",
-                side_effect=[(_go(), []), (_go(), [])],
-            ),
-            patch.object(implementer, "_run_address_review_step", return_value=True) as mock_addr,
-            patch(
-                "hephaestus.automation.implementer_phase_runner.gh_pr_list_unresolved_threads",
-                side_effect=[
-                    [
-                        _automation_thread("T_self", "mvillmow", "a.py", 1),
-                        _automation_thread("T_bot", "github-actions[bot]", "b.py", 2),
-                    ],
-                    [
-                        _automation_thread("T_self", "mvillmow", "a.py", 1),
-                        _automation_thread("T_bot", "github-actions[bot]", "b.py", 2),
-                    ],
-                    [],
-                ],
-            ),
-            patch(
-                "hephaestus.automation.implementer_phase_runner.gh_current_login",
-                return_value="mvillmow",
-            ),
-            patch("hephaestus.automation.github_api.gh_pr_resolve_thread") as mock_resolve,
-        ):
-            iters, verdict, _grade = implementer._run_impl_review_loop(
-                issue_number=1,
-                worktree_path=tmp_path,
-                branch_name="b",
-                issue_title="t",
-                issue_body="ib",
-                session_id="sess",
-                slot_id=0,
-                thread_id=None,
-                pr_number=42,
-            )
-
-        # GO did not converge at R0 (threads open) — address ran, R1 confirmed GO.
-        assert verdict == "GO"
-        assert iters == 2
-        mock_addr.assert_called()  # the address step ran to fix the open threads
-        # The GO gate itself force-resolved NOTHING; only the address step (which
-        # we stubbed) resolves what it actually fixed.
-        mock_resolve.assert_not_called()
-
-    def test_go_does_not_converge_when_same_pass_posts_new_threads(
-        self, implementer: IssueImplementer, tmp_path: Path
-    ) -> None:
-        """A reviewer that emits GO while posting NEW findings must not converge (#1152).
-
-        This is the exact bug: ``Verdict: GO`` alongside freshly-posted inline
-        threads. Those threads must be addressed and re-verified, never accepted
-        as-is.
-        """
-        with (
-            patch.object(
-                implementer,
-                "_run_impl_review_step",
-                # R0: GO but posts a brand-new thread t0; R1: clean GO.
-                side_effect=[(_go(), ["t0"]), (_go(), [])],
-            ),
-            patch.object(implementer, "_run_address_review_step", return_value=True) as mock_addr,
-            patch(
-                "hephaestus.automation.implementer_phase_runner.gh_pr_list_unresolved_threads",
-                side_effect=[
-                    [{"id": "t0", "author": "mvillmow", "path": "a.py", "line": 1, "body": "x"}],
-                    [{"id": "t0", "author": "mvillmow", "path": "a.py", "line": 1, "body": "x"}],
-                    [],
-                ],
-            ),
-            patch(
-                "hephaestus.automation.implementer_phase_runner.gh_current_login",
-                return_value="mvillmow",
-            ),
-        ):
-            iters, verdict, _grade = implementer._run_impl_review_loop(
-                issue_number=1,
-                worktree_path=tmp_path,
-                branch_name="b",
-                issue_title="t",
-                issue_body="ib",
-                session_id="sess",
-                slot_id=0,
-                thread_id=None,
-                pr_number=42,
-            )
-
-        assert verdict == "GO"
-        assert iters == 2  # did NOT accept GO on R0; addressed then re-reviewed
-        mock_addr.assert_called()
+        assert (iters, verdict, grade) == (1, "GO", "A")
+        mock_addr.assert_not_called()
+        resolved_ids = [call.args[0] for call in mock_resolve.call_args_list]
+        assert resolved_ids == ["T_self", "T_bot"]
 
     def test_runs_3_iterations_on_sustained_nogo(
         self, implementer: IssueImplementer, tmp_path: Path

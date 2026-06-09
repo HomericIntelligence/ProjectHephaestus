@@ -33,7 +33,9 @@ _yaml: Any | None = None
 try:
     import yaml as _pyyaml
 except ModuleNotFoundError:
-    _yaml = None
+    pass
+else:
+    _yaml = _pyyaml
 
 # Security limit: skip workflow files larger than 1 MB
 _MAX_FILE_SIZE = 1_048_576

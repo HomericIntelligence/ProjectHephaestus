@@ -29,7 +29,9 @@ _yaml: Any | None = None
 try:
     import yaml as _pyyaml
 except ModuleNotFoundError:
-    _yaml = None
+    pass
+else:
+    _yaml = _pyyaml
 
 #: Compiled regex that matches a ``---`` frontmatter block at the start of a file.
 FRONTMATTER_PATTERN: re.Pattern[str] = re.compile(r"^---\s*\n(.*?\n)---\s*\n", re.DOTALL)

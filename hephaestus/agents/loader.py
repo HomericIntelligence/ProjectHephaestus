@@ -24,7 +24,9 @@ _yaml: Any | None = None
 try:
     import yaml as _pyyaml
 except ModuleNotFoundError:
-    _yaml = None
+    pass
+else:
+    _yaml = _pyyaml
 
 
 class AgentInfo:

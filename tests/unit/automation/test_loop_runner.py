@@ -1178,6 +1178,36 @@ class TestResilientCallAdoption:
         ]
         assert unexpected_reset not in calls
 
+    def test_rebase_main_preserves_local_commits_when_rebase_fails(
+        self, tmp_path: Path
+    ) -> None:
+        """A failed rebase must not hard-reset away local commits ahead of origin."""
+        calls: list[list[str]] = []
+
+        def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            if "symbolic-ref" in argv:
+                return _completed(stdout="origin/main\n")
+            if "rev-list" in argv:
+                return _completed(stdout="2\n")
+            if "rebase" in argv and "--quiet" in argv:
+                return _completed(returncode=1)
+            if "rev-parse" in argv:
+                return _completed(stdout="local12\n")
+            return _completed()
+
+        with (
+            patch("hephaestus.automation.loop_runner.resilient_call", return_value=_completed()),
+            patch("hephaestus.automation.loop_runner.subprocess.run", side_effect=fake_run),
+        ):
+            sha = _rebase_main("Repo", tmp_path)
+
+        assert sha == "local12"
+        assert ["git", "-C", str(tmp_path), "rebase", "--abort"] in calls
+        assert not any(
+            call[:5] == ["git", "-C", str(tmp_path), "reset", "--hard"] for call in calls
+        )
+
 
 class TestDefaultPhaseTimeout:
     """run_phase must apply a default timeout when --phase-timeout is absent (#684)."""

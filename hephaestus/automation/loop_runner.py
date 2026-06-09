@@ -747,6 +747,29 @@ def _detect_remote_base_ref(repo: str, repo_dir: Path) -> str:
     return "origin/main"
 
 
+def _local_ahead_count(repo: str, repo_dir: Path, base_ref: str) -> int:
+    """Return the number of commits on HEAD that are not in ``base_ref``."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-list", "--count", f"{base_ref}..HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=METADATA_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        LOG.warning("[%s] timed out checking local commits ahead of %s", repo, base_ref)
+        return 0
+    if result.returncode != 0:
+        LOG.warning("[%s] could not check local commits ahead of %s", repo, base_ref)
+        return 0
+    try:
+        return int(result.stdout.strip() or "0")
+    except ValueError:
+        LOG.warning("[%s] invalid ahead count for %s: %r", repo, base_ref, result.stdout)
+        return 0
+
+
 def _rebase_main(repo: str, repo_dir: Path) -> str:
     """Fetch + rebase the remote default branch; return short trunk SHA."""
     # The fetch touches the network, so route it through resilient_call:
@@ -764,6 +787,7 @@ def _rebase_main(repo: str, repo_dir: Path) -> str:
     except subprocess.TimeoutExpired:
         LOG.warning("[%s] git fetch timed out; rebasing against stale remote base", repo)
     base_ref = _detect_remote_base_ref(repo, repo_dir)
+    local_ahead = _local_ahead_count(repo, repo_dir, base_ref)
     rb = subprocess.run(
         ["git", "-C", str(repo_dir), "rebase", base_ref, "--quiet"],
         capture_output=True,
@@ -772,21 +796,29 @@ def _rebase_main(repo: str, repo_dir: Path) -> str:
         timeout=METADATA_TIMEOUT,
     )
     if rb.returncode != 0:
-        # Mid-rebase state; fall back to a hard reset so the loop can continue.
-        # This mirrors the bash script's exact behavior.
-        LOG.warning("[%s] rebase failed, hard-resetting to %s", repo, base_ref)
         subprocess.run(
             ["git", "-C", str(repo_dir), "rebase", "--abort"],
             capture_output=True,
             check=False,
             timeout=METADATA_TIMEOUT,
         )
-        subprocess.run(
-            ["git", "-C", str(repo_dir), "reset", "--hard", base_ref, "--quiet"],
-            capture_output=True,
-            check=False,
-            timeout=METADATA_TIMEOUT,
-        )
+        if local_ahead > 0:
+            LOG.warning(
+                "[%s] rebase failed with %s local commit(s) ahead of %s; preserving HEAD",
+                repo,
+                local_ahead,
+                base_ref,
+            )
+        else:
+            # No local commits are at risk, so restore a clean remote-base trunk
+            # and keep the loop moving.
+            LOG.warning("[%s] rebase failed, hard-resetting to %s", repo, base_ref)
+            subprocess.run(
+                ["git", "-C", str(repo_dir), "reset", "--hard", base_ref, "--quiet"],
+                capture_output=True,
+                check=False,
+                timeout=METADATA_TIMEOUT,
+            )
     sha = subprocess.run(
         ["git", "-C", str(repo_dir), "rev-parse", "--short=7", "HEAD"],
         capture_output=True,

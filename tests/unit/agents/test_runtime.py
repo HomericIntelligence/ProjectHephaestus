@@ -68,6 +68,51 @@ def test_run_codex_session_returns_session_id_and_last_message(tmp_path: Path) -
     assert result.stdout == "final answer"
 
 
+def test_run_codex_session_recovers_last_message_on_wrapper_timeout(tmp_path: Path) -> None:
+    """If Codex writes the final answer but its wrapper hangs, keep the answer."""
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+        output_path.write_text("final answer", encoding="utf-8")
+        stdout = (
+            '{"type":"session_meta","payload":{"id":"019e1e57-7652-7892-b1ca-c31c93d4b160"}}\n'
+            '{"type":"agent_message","message":"fallback"}\n'
+        )
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"], output=stdout, stderr="")
+
+    with patch("hephaestus.agents.runtime.codex_approval_args", return_value=[]):
+        with patch("subprocess.run", side_effect=fake_run):
+            result = agent_runtime.run_codex_session(
+                "prompt",
+                cwd=tmp_path,
+                timeout=30,
+                sandbox="workspace-write",
+            )
+
+    assert result.session_id == "019e1e57-7652-7892-b1ca-c31c93d4b160"
+    assert result.stdout == "final answer"
+    assert "timed out" in result.stderr
+
+
+def test_run_codex_session_timeout_without_last_message_still_raises(tmp_path: Path) -> None:
+    """A real Codex timeout with no completed message must still fail."""
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+        output_path.write_text("", encoding="utf-8")
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"], output="", stderr="")
+
+    with patch("hephaestus.agents.runtime.codex_approval_args", return_value=[]):
+        with patch("subprocess.run", side_effect=fake_run):
+            with pytest.raises(subprocess.TimeoutExpired):
+                agent_runtime.run_codex_session(
+                    "prompt",
+                    cwd=tmp_path,
+                    timeout=30,
+                    sandbox="workspace-write",
+                )
+
+
 def test_codex_approval_args_uses_config_override_for_current_cli() -> None:
     """Current Codex exposes approval policy through -c config overrides."""
     help_text = """

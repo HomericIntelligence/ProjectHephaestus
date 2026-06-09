@@ -307,21 +307,45 @@ def _run_codex_command(
         cmd.extend(["--output-last-message", output_file.name, "-"])
         env = os.environ.copy()
         env.setdefault("CODEX_HOME", str(Path.home() / ".codex"))
-        result = subprocess.run(
-            cmd,
-            input=prompt,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=timeout,
-            env=env,
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                input=prompt,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=timeout,
+                env=env,
+            )
+            stdout_text = result.stdout or ""
+            stderr_text = result.stderr or ""
+        except subprocess.TimeoutExpired as e:
+            last_message = Path(output_file.name).read_text(encoding="utf-8").strip()
+            stdout_text = _coerce_timeout_output(e.stdout)
+            stderr_text = _coerce_timeout_output(e.stderr)
+            if not last_message:
+                raise
+            session_id, _ = _parse_codex_json_events(stdout_text)
+            return AgentRunResult(
+                stdout=last_message,
+                stderr=stderr_text or f"Codex wrapper timed out after {timeout}s",
+                session_id=session_id,
+            )
         last_message = Path(output_file.name).read_text(encoding="utf-8")
 
-    session_id, event_message = _parse_codex_json_events(result.stdout or "")
-    stdout = (last_message or event_message or result.stdout or "").strip()
-    return AgentRunResult(stdout=stdout, stderr=result.stderr or "", session_id=session_id)
+    session_id, event_message = _parse_codex_json_events(stdout_text)
+    stdout = (last_message or event_message or stdout_text or "").strip()
+    return AgentRunResult(stdout=stdout, stderr=stderr_text, session_id=session_id)
+
+
+def _coerce_timeout_output(output: str | bytes | None) -> str:
+    """Return text from ``TimeoutExpired`` stdout/stderr regardless of mode."""
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode(errors="replace")
+    return output
 
 
 def codex_exec_resume_args(

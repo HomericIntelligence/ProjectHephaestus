@@ -1631,6 +1631,37 @@ def gh_pr_update_review_comment(comment_node_id: str, body: str) -> None:
 
 _ADDITIONAL_REVIEW_NOTE_DELIMITER = "\n\n---\n_Additional review note (same line):_\n\n"
 
+_REVIEW_COMMENT_DEDUPE_STOPWORDS = {
+    "about",
+    "actual",
+    "after",
+    "again",
+    "also",
+    "another",
+    "because",
+    "before",
+    "being",
+    "cannot",
+    "changed",
+    "comment",
+    "coverage",
+    "current",
+    "future",
+    "please",
+    "production",
+    "proves",
+    "regression",
+    "sibling",
+    "still",
+    "suite",
+    "that",
+    "this",
+    "where",
+    "with",
+    "without",
+    "would",
+}
+
 
 def _normalize_review_comment_body(body: str) -> str:
     """Normalize a review comment body for duplicate-content comparison."""
@@ -1640,11 +1671,25 @@ def _normalize_review_comment_body(body: str) -> str:
     return " ".join(normalized.split())
 
 
+def _review_comment_keyword_tokens(body: str) -> set[str]:
+    """Return content-bearing tokens for same-line review duplicate checks."""
+    normalized = _normalize_review_comment_body(body)
+    tokens: set[str] = set()
+    for token in re.findall(r"[a-z0-9_#./-]+", normalized):
+        if len(token) < 4 and not token.startswith("#"):
+            continue
+        if token in _REVIEW_COMMENT_DEDUPE_STOPWORDS:
+            continue
+        tokens.add(token)
+    return tokens
+
+
 def _review_comment_already_covers(existing_body: str, new_body: str) -> bool:
     """Return True when an existing same-line comment already covers ``new_body``."""
     new_norm = _normalize_review_comment_body(new_body)
     if not new_norm:
         return True
+    new_tokens = _review_comment_keyword_tokens(new_body)
     parts = existing_body.split(_ADDITIONAL_REVIEW_NOTE_DELIMITER)
     for part in parts:
         existing_norm = _normalize_review_comment_body(part)
@@ -1654,6 +1699,15 @@ def _review_comment_already_covers(existing_body: str, new_body: str) -> bool:
             return True
         if SequenceMatcher(None, existing_norm, new_norm).ratio() >= 0.82:
             return True
+        existing_tokens = _review_comment_keyword_tokens(part)
+        if new_tokens and existing_tokens:
+            overlap = existing_tokens & new_tokens
+            # Re-review wording varies, but true duplicates keep the same code
+            # identifiers and defect nouns. Compare against the smaller set so
+            # a shorter restatement of the same finding is still suppressed.
+            overlap_ratio = len(overlap) / min(len(existing_tokens), len(new_tokens))
+            if len(overlap) >= 6 and overlap_ratio >= 0.6:
+                return True
     return False
 
 

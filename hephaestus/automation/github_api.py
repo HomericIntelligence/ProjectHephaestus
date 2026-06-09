@@ -1434,7 +1434,10 @@ def gh_current_login() -> str | None:
     return login or None
 
 
-def gh_pr_inline_comment_index(pr_number: int) -> dict[tuple[str, Any], tuple[str, str]]:
+ReviewCommentIndexKey = tuple[str, Any] | tuple[str, Any, str]
+
+
+def gh_pr_inline_comment_index(pr_number: int) -> dict[ReviewCommentIndexKey, tuple[str, str]]:
     """Map ``(path, line)`` → ``(comment_node_id, body)`` for unresolved bot threads.
 
     Returns the GraphQL node id AND current body of the FIRST comment of each
@@ -1456,7 +1459,8 @@ def gh_pr_inline_comment_index(pr_number: int) -> dict[tuple[str, Any], tuple[st
         "  repository(owner:$owner,name:$name){"
         "    pullRequest(number:$number){"
         "      reviewThreads(first:100){"
-        "        nodes{ isResolved path line comments(first:1){ nodes{ id body } } }"
+        "        nodes{ isResolved path line side:diffSide "
+        "comments(first:1){ nodes{ id body } } }"
         "      }"
         "    }"
         "  }"
@@ -1490,7 +1494,7 @@ def gh_pr_inline_comment_index(pr_number: int) -> dict[tuple[str, Any], tuple[st
         .get("reviewThreads", {})
         .get("nodes", [])
     )
-    index: dict[tuple[str, Any], tuple[str, str]] = {}
+    index: dict[ReviewCommentIndexKey, tuple[str, str]] = {}
     for node in nodes:
         if node.get("isResolved"):
             continue
@@ -1501,7 +1505,13 @@ def gh_pr_inline_comment_index(pr_number: int) -> dict[tuple[str, Any], tuple[st
         if not comment_id:
             continue
         body = comment_nodes[0].get("body") or ""
-        index[(node.get("path") or "", node.get("line"))] = (comment_id, body)
+        path = node.get("path") or ""
+        line = node.get("line")
+        side = node.get("side") or "RIGHT"
+        index[(path, line, side)] = (comment_id, body)
+        # Preserve the older key shape for callers/tests that predate diff-side
+        # support, and as a fallback if GitHub ever omits ``diffSide``.
+        index.setdefault((path, line), (comment_id, body))
     return index
 
 
@@ -1631,8 +1641,10 @@ def _edit_or_keep_comments(pr_number: int, comments: list[dict[str, Any]]) -> li
         return comments
     fresh: list[dict[str, Any]] = []
     for c in comments:
-        key = (c.get("path") or "", c.get("line"))
-        existing = index.get(key)
+        path = c.get("path") or ""
+        line = c.get("line")
+        side = c.get("side") or "RIGHT"
+        existing = index.get((path, line, side)) or index.get((path, line))
         if existing is None:
             fresh.append(c)
             continue
@@ -1643,28 +1655,31 @@ def _edit_or_keep_comments(pr_number: int, comments: list[dict[str, Any]]) -> li
         body = c.get("body") or ""
         if _review_comment_already_covers(existing_body, body):
             logger.info(
-                "PR #%s: skipped duplicate same-line review comment on %s:%s",
+                "PR #%s: skipped duplicate same-line review comment on %s:%s (%s)",
                 pr_number,
-                key[0],
-                key[1],
+                path,
+                line,
+                side,
             )
             continue
         combined = f"{existing_body}{_ADDITIONAL_REVIEW_NOTE_DELIMITER}{body}"
         try:
             gh_pr_update_review_comment(existing_id, combined)
             logger.info(
-                "PR #%s: edited existing comment on %s:%s instead of duplicating",
+                "PR #%s: edited existing comment on %s:%s (%s) instead of duplicating",
                 pr_number,
-                key[0],
-                key[1],
+                path,
+                line,
+                side,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             # If the edit fails, fall back to posting the comment fresh.
             logger.warning(
-                "PR #%s: edit-in-place failed for %s:%s (%s); posting fresh",
+                "PR #%s: edit-in-place failed for %s:%s (%s): %s; posting fresh",
                 pr_number,
-                key[0],
-                key[1],
+                path,
+                line,
+                side,
                 exc,
             )
             fresh.append(c)
@@ -1881,8 +1896,8 @@ def gh_pr_list_unresolved_threads(
 
     Returns:
         List of thread dicts with keys: id (str), path (str), line (int | None),
-        body (str), author (str — the first comment's author login, ``""`` if
-        unknown).
+        side (str), body (str), author (str — the first comment's author login,
+        ``""`` if unknown), authors (list[str]), comments (list[dict]).
 
     """
     if dry_run:
@@ -1901,8 +1916,8 @@ def gh_pr_list_unresolved_threads(
         "  repository(owner:$owner,name:$name){"
         "    pullRequest(number:$number){"
         "      reviewThreads(first:100){"
-        "        nodes{ id isResolved path line "
-        "comments(first:1){ nodes{ body author{ login } } } }"
+        "        nodes{ id isResolved path line side:diffSide "
+        "comments(first:20){ nodes{ body author{ login } } } }"
         "      }"
         "    }"
         "  }"
@@ -1938,20 +1953,30 @@ def gh_pr_list_unresolved_threads(
     for node in nodes:
         if node.get("isResolved"):
             continue
-        first_comment_nodes = node.get("comments", {}).get("nodes", [])
-        first_comment = first_comment_nodes[0] if first_comment_nodes else {}
+        comment_nodes = node.get("comments", {}).get("nodes", [])
+        first_comment = comment_nodes[0] if comment_nodes else {}
         body = first_comment.get("body", "")
-        author = ""
-        author_node = first_comment.get("author")
-        if isinstance(author_node, dict):
-            author = author_node.get("login") or ""
+        comments: list[dict[str, str]] = []
+        authors: list[str] = []
+        for comment in comment_nodes:
+            comment_author = ""
+            author_node = comment.get("author")
+            if isinstance(author_node, dict):
+                comment_author = author_node.get("login") or ""
+            if comment_author:
+                authors.append(comment_author)
+            comments.append({"body": comment.get("body") or "", "author": comment_author})
+        author = authors[0] if authors else ""
         threads.append(
             {
                 "id": node["id"],
                 "path": node.get("path", ""),
                 "line": node.get("line"),
+                "side": node.get("side") or "RIGHT",
                 "body": body,
                 "author": author,
+                "authors": authors,
+                "comments": comments,
             }
         )
 

@@ -2403,6 +2403,7 @@ class TestGhPrInlineCommentIndex:
                                         "isResolved": False,
                                         "path": "a.py",
                                         "line": 2,
+                                        "side": "RIGHT",
                                         "comments": {"nodes": [{"id": "N1", "body": "keep me"}]},
                                     },
                                     {
@@ -2423,7 +2424,10 @@ class TestGhPrInlineCommentIndex:
         index = gh_pr_inline_comment_index(7)
 
         # Unresolved thread is indexed with id + body; resolved one is excluded.
-        assert index == {("a.py", 2): ("N1", "keep me")}
+        assert index == {
+            ("a.py", 2): ("N1", "keep me"),
+            ("a.py", 2, "RIGHT"): ("N1", "keep me"),
+        }
 
     @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
     @patch("hephaestus.automation.github_api._gh_call")

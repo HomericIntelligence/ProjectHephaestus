@@ -140,6 +140,25 @@ class TestRunImplReviewLoop:
                 "line": 2,
                 "body": "old",
             },
+            {
+                "id": "T_nested_self",
+                "author": "coderabbitai[bot]",
+                "authors": ["coderabbitai[bot]", "mvillmow"],
+                "comments": [
+                    {"body": "old", "author": "coderabbitai[bot]"},
+                    {"body": "automation reply", "author": "mvillmow"},
+                ],
+                "path": "d.py",
+                "line": 4,
+                "body": "old",
+            },
+            {
+                "id": "T_other_bot",
+                "author": "coderabbitai[bot]",
+                "path": "e.py",
+                "line": 5,
+                "body": "bot",
+            },
             {"id": "T_human", "author": "alice", "path": "c.py", "line": 3, "body": "human"},
         ]
         with (
@@ -172,7 +191,7 @@ class TestRunImplReviewLoop:
         assert (iters, verdict, grade) == (1, "GO", "A")
         mock_addr.assert_not_called()
         resolved_ids = [call.args[0] for call in mock_resolve.call_args_list]
-        assert resolved_ids == ["T_self", "T_bot"]
+        assert resolved_ids == ["T_self", "T_bot", "T_nested_self"]
 
     def test_runs_3_iterations_on_sustained_nogo(
         self, implementer: IssueImplementer, tmp_path: Path

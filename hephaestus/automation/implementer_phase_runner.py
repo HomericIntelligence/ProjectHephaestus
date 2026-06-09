@@ -136,10 +136,22 @@ def _prepend_advise(advise_findings: str, prompt: str) -> str:
 
 def _is_automation_owned_thread(thread: dict[str, Any], current_login: str | None) -> bool:
     """Return True for unresolved review threads the automation may resolve on GO."""
+    authors = {str(author).strip() for author in thread.get("authors", []) if str(author).strip()}
     author = (thread.get("author") or "").strip()
-    if current_login and author == current_login:
+    if author:
+        authors.add(author)
+    for comment in thread.get("comments", []):
+        comment_author = (comment.get("author") or "").strip()
+        if comment_author:
+            authors.add(comment_author)
+
+    if current_login and current_login in authors:
         return True
-    return author.endswith("[bot]")
+    automation_bot_logins = {
+        "github-actions[bot]",
+        "hephaestus[bot]",
+    }
+    return bool(authors & automation_bot_logins)
 
 
 def _claude_quota_reset_epoch(*texts: str) -> int | None:

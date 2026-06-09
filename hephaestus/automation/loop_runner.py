@@ -59,10 +59,10 @@ def _default_phase_timeout_s() -> float:
     a malformed env value logs a warning and falls back to the default rather
     than crashing at startup.
 
-    The 3600s (1h) default comfortably exceeds the longest in-phase agent
-    timeout (the implementer's 1800s) so a healthy phase never trips it.
+    The 7800s default lets the outer phase guard safely exceed the longest
+    in-phase agent timeout (2h) so a healthy phase never trips it.
     """
-    default = 3600
+    default = 7800
     raw = os.environ.get("HEPH_PHASE_TIMEOUT")
     if raw is None:
         return float(default)

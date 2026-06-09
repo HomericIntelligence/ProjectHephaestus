@@ -1043,7 +1043,17 @@ class TestSubprocessTimeouts:
             patch("hephaestus.automation.loop_runner.subprocess.run") as mock_run,
         ):
             mock_resilient.return_value = _completed()
-            mock_run.return_value = _completed(stdout="abc1234")
+
+            def _run(argv: list[str], **_: object):
+                if "status" in argv:
+                    return _completed(stdout="")
+                if "symbolic-ref" in argv:
+                    return _completed(stdout="origin/main")
+                if "rev-parse" in argv:
+                    return _completed(stdout="abc1234")
+                return _completed()
+
+            mock_run.side_effect = _run
             _rebase_main("Repo", tmp_path)
         # Every direct subprocess.run (rebase / rev-parse) is bounded.
         assert mock_run.call_count >= 2
@@ -1086,7 +1096,17 @@ class TestResilientCallAdoption:
             patch("hephaestus.automation.loop_runner.subprocess.run") as mock_run,
         ):
             mock_resilient.return_value = _completed()
-            mock_run.return_value = _completed(stdout="abc1234")
+
+            def _run(argv: list[str], **_: object):
+                if "status" in argv:
+                    return _completed(stdout="")
+                if "symbolic-ref" in argv:
+                    return _completed(stdout="origin/main")
+                if "rev-parse" in argv:
+                    return _completed(stdout="abc1234")
+                return _completed()
+
+            mock_run.side_effect = _run
             _rebase_main("Repo", tmp_path)
         assert mock_resilient.call_count == 1
         # The wrapped callable is the module's subprocess.run (here the patched mock).
@@ -1200,7 +1220,7 @@ class TestDefaultPhaseTimeout:
     ) -> None:
         """A non-numeric override falls back to the default instead of crashing."""
         monkeypatch.setenv("HEPH_PHASE_TIMEOUT", "not-a-number")
-        assert _default_phase_timeout_s() == 3600.0
+        assert _default_phase_timeout_s() == 7800.0
 
     def test_main_applies_default_phase_timeout_when_flag_absent(self) -> None:
         """``main`` builds a LoopConfig with the default timeout when --phase-timeout is omitted."""

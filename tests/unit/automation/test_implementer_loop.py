@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from hephaestus.automation.implementer import MAX_REVIEW_ITERATIONS, IssueImplementer
+from hephaestus.automation.implementer_phase_runner import _parse_dirty_worktree_decision
 from hephaestus.automation.models import ImplementationState, ImplementerOptions
 
 
@@ -1317,6 +1318,10 @@ class TestReviewExistingPrShortCircuit:
                 implementer.worktree_manager, "create_worktree", return_value=worktree_path
             ) as mock_create_wt,
             patch(
+                "hephaestus.automation.implementer_phase_runner.is_clean_working_tree",
+                return_value=True,
+            ),
+            patch(
                 "hephaestus.automation.implementer_phase_runner.sync_worktree_to_remote_branch"
             ) as mock_sync,
             patch.object(implementer, "_save_state"),
@@ -1397,6 +1402,10 @@ class TestReviewExistingPrShortCircuit:
             patch("hephaestus.automation.implementer.get_pr_head_branch", return_value=None),
             patch.object(
                 implementer.worktree_manager, "create_worktree", return_value=worktree_path
+            ),
+            patch(
+                "hephaestus.automation.implementer_phase_runner.is_clean_working_tree",
+                return_value=True,
             ),
             patch(
                 "hephaestus.automation.implementer_phase_runner.sync_worktree_to_remote_branch"
@@ -1489,12 +1498,14 @@ class TestResolveDirtyReusedWorktree:
             patch(
                 "hephaestus.automation.implementer_phase_runner.sync_worktree_to_remote_branch"
             ) as mock_sync,
+            patch("hephaestus.automation.implementer_phase_runner.run") as mock_run,
             patch.object(implementer, "_save_state"),
             patch("hephaestus.automation.implementer.fetch_issue_info") as mock_issue,
             patch.object(implementer, "_run_advise_as_implementer_turn"),
             patch.object(implementer, "_run_impl_review_loop", return_value=(1, "GO", "A")),
             patch.object(implementer.phase_runner, "_apply_impl_review_verdict"),
         ):
+            mock_resolve.return_value = "abc123456789"
             mock_issue.return_value.title = "t"
             mock_issue.return_value.body = "b"
             implementer.phase_runner._review_existing_pr(
@@ -1508,6 +1519,15 @@ class TestResolveDirtyReusedWorktree:
         mock_resolve.assert_called_once()
         # Decision must run BEFORE the hard-reset sync.
         mock_sync.assert_called_once()
+        argvs = [c[0][0] for c in mock_run.call_args_list]
+        assert ["git", "cherry-pick", "abc123456789"] in argvs
+        assert ["git", "push", "origin", "HEAD:b"] in argvs
+
+    def test_dirty_worktree_decision_parser_requires_exact_final_line(self) -> None:
+        """Only an exact final-line COMMIT chooses the commit path."""
+        assert _parse_dirty_worktree_decision("Reasoning\nCOMMIT") == "commit"
+        assert _parse_dirty_worktree_decision("Reasoning mentions COMMIT\nSTASH") == "stash"
+        assert _parse_dirty_worktree_decision("I think COMMIT") == "stash"
 
     def test_decision_agent_commit_verdict_commits(
         self, implementer: IssueImplementer, tmp_path: Path

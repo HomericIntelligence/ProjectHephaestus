@@ -130,6 +130,59 @@ class TestWorktreeManager:
         prune_calls = [c for c in mock_run.call_args_list if "prune" in c[0][0]]
         assert len(prune_calls) >= 1
 
+    @patch("hephaestus.automation.worktree_manager.is_clean_working_tree", return_value=False)
+    @patch("hephaestus.automation.worktree_manager.run")
+    @patch("hephaestus.automation.worktree_manager.get_repo_root")
+    def test_create_worktree_reuses_registered_dirty_existing_path(
+        self, mock_get_root: Any, mock_run: Any, mock_clean: Any, tmp_path: Any
+    ) -> None:
+        """A rerun must preserve dirty work left in build/.worktrees/issue-N."""
+        mock_get_root.return_value = tmp_path
+        manager = WorktreeManager()
+        worktree_path = manager.base_dir / "issue-1109"
+        worktree_path.mkdir(parents=True)
+        (worktree_path / "changed.py").write_text("dirty work")
+        scratch = worktree_path / ".claude-prompt-1109.md"
+        scratch.write_text("generated prompt")
+
+        with (
+            patch.object(manager, "_worktree_holding_branch", return_value=None),
+            patch.object(
+                manager,
+                "list_worktrees",
+                return_value=[{"path": str(worktree_path), "branch": "refs/heads/1109-auto"}],
+            ),
+            patch.object(manager, "_add_worktree_for_branch") as mock_add,
+        ):
+            result = manager.create_worktree(1109, "1109-auto")
+
+        assert result == worktree_path
+        assert manager.worktrees[1109] == worktree_path
+        assert not scratch.exists()
+        assert (worktree_path / "changed.py").exists()
+        mock_add.assert_not_called()
+
+    @patch("hephaestus.automation.worktree_manager.run")
+    @patch("hephaestus.automation.worktree_manager.get_repo_root")
+    def test_create_worktree_refuses_non_worktree_path_with_contents(
+        self, mock_get_root: Any, mock_run: Any, tmp_path: Any
+    ) -> None:
+        """Unknown non-empty directories are preserved instead of rmtree'd."""
+        mock_get_root.return_value = tmp_path
+        manager = WorktreeManager()
+        worktree_path = manager.base_dir / "issue-1109"
+        worktree_path.mkdir(parents=True)
+        (worktree_path / "local-file.txt").write_text("do not delete")
+
+        with (
+            patch.object(manager, "_worktree_holding_branch", return_value=None),
+            patch.object(manager, "list_worktrees", return_value=[]),
+            pytest.raises(RuntimeError, match="not a registered git worktree"),
+        ):
+            manager.create_worktree(1109, "1109-auto")
+
+        assert (worktree_path / "local-file.txt").exists()
+
     @patch("hephaestus.automation.worktree_manager.run")
     @patch("hephaestus.automation.worktree_manager.get_repo_root")
     def test_create_worktree_extends_remote_branch(

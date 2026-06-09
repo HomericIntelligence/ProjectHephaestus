@@ -182,6 +182,32 @@ review can verify the fixes were applied.
 """
 
 
+DIRTY_REUSED_WORKTREE_PROMPT = """
+A reused git worktree has uncommitted changes that are about to be replaced by
+`git reset --hard origin/<branch>`.
+
+Decide whether the changes belong to the PR branch or should be preserved out
+of band.
+
+Rules:
+- Reply with exactly one decision word on the final line: COMMIT or STASH.
+- Use COMMIT only when the changes clearly belong to this PR branch.
+- Use STASH when the changes are unrelated, incomplete, ambiguous, or unsafe to
+  attach to the PR branch.
+
+{untrusted_notice}
+
+Branch name (untrusted):
+{branch_name_block}
+
+git status --porcelain (untrusted):
+{status_block}
+
+git diff HEAD, truncated (untrusted):
+{diff_block}
+"""
+
+
 def get_implementation_prompt(
     issue_number: int,
     issue_title: str = "",
@@ -258,6 +284,32 @@ def get_impl_loop_review_prompt(
         prior_review_block=_prior_review_block(prior_review),
         full_sweep_suffix=full_sweep_suffix,
         output_format=_STRICT_REVIEW_OUTPUT_FORMAT.strip(),
+        untrusted_notice=_UNTRUSTED_NOTICE,
+    )
+
+
+def get_dirty_reused_worktree_prompt(
+    *,
+    branch_name: str,
+    status_text: str,
+    diff_text: str,
+) -> str:
+    """Build the dirty-worktree ownership decision prompt.
+
+    Args:
+        branch_name: PR branch being prepared for sync.
+        status_text: ``git status --porcelain`` output.
+        diff_text: ``git diff HEAD`` output, already truncated by caller if desired.
+
+    Returns:
+        Fenced prompt asking for an exact final-line COMMIT/STASH decision.
+
+    """
+    nonce = secrets.token_hex(8).upper()
+    return DIRTY_REUSED_WORKTREE_PROMPT.format(
+        branch_name_block=_fence_untrusted("BRANCH_NAME", branch_name, nonce),
+        status_block=_fence_untrusted("GIT_STATUS", status_text, nonce),
+        diff_block=_fence_untrusted("GIT_DIFF", diff_text, nonce),
         untrusted_notice=_UNTRUSTED_NOTICE,
     )
 

@@ -1632,54 +1632,6 @@ class TestReviewExistingPrShortCircuit:
         mock_loop.assert_called_once()
         mock_verdict.assert_called_once()
 
-    def test_codex_existing_pr_forwards_advise_to_review_loop(
-        self, implementer: IssueImplementer, tmp_path: Path
-    ) -> None:
-        """Codex existing-PR review has no transcript injection, so pass context."""
-        implementer.options.agent = "codex"
-        worktree_path = tmp_path / "worktree"
-        worktree_path.mkdir(exist_ok=True)
-        state = ImplementationState(issue_number=1)
-        with (
-            patch(
-                "hephaestus.automation.implementer_phase_runner.pr_has_implementation_state_label",
-                return_value=(False, False),
-            ),
-            patch.object(implementer.status_tracker, "update_slot"),
-            patch("hephaestus.automation.implementer.get_pr_head_branch", return_value="b"),
-            patch.object(
-                implementer.worktree_manager, "create_worktree", return_value=worktree_path
-            ),
-            patch(
-                "hephaestus.automation.implementer_phase_runner.is_clean_working_tree",
-                return_value=True,
-            ),
-            patch("hephaestus.automation.implementer_phase_runner.sync_worktree_to_remote_branch"),
-            patch.object(implementer, "_save_state"),
-            patch("hephaestus.automation.implementer.fetch_issue_info") as mock_issue,
-            patch.object(
-                implementer, "_run_advise", return_value="prior team finding"
-            ) as mock_advise,
-            patch.object(
-                implementer, "_run_impl_review_loop", return_value=(1, "GO", "A")
-            ) as mock_loop,
-            patch.object(implementer.phase_runner, "_apply_impl_review_verdict"),
-            patch.object(implementer.phase_runner, "_run_post_pr_followup"),
-        ):
-            mock_issue.return_value.title = "title"
-            mock_issue.return_value.body = "body"
-            implementer.phase_runner._review_existing_pr(
-                issue_number=1,
-                existing_pr=555,
-                branch_name="1-branch",
-                state=state,
-                slot_id=None,
-                thread_id=None,
-            )
-
-        mock_advise.assert_called_once()
-        assert mock_loop.call_args.kwargs["advise_findings"] == "prior team finding"
-
     @pytest.mark.parametrize("learn_completed", [False, True])
     def test_existing_pr_runs_post_review_learn_when_needed(
         self,

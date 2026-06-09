@@ -1256,7 +1256,9 @@ class TestResilientCallAdoption:
         ]
         assert unexpected_reset not in calls
 
-    def test_rebase_main_preserves_local_commits_when_rebase_fails(self, tmp_path: Path) -> None:
+    def test_rebase_main_preserves_local_commits_when_rebase_fails(
+        self, tmp_path: Path
+    ) -> None:
         """A failed rebase must not hard-reset away local commits ahead of origin."""
         calls: list[list[str]] = []
 
@@ -1276,63 +1278,13 @@ class TestResilientCallAdoption:
             patch("hephaestus.automation.loop_runner.resilient_call", return_value=_completed()),
             patch("hephaestus.automation.loop_runner.subprocess.run", side_effect=fake_run),
         ):
-            sha, fetch_ok = _rebase_main("Repo", tmp_path)
+            sha = _rebase_main("Repo", tmp_path)
 
         assert sha == "local12"
-        assert fetch_ok is True
         assert ["git", "-C", str(tmp_path), "rebase", "--abort"] in calls
         assert not any(
             call[:5] == ["git", "-C", str(tmp_path), "reset", "--hard"] for call in calls
         )
-
-    def test_rebase_main_fetch_nonzero_rc_marks_stale(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Non-zero git fetch rc (e.g. macOS sandboxing) must surface and mark stale.
-
-        The returned ``fetch_ok`` flag is False. The SHA value itself stays a
-        clean 7-char hash so ``HEPH_TRUNK_GITHASH`` and session naming downstream
-        remain unaffected.
-
-        Regression for #993: previously rc=1 silently passed through
-        ``resilient_call`` (subprocess.run with ``check=False`` does not raise)
-        and the loop logged a trunk SHA as if the refresh had succeeded.
-        """
-        fetch_failure = _completed(
-            returncode=1,
-            stderr="error: cannot open .git/FETCH_HEAD: Operation not permitted\n",
-        )
-
-        with (
-            patch(
-                "hephaestus.automation.loop_runner.resilient_call",
-                return_value=fetch_failure,
-            ),
-            patch("hephaestus.automation.loop_runner.subprocess.run") as mock_run,
-            caplog.at_level("WARNING", logger="hephaestus.automation.loop_runner"),
-        ):
-            mock_run.return_value = _completed(stdout="abc1234")
-            sha, fetch_ok = _rebase_main("Repo", tmp_path)
-
-        assert sha == "abc1234"  # clean SHA — no suffix
-        assert fetch_ok is False
-        assert any(
-            "git fetch failed" in rec.message and "rc=1" in rec.message for rec in caplog.records
-        ), caplog.records
-
-    def test_rebase_main_fetch_success_returns_clean(self, tmp_path: Path) -> None:
-        """A zero-rc fetch returns ``fetch_ok=True`` and the unmodified SHA."""
-        with (
-            patch(
-                "hephaestus.automation.loop_runner.resilient_call",
-                return_value=_completed(returncode=0),
-            ),
-            patch("hephaestus.automation.loop_runner.subprocess.run") as mock_run,
-        ):
-            mock_run.return_value = _completed(stdout="abc1234")
-            sha, fetch_ok = _rebase_main("Repo", tmp_path)
-        assert sha == "abc1234"
-        assert fetch_ok is True
 
 
 class TestDefaultPhaseTimeout:

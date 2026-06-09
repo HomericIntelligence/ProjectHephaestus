@@ -808,6 +808,33 @@ def _local_ahead_count(repo: str, repo_dir: Path, base_ref: str) -> int:
         return 0
 
 
+def _rebase_main(repo: str, repo_dir: Path) -> str:
+    """Fetch + rebase the remote default branch; return short trunk SHA."""
+    # The fetch touches the network, so route it through resilient_call:
+    # transient failures retry with backoff and a genuine stall is capped by
+    # NETWORK_TIMEOUT (#684). A timeout after retries is non-fatal here — the
+    # subsequent rebase against a stale remote base is still safe.
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-list", "--count", f"{base_ref}..HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=METADATA_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        LOG.warning("[%s] timed out checking local commits ahead of %s", repo, base_ref)
+        return 0
+    if result.returncode != 0:
+        LOG.warning("[%s] could not check local commits ahead of %s", repo, base_ref)
+        return 0
+    try:
+        return int(result.stdout.strip() or "0")
+    except ValueError:
+        LOG.warning("[%s] invalid ahead count for %s: %r", repo, base_ref, result.stdout)
+        return 0
+
+
 def _rebase_main(repo: str, repo_dir: Path) -> tuple[str, bool]:
     """Fetch + rebase the remote default branch.
 

@@ -23,6 +23,7 @@ that runs the automation. Recovery procedure for a force-killed loop:
 """
 
 import logging
+import os
 import shutil
 import threading
 from pathlib import Path
@@ -37,6 +38,14 @@ _AUTOMATION_PROMPT_PREFIXES = (
     ".claude-prompt-",
     ".claude-followup-",
 )
+
+
+def _loop_trunk_githash() -> str | None:
+    """Return the loop-provided trunk commit-ish when available."""
+    trunk = os.environ.get("HEPH_TRUNK_GITHASH", "").strip()
+    if not trunk or trunk == "unknown":
+        return None
+    return trunk
 
 
 class WorktreeDirtyError(Exception):
@@ -72,9 +81,12 @@ class WorktreeManager:
 
         # Base-branch detection is deferred to first use so that constructing
         # a WorktreeManager in test fixtures or environments without origin/*
-        # refs does not raise. The hard error from #382 / A4-05 still fires —
-        # it is just delayed until create_worktree() actually needs the value.
-        self._base_branch_override = base_branch
+        # refs does not raise. The automation loop passes HEPH_TRUNK_GITHASH so
+        # phase subprocesses create issue worktrees from the exact trunk commit
+        # they are validating, including local signed commits not yet on origin.
+        # The hard error from #382 / A4-05 still fires when neither explicit
+        # base nor loop trunk is available.
+        self._base_branch_override = base_branch or _loop_trunk_githash()
         self._base_branch_resolved: str | None = None
         self.worktrees: dict[int, Path] = {}
         self.preserved: list[tuple[int, Path]] = []
@@ -223,6 +235,7 @@ class WorktreeManager:
 
         """
         if self._local_branch_exists(branch_name):
+            self._refresh_stale_local_branch_if_safe(branch_name)
             logger.info("Branch %s already exists, reusing it", branch_name)
             run(
                 ["git", "worktree", "add", str(worktree_path), branch_name],
@@ -260,6 +273,57 @@ class WorktreeManager:
                 ],
                 cwd=self.repo_root,
             )
+
+    def _refresh_stale_local_branch_if_safe(self, branch_name: str) -> None:
+        """Fast-forward a stale local branch that has no work beyond base.
+
+        A killed or superseded automation run can leave ``<issue>-auto-impl``
+        pointing at an old base commit. If that branch has no commits that are
+        unique relative to ``self.base_branch``, rerunning the loop should not
+        ask the implementer to re-create work that already landed on the base.
+        If the branch has any unique commits, keep it untouched so in-flight work
+        is preserved.
+        """
+        if not self._is_issue_automation_branch(branch_name):
+            return
+        try:
+            result = run(
+                [
+                    "git",
+                    "rev-list",
+                    "--left-right",
+                    "--count",
+                    f"{self.base_branch}...{branch_name}",
+                ],
+                cwd=self.repo_root,
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return
+            parts = (result.stdout or "").strip().split()
+            if len(parts) != 2:
+                return
+            behind_base, ahead_base = (int(parts[0]), int(parts[1]))
+        except Exception as e:
+            logger.debug("Could not compute divergence for %s: %s", branch_name, e)
+            return
+
+        if ahead_base != 0 or behind_base == 0:
+            return
+
+        logger.info(
+            "Branch %s has no commits beyond %s and is %s commit(s) behind; fast-forwarding",
+            branch_name,
+            self.base_branch,
+            behind_base,
+        )
+        run(["git", "branch", "-f", branch_name, self.base_branch], cwd=self.repo_root)
+
+    def _is_issue_automation_branch(self, branch_name: str) -> bool:
+        """Return True for branch names owned by the issue automation loop."""
+        issue_prefix, sep, suffix = branch_name.partition("-")
+        return bool(sep and issue_prefix.isdigit() and suffix in {"auto", "auto-impl"})
 
     def _local_branch_exists(self, branch_name: str) -> bool:
         """Return True if ``branch_name`` exists in the local repository.

@@ -602,6 +602,36 @@ class TestBaseBranchDetectionRaisesOnFailure:
         assert mgr.base_branch == "origin/custom"
 
     @patch("hephaestus.automation.worktree_manager.get_repo_root")
+    def test_loop_trunk_githash_bypasses_remote_detection(
+        self, mock_get_root: Any, tmp_path: Any
+    ) -> None:
+        """Loop phases build issue worktrees from the exact validated trunk commit."""
+        mock_get_root.return_value = tmp_path
+
+        with (
+            patch.dict("os.environ", {"HEPH_TRUNK_GITHASH": "330a7b1"}),
+            patch(
+                "hephaestus.automation.worktree_manager.run",
+                side_effect=AssertionError("remote detection should not run"),
+            ),
+        ):
+            mgr = WorktreeManager()
+
+        assert mgr.base_branch == "330a7b1"
+
+    @patch("hephaestus.automation.worktree_manager.get_repo_root")
+    def test_explicit_base_branch_overrides_loop_trunk_githash(
+        self, mock_get_root: Any, tmp_path: Any
+    ) -> None:
+        """Manual callers can still force a specific base branch."""
+        mock_get_root.return_value = tmp_path
+
+        with patch.dict("os.environ", {"HEPH_TRUNK_GITHASH": "330a7b1"}):
+            mgr = WorktreeManager(base_branch="origin/custom")
+
+        assert mgr.base_branch == "origin/custom"
+
+    @patch("hephaestus.automation.worktree_manager.get_repo_root")
     def test_construction_succeeds_when_detection_would_fail(
         self, mock_get_root: Any, tmp_path: Any
     ) -> None:
@@ -682,6 +712,74 @@ class TestCreateWorktreeBranchCollision:
             c for c in mock_run.call_args_list if c[0] and c[0][0][:3] == ["git", "worktree", "add"]
         ]
         assert len(add_calls) == 1, "fresh branch must add exactly one worktree"
+
+    @patch("hephaestus.automation.worktree_manager.run")
+    @patch("hephaestus.automation.worktree_manager.get_repo_root")
+    def test_stale_local_branch_without_unique_commits_fast_forwards_to_base(
+        self, mock_get_root: Any, mock_run: Any, tmp_path: Any
+    ) -> None:
+        """A stale local issue branch should not make the implementer rework old code."""
+        mock_get_root.return_value = tmp_path
+
+        def fake_run(argv: list[str], **_: Any) -> MagicMock:
+            if argv[:3] == ["git", "rev-parse", "--verify"]:
+                return MagicMock(stdout="oldsha\n", returncode=0)
+            if argv[:3] == ["git", "rev-list", "--left-right"]:
+                return MagicMock(stdout="7 0\n", returncode=0)
+            if argv[:2] == ["git", "symbolic-ref"]:
+                return MagicMock(stdout="origin/main\n", returncode=0)
+            return MagicMock(stdout="", returncode=0)
+
+        mock_run.side_effect = fake_run
+        manager = WorktreeManager()
+
+        with patch.object(manager, "list_worktrees", return_value=[]):
+            manager.create_worktree(1109, "1109-auto-impl")
+
+        argvs = [c.args[0] for c in mock_run.call_args_list]
+        add_argv = [
+            "git",
+            "worktree",
+            "add",
+            str(manager.base_dir / "issue-1109"),
+            "1109-auto-impl",
+        ]
+        assert ["git", "branch", "-f", "1109-auto-impl", "origin/main"] in argvs
+        assert add_argv in argvs
+
+    @patch("hephaestus.automation.worktree_manager.run")
+    @patch("hephaestus.automation.worktree_manager.get_repo_root")
+    def test_local_branch_with_unique_commits_is_preserved(
+        self, mock_get_root: Any, mock_run: Any, tmp_path: Any
+    ) -> None:
+        """A branch with local work must not be forced back to the base branch."""
+        mock_get_root.return_value = tmp_path
+
+        def fake_run(argv: list[str], **_: Any) -> MagicMock:
+            if argv[:3] == ["git", "rev-parse", "--verify"]:
+                return MagicMock(stdout="localsha\n", returncode=0)
+            if argv[:3] == ["git", "rev-list", "--left-right"]:
+                return MagicMock(stdout="0 2\n", returncode=0)
+            if argv[:2] == ["git", "symbolic-ref"]:
+                return MagicMock(stdout="origin/main\n", returncode=0)
+            return MagicMock(stdout="", returncode=0)
+
+        mock_run.side_effect = fake_run
+        manager = WorktreeManager()
+
+        with patch.object(manager, "list_worktrees", return_value=[]):
+            manager.create_worktree(1109, "1109-auto-impl")
+
+        argvs = [c.args[0] for c in mock_run.call_args_list]
+        add_argv = [
+            "git",
+            "worktree",
+            "add",
+            str(manager.base_dir / "issue-1109"),
+            "1109-auto-impl",
+        ]
+        assert ["git", "branch", "-f", "1109-auto-impl", "origin/main"] not in argvs
+        assert add_argv in argvs
 
     @patch("hephaestus.automation.worktree_manager.run")
     @patch("hephaestus.automation.worktree_manager.get_repo_root")

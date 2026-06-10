@@ -404,7 +404,6 @@ class TestFetchAllIssueLabelsGraphql:
         assert fetch_all_issue_labels_graphql([]) == {}
 
     def test_parses_aliased_labels(self) -> None:
-        import json
         from unittest.mock import MagicMock, patch
 
         from hephaestus.automation.review_state import fetch_all_issue_labels_graphql

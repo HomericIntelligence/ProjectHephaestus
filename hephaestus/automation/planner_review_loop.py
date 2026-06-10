@@ -130,6 +130,7 @@ class PlannerHost(Protocol):
         learnings: str,
         iteration: int,
         prior_review: str | None,
+        advise_findings: str = "",
     ) -> str:
         """Run a reviewer pass on the current plan."""
         pass
@@ -268,6 +269,7 @@ class PlanReviewLoop:
                 learnings=learnings,
                 iteration=iteration,
                 prior_review=review_text,
+                advise_findings=cached_advise,
             )
 
             verdict = parse_review_verdict(review_text)
@@ -603,6 +605,7 @@ class PlanReviewLoop:
         learnings: str,
         iteration: int,
         prior_review: str | None,
+        advise_findings: str = "",
     ) -> str:
         """Run a reviewer pass on the current plan.
 
@@ -621,6 +624,8 @@ class PlanReviewLoop:
             learnings: Planner-captured learnings for this iteration.
             iteration: Iteration index (0, 1, or 2).
             prior_review: Previous iteration's review text, or ``None`` on iter 0.
+            advise_findings: Prior team learnings from ProjectMnemosyne, shared
+                with the plan reviewer so review also runs with advise context.
 
         Returns:
             Review text. On reviewer-call failure, returns a synthetic NoGo
@@ -635,6 +640,7 @@ class PlanReviewLoop:
             learnings=learnings,
             iteration=iteration,
             prior_review=prior_review,
+            advise_findings=advise_findings,
         )
         try:
             return self.planner._call_claude(

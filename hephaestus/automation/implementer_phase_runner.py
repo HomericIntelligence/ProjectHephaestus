@@ -1075,7 +1075,7 @@ class ImplementationPhaseRunner:
             if self.options.auto_merge:
                 if slot_id is not None:
                     self.status_tracker.update_slot(
-                        slot_id, f"{issue_ref(issue_number)}: enabling auto-merge"
+                        slot_id, f"{pr_ref(pr_number)}: enabling auto-merge"
                     )
                 enable_auto_merge_after_implementation_go(pr_number)
         else:
@@ -1123,7 +1123,7 @@ class ImplementationPhaseRunner:
         impl = self.impl
 
         self.status_tracker.update_slot(
-            slot_id, f"{issue_ref(issue_number)}: Checking implementation-review label"
+            slot_id, f"{pr_ref(existing_pr)}: Checking implementation-review label"
         )
         has_go, has_no_go = pr_has_implementation_state_label(existing_pr)
         if has_go:
@@ -1561,8 +1561,9 @@ class ImplementationPhaseRunner:
             # returns its verdict text. ``prior_review`` carries the previous
             # iteration's critique forward as reviewer context.
             if slot_id is not None:
+                review_ref = pr_ref(pr_number) if pr_number is not None else issue_ref(issue_number)
                 self.status_tracker.update_slot(
-                    slot_id, f"{issue_ref(issue_number)}: reviewing impl [R{iteration}]"
+                    slot_id, f"{review_ref}: reviewing impl [R{iteration}]"
                 )
             review_text, posted_thread_ids = impl._run_impl_review_step(
                 issue_number=issue_number,
@@ -1601,19 +1602,36 @@ class ImplementationPhaseRunner:
             if reopened:
                 last_verdict = "NOGO"
             elif verdict.is_go:
+                # A GO cannot stand while unresolved HUMAN review threads remain
+                # on the PR. ``_resolve_automation_threads_after_go`` clears
+                # automation's own stale threads and returns the count of
+                # remaining non-automation (human) threads. If any remain, the
+                # PR is not actually done — downgrade to NOGO and keep iterating
+                # (address step runs below) rather than labelling it GO.
+                blocking_threads = 0
                 if pr_number is not None and not self.options.dry_run:
-                    self._resolve_automation_threads_after_go(
+                    blocking_threads = self._resolve_automation_threads_after_go(
                         issue_number=issue_number,
                         pr_number=pr_number,
                         thread_id=thread_id,
                     )
-                ref = issue_ref(issue_number)
-                impl._log(
-                    "info",
-                    f"{ref}: GO on iteration {iteration} — review loop terminated",
-                    thread_id,
-                )
-                break
+                if blocking_threads and pr_number is not None:
+                    last_verdict = "NOGO"
+                    impl._log(
+                        "info",
+                        f"{pr_ref(pr_number)}: reviewer said GO but "
+                        f"{blocking_threads} unresolved human review thread(s) remain "
+                        f"— not accepting GO, continuing to address them",
+                        thread_id,
+                    )
+                else:
+                    impl._log(
+                        "info",
+                        f"{pr_ref(pr_number) if pr_number is not None else issue_ref(issue_number)}"
+                        f": GO on iteration {iteration} — review loop terminated",
+                        thread_id,
+                    )
+                    break
 
             # Converge ONLY on an explicit Verdict: GO (handled above). A non-GO
             # pass with NO posted threads (and nothing re-opened) must NOT end the
@@ -1652,7 +1670,7 @@ class ImplementationPhaseRunner:
             prior_addressed_threads = gh_pr_list_unresolved_threads(pr_number, dry_run=False)
             if slot_id is not None:
                 self.status_tracker.update_slot(
-                    slot_id, f"{issue_ref(issue_number)}: addressing review [R{iteration}]"
+                    slot_id, f"{pr_ref(pr_number)}: addressing review [R{iteration}]"
                 )
             addressed = impl._run_address_review_step(
                 issue_number=issue_number,
@@ -1746,7 +1764,7 @@ class ImplementationPhaseRunner:
         issue_number: int,
         pr_number: int,
         thread_id: int | None,
-    ) -> None:
+    ) -> int:
         """Resolve stale automation-owned review threads after a GO verdict.
 
         A fresh reviewer session can legitimately conclude the PR is now GO
@@ -1754,6 +1772,12 @@ class ImplementationPhaseRunner:
         only threads authored by the current automation identity or bot
         accounts; never close human reviewer threads from this automatic GO
         cleanup pass.
+
+        Returns the number of unresolved threads that are NOT automation-owned
+        and therefore still block the PR (human review threads). The caller uses
+        this to refuse a GO while any human thread remains open — a GO cannot
+        stand on a PR with unresolved human review threads. Returns 0 when the
+        thread list can't be fetched (fail-open: don't block GO on an API blip).
         """
         impl = self.impl
         try:
@@ -1765,14 +1789,18 @@ class ImplementationPhaseRunner:
                 f"after GO for {pr_ref(pr_number)}: {exc}",
                 thread_id,
             )
-            return
+            return 0
         if not threads:
-            return
+            return 0
 
         current_login = gh_current_login()
         resolved = 0
+        blocking = 0
         for thread in threads:
             if not _is_automation_owned_thread(thread, current_login):
+                # Human-owned thread — automation must not resolve it, and it
+                # blocks GO until a human resolves it.
+                blocking += 1
                 continue
             tid = thread.get("id")
             if not tid:
@@ -1783,17 +1811,18 @@ class ImplementationPhaseRunner:
             except Exception as exc:
                 impl._log(
                     "warning",
-                    f"{issue_ref(issue_number)}: could not resolve stale automation "
+                    f"{issue_number}: could not resolve stale automation "
                     f"review thread {tid!r} on {pr_ref(pr_number)}: {exc}",
                     thread_id,
                 )
         if resolved:
             impl._log(
                 "info",
-                f"{issue_ref(issue_number)}: resolved {resolved} stale automation-owned "
+                f"{issue_number}: resolved {resolved} stale automation-owned "
                 f"review thread(s) after GO on {pr_ref(pr_number)}",
                 thread_id,
             )
+        return blocking
 
     def _run_impl_review_step(
         self,

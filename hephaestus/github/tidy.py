@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from hephaestus.agents.runtime import add_agent_argument, is_codex, resolve_agent, run_codex_text
+from hephaestus.automation.claude_models import SONNET
 from hephaestus.cli.utils import add_json_arg, emit_json_status
 from hephaestus.github.pr_merge import detect_repo_from_remote
 from hephaestus.logging.utils import get_logger
@@ -325,7 +326,10 @@ def _claude_options(options_factory: Any, repo_path: Path) -> object:
     return options_factory(
         max_turns=40,
         cwd=str(repo_path),
-        model="claude-sonnet-4-6",
+        # Single source of truth for the model ID (avoids drift from the
+        # canonical constant in claude_models). Sonnet is the conflict-resolution
+        # tier for the tidy swarm.
+        model=SONNET,
     )
 
 

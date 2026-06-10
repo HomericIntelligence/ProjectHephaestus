@@ -2815,17 +2815,6 @@ class CIDriver:
             True if the learnings session completed, False otherwise.
 
         """
-        # The Claude path resumes the deterministic AGENT_CI_DRIVER session via
-        # invoke_claude_with_session. Codex drive-green sessions are not
-        # persisted by this module, so there is no Session 3 to resume there.
-        if is_codex(self.options.agent):
-            logger.info(
-                "Issue #%s: skipping drive-green learnings (codex has no persisted "
-                "drive-green session to resume)",
-                issue_number,
-            )
-            return False
-
         prompt = (
             "/skills-registry-commands:learn "
             f"You just drove PR {pr_ref(pr_number)} (issue {issue_ref(issue_number)}) "
@@ -2853,6 +2842,15 @@ class CIDriver:
                     wt_err,
                 )
                 cwd = self.repo_root
+            if is_codex(self.options.agent):
+                run_codex_session(
+                    prompt,
+                    cwd=cwd,
+                    timeout=learn_claude_timeout(),
+                    sandbox="workspace-write",
+                )
+                logger.info("Issue #%s: drive-green learnings captured with Codex", issue_number)
+                return True
             invoke_claude_with_session(
                 repo=repo_slug,
                 issue=issue_number,

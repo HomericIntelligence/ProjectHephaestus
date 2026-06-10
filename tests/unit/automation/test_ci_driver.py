@@ -1229,15 +1229,22 @@ class TestDriveGreenLearnings:
         assert record is not None
         assert record["learn_captured_at"] is not None
 
-    def test_learnings_skipped_for_codex(self, driver: CIDriver) -> None:
-        """Codex has no persisted drive-green session, so learnings is skipped."""
-        # Direct test of _run_drive_green_learnings — the codex path is
-        # untouched by the #840 arming rework.
+    def test_learnings_run_with_codex(self, driver: CIDriver, tmp_path: Path) -> None:
+        """Codex captures drive-green learnings without invoking Claude."""
         driver.options.agent = "codex"
-        with patch("hephaestus.automation.ci_driver.invoke_claude_with_session") as mock_invoke:
+        with (
+            patch.object(driver, "_get_worktree_path", return_value=tmp_path),
+            patch("hephaestus.automation.ci_driver.run_codex_session") as mock_codex,
+            patch("hephaestus.automation.ci_driver.invoke_claude_with_session") as mock_invoke,
+        ):
             result = driver._run_drive_green_learnings(123, 456)
 
-        assert result is False
+        assert result is True
+        mock_codex.assert_called_once()
+        prompt = mock_codex.call_args.args[0]
+        assert "/skills-registry-commands:learn" in prompt
+        assert "Only push skills to ProjectMnemosyne" in prompt
+        assert mock_codex.call_args.kwargs["cwd"] == tmp_path
         mock_invoke.assert_not_called()
 
 

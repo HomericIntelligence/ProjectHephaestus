@@ -60,7 +60,7 @@ from .github_api import (
     gh_pr_list_unresolved_threads,
     gh_pr_resolve_thread,
 )
-from .learn import compact_session
+from .learn import build_learn_prompt, compact_session
 from .models import CIDriverOptions, WorkerResult
 from .pr_manager import pr_has_implementation_go_label
 from .prompts import get_advise_prompt_builder
@@ -2815,13 +2815,10 @@ class CIDriver:
             True if the learnings session completed, False otherwise.
 
         """
-        prompt = (
-            "/skills-registry-commands:learn "
+        prompt = build_learn_prompt(
             f"You just drove PR {pr_ref(pr_number)} (issue {issue_ref(issue_number)}) "
             "to green CI. Capture concise learnings about what made CI fail and how "
-            "you fixed it, scoped to this issue/PR. Commit the results and create a PR. "
-            "IMPORTANT: Only push skills to ProjectMnemosyne. "
-            "Do NOT create files under .claude-plugin/ in this repo."
+            "you fixed it, scoped to this issue/PR."
         )
         try:
             repo_slug = get_repo_slug(self.repo_root)

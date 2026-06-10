@@ -1242,7 +1242,8 @@ class TestDriveGreenLearnings:
         assert result is True
         mock_codex.assert_called_once()
         prompt = mock_codex.call_args.args[0]
-        assert "/skills-registry-commands:learn" in prompt
+        assert prompt.startswith("/learn ")
+        assert "/skills-registry-commands:learn" not in prompt
         assert "Only push skills to ProjectMnemosyne" in prompt
         assert mock_codex.call_args.kwargs["cwd"] == tmp_path
         mock_invoke.assert_not_called()

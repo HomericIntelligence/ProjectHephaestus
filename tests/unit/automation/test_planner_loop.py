@@ -544,6 +544,17 @@ class TestCapturePlannerLearnings:
         assert agent == AGENT_PLANNER
         assert agent != AGENT_LEARNINGS
 
+    def test_uses_user_facing_learn_command(self, planner: Planner) -> None:
+        """Planner learn capture must update ProjectMnemosyne through /learn."""
+        with patch.object(planner, "_call_claude", return_value="- learning A") as mock_call:
+            planner._capture_planner_learnings(123, "plan text")
+
+        prompt = mock_call.call_args.args[0]
+        assert prompt.startswith("/learn ")
+        assert "ProjectMnemosyne" in prompt
+        assert "/skills-registry-commands:learn" not in prompt
+        assert "plan text" in prompt
+
 
 class TestRunPlanReview:
     """The reviewer must fail safely to NoGo when the call errors."""

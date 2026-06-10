@@ -24,13 +24,19 @@ from pathlib import Path
 from typing import Any
 
 from hephaestus.agents.runtime import add_agent_argument, is_codex, resolve_agent, run_codex_text
-from hephaestus.automation.claude_models import SONNET
 from hephaestus.cli.utils import add_json_arg, emit_json_status
 from hephaestus.github.pr_merge import detect_repo_from_remote
 from hephaestus.logging.utils import get_logger
 from hephaestus.utils.helpers import METADATA_TIMEOUT, NETWORK_TIMEOUT
 
 logger = get_logger(__name__)
+
+# Model the tidy conflict-resolution swarm runs on. Defined locally rather than
+# imported from hephaestus.automation.claude_models because hephaestus.github
+# must not depend on hephaestus.automation (one-way layering boundary enforced
+# by tests/unit/utils/test_no_import_cycles.py). Keep this in sync with the
+# SONNET constant there.
+_TIDY_SWARM_MODEL = "claude-sonnet-4-6"
 
 # ANSI escape sequence stripper
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -326,10 +332,7 @@ def _claude_options(options_factory: Any, repo_path: Path) -> object:
     return options_factory(
         max_turns=40,
         cwd=str(repo_path),
-        # Single source of truth for the model ID (avoids drift from the
-        # canonical constant in claude_models). Sonnet is the conflict-resolution
-        # tier for the tidy swarm.
-        model=SONNET,
+        model=_TIDY_SWARM_MODEL,
     )
 
 

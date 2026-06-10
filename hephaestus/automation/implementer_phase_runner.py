@@ -393,9 +393,10 @@ class ImplementationPhaseRunner:
             # and are automatically visible to the implementation turn that
             # follows via --resume.  For Codex agents the old separate-session
             # path is retained because Codex has no multi-turn session model.
+            implementation_advise_findings = ""
             if self.options.enable_advise and not is_codex(self.options.agent):
                 self.status_tracker.update_slot(slot_id, f"{issue_ref(issue_number)}: Advising")
-                impl._run_advise_as_implementer_turn(
+                implementation_advise_findings = impl._run_advise_as_implementer_turn(
                     issue_number, issue.title, issue.body, worktree_path
                 )
 
@@ -408,6 +409,7 @@ class ImplementationPhaseRunner:
             if self.options.enable_advise and is_codex(self.options.agent):
                 self.status_tracker.update_slot(slot_id, f"{issue_ref(issue_number)}: Advising")
                 codex_advise_findings = impl._run_advise(issue_number, issue.title, issue.body)
+                implementation_advise_findings = codex_advise_findings
 
             session_id = impl._run_claude_code(
                 issue_number,
@@ -458,6 +460,7 @@ class ImplementationPhaseRunner:
                 thread_id=thread_id,
                 state=state,
                 pr_number=pr_number,
+                advise_findings=implementation_advise_findings,
             )
             with self.state_lock:
                 state.review_iterations = iterations
@@ -964,7 +967,7 @@ class ImplementationPhaseRunner:
         issue_title: str,
         issue_body: str,
         worktree_path: Path,
-    ) -> None:
+    ) -> str:
         """Send the advise prompt as the first turn of the implementer's Claude session.
 
         Unlike :meth:`_run_advise`, which creates a separate ``AGENT_ADVISE``
@@ -984,8 +987,8 @@ class ImplementationPhaseRunner:
         deterministic session UUID auto-resumes so the advise findings accumulate
         across iterations.
 
-        Any failure degrades gracefully — the exception is logged and swallowed
-        so the caller can still proceed to the implementation turn.
+        Any failure degrades gracefully inside ``run_advise`` and returns an
+        empty string, so the caller can still proceed to the implementation turn.
         """
         _impl_mod = self._impl_module
         repo_slug = _impl_mod.get_repo_slug(self.repo_root)
@@ -1026,7 +1029,7 @@ class ImplementationPhaseRunner:
             )
             return (stdout or "").strip()
 
-        run_advise(
+        return run_advise(
             issue_number=issue_number,
             issue_title=issue_title,
             issue_body=issue_body,
@@ -1196,12 +1199,17 @@ class ImplementationPhaseRunner:
 
         # Advise-first (#30): same two-turn pattern as the fresh-implementation path.
         # For Claude: advise as turn 1 of AGENT_IMPLEMENTER (cwd=worktree_path).
-        # For Codex: skip — no injection point in the review-loop path.
+        # For Codex: run advise separately and inject the findings into the
+        # review-loop context.
+        implementation_advise_findings = ""
         if self.options.enable_advise and not is_codex(self.options.agent):
             self.status_tracker.update_slot(slot_id, f"{issue_ref(issue_number)}: Advising")
-            impl._run_advise_as_implementer_turn(
+            implementation_advise_findings = impl._run_advise_as_implementer_turn(
                 issue_number, issue.title, issue.body, worktree_path
             )
+        elif self.options.enable_advise:
+            self.status_tracker.update_slot(slot_id, f"{issue_ref(issue_number)}: Advising")
+            implementation_advise_findings = impl._run_advise(issue_number, issue.title, issue.body)
 
         iterations, last_verdict, last_grade = impl._run_impl_review_loop(
             issue_number=issue_number,
@@ -1214,6 +1222,7 @@ class ImplementationPhaseRunner:
             thread_id=thread_id,
             state=state,
             pr_number=existing_pr,
+            advise_findings=implementation_advise_findings,
         )
         with self.state_lock:
             state.review_iterations = iterations
@@ -1490,6 +1499,7 @@ class ImplementationPhaseRunner:
         thread_id: int | None,
         state: ImplementationState | None = None,
         pr_number: int | None = None,
+        advise_findings: str = "",
     ) -> tuple[int, str | None, str | None]:
         """Run the bounded in-loop review + address cycle for an implementation.
 
@@ -1547,6 +1557,7 @@ class ImplementationPhaseRunner:
                 pr_number=pr_number,
                 iteration=iteration,
                 prior_review=prior_review,
+                advise_findings=advise_findings,
             )
             impl._save_review_log(issue_number, iteration, review_text)
             iterations_run = iteration + 1
@@ -1764,6 +1775,7 @@ class ImplementationPhaseRunner:
         pr_number: int | None,
         iteration: int,
         prior_review: str | None,
+        advise_findings: str = "",
     ) -> tuple[str, list[str]]:
         """Run one in-loop review and return ``(review_text, posted_thread_ids)``.
 
@@ -1806,6 +1818,7 @@ class ImplementationPhaseRunner:
             plan_text=plan_text,
             plan_review_text=plan_review_text,
             diff_text=diff_text,
+            advise_findings=advise_findings,
             include_nitpicks=self.options.include_nitpicks,
         )
         try:

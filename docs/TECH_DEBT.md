@@ -1,8 +1,11 @@
 # Tech-Debt Tracking Convention
 
 Tech debt in ProjectHephaestus is tracked exclusively as GitHub issues
-labelled `tech-debt`. We do not use TODO comments, code-level deferrals,
-or undocumented "fix later" markers.
+labelled `tech-debt`. We do not use undocumented "fix later" markers:
+every `# TODO`, `# FIXME`, or `# HACK` comment in the source MUST reference
+a tracking issue using the `# TODO(#N): explanation` form (for example,
+`# TODO(#710): replace this dynamic test-seam with constructor injection.`).
+Bare, unlinked markers are not allowed.
 
 ## Filing
 
@@ -37,6 +40,7 @@ and is quoted in the close comment:
 1. The fix breaks a public `hephaestus.*` API and no caller in this
    repo would benefit.
 2. The platform/OS prerequisite is explicitly documented as
-   unsupported (see `docs/COMPATIBILITY.md`).
+   unsupported (see [`../COMPATIBILITY.md`](../COMPATIBILITY.md) at the
+   repo root).
 3. The cited code path has already been removed by an unrelated PR
    (verify with `git log -S<symbol>`).

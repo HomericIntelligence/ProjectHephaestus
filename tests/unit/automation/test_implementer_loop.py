@@ -286,19 +286,14 @@ class TestRunImplReviewLoop:
         only earned by a clean pass with ZERO unresolved threads. Nothing is
         force-resolved here.
         """
-        automation_threads = [
-            {"id": "T_self", "author": "mvillmow", "path": "a.py", "line": 1, "body": "old"},
-            {
-                "id": "T_bot",
-                "author": "github-actions[bot]",
-                "path": "b.py",
-                "line": 2,
-                "body": "old",
-            },
-        ]
+
+        def _automation_thread(tid: str, author: str, path: str, line: int) -> dict[str, object]:
+            return {"id": tid, "author": author, "path": path, "line": line, "body": "old"}
+
         with (
             # R0 emits GO but 2 automation threads are still unresolved; R1 sees a
-            # clean board (address step fixed + resolved them) and GO stands.
+            # clean board (address step fixed + resolved them) and GO stands. The
+            # two open snapshots feed R0's GO gate and R1's pre-address snapshot.
             patch.object(
                 implementer,
                 "_run_impl_review_step",
@@ -307,7 +302,17 @@ class TestRunImplReviewLoop:
             patch.object(implementer, "_run_address_review_step", return_value=True) as mock_addr,
             patch(
                 "hephaestus.automation.implementer_phase_runner.gh_pr_list_unresolved_threads",
-                side_effect=[automation_threads, automation_threads, []],
+                side_effect=[
+                    [
+                        _automation_thread("T_self", "mvillmow", "a.py", 1),
+                        _automation_thread("T_bot", "github-actions[bot]", "b.py", 2),
+                    ],
+                    [
+                        _automation_thread("T_self", "mvillmow", "a.py", 1),
+                        _automation_thread("T_bot", "github-actions[bot]", "b.py", 2),
+                    ],
+                    [],
+                ],
             ),
             patch(
                 "hephaestus.automation.implementer_phase_runner.gh_current_login",

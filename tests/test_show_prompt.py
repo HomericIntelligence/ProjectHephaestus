@@ -140,6 +140,21 @@ class TestBuildPrompt:
         assert isinstance(prompt, str)
 
     @patch("scripts.show_prompt.fetch_issue")
+    @patch("scripts.show_prompt.fetch_pr_diff")
+    def test_impl_review_diff_failure_graceful(
+        self, mock_diff: MagicMock, mock_issue: MagicMock
+    ) -> None:
+        """When fetch_pr_diff raises, impl-review degrades to empty diff."""
+        mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
+        mock_diff.side_effect = RuntimeError("gh failed")
+        prompt = build_prompt(
+            "impl-review", 1, "owner/repo",
+            pr_number=5, iteration=0,
+        )
+        assert isinstance(prompt, str)
+        assert len(prompt) > 0
+
+    @patch("scripts.show_prompt.fetch_issue")
     def test_impl_resume_stage(self, mock_issue: MagicMock) -> None:
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
         prompt = build_prompt("impl-resume", 1, "owner/repo", iteration=1)
@@ -155,6 +170,18 @@ class TestBuildPrompt:
         mock_diff.return_value = "diff --git a/foo.py b/foo.py"
         prompt = build_prompt("pr-review", 1, "owner/repo", pr_number=5)
         mock_diff.assert_called_once_with("owner/repo", 5)
+        assert isinstance(prompt, str)
+        assert len(prompt) > 0
+
+    @patch("scripts.show_prompt.fetch_issue")
+    @patch("scripts.show_prompt.fetch_pr_diff")
+    def test_pr_review_diff_failure_graceful(
+        self, mock_diff: MagicMock, mock_issue: MagicMock
+    ) -> None:
+        """When fetch_pr_diff raises, pr-review degrades to empty diff."""
+        mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
+        mock_diff.side_effect = RuntimeError("gh failed")
+        prompt = build_prompt("pr-review", 1, "owner/repo", pr_number=5)
         assert isinstance(prompt, str)
         assert len(prompt) > 0
 
@@ -219,11 +246,6 @@ class TestMain:
         rc = main(["--issue", "1", "--stage", "planning"])
         assert rc == 1
 
-    @patch("scripts.show_prompt.build_prompt")
-    def test_main_returns_1_on_value_error(self, mock_build: MagicMock) -> None:
-        mock_build.side_effect = ValueError("Unknown stage")
-        rc = main(["--issue", "1", "--stage", "planning"])
-        assert rc == 1
 
 
 # ---------------------------------------------------------------------------
@@ -344,3 +366,9 @@ class TestFetchPrDiff:
             ["pr", "diff", "10", "--repo", "owner/repo"]
         )
         assert result == "diff content"
+
+    @patch("scripts.show_prompt._gh")
+    def test_raises_runtime_error_on_failure(self, mock_gh: MagicMock) -> None:
+        mock_gh.side_effect = RuntimeError("gh failed")
+        with pytest.raises(RuntimeError, match="gh failed"):
+            fetch_pr_diff("owner/repo", 10)

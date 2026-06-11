@@ -189,7 +189,7 @@ def build_prompt(
         if pr_number:
             try:
                 diff_text = fetch_pr_diff(repo, pr_number)
-            except RuntimeError:  # noqa: BLE001
+            except RuntimeError:
                 pass
         return get_impl_loop_review_prompt(
             issue_number=issue_number,
@@ -217,7 +217,7 @@ def build_prompt(
         if pr_number:
             try:
                 diff_text = fetch_pr_diff(repo, pr_number)
-            except RuntimeError:  # noqa: BLE001
+            except RuntimeError:
                 pass
         return get_pr_review_analysis_prompt(
             pr_number=pr_number,

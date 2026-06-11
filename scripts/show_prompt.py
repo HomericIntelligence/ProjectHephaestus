@@ -14,6 +14,7 @@ impl-review, impl-resume, pr-review, address-review, follow-up, advise.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import subprocess
 import sys
@@ -37,6 +38,7 @@ STAGES = (
 # GitHub data fetching
 # ---------------------------------------------------------------------------
 
+
 def _gh(args: list[str], *, parse_json: bool = False) -> Any:
     """Run a gh CLI command and return stdout as text or parsed JSON."""
     result = subprocess.run(
@@ -55,13 +57,18 @@ def _gh(args: list[str], *, parse_json: bool = False) -> Any:
 
 def fetch_issue(repo: str, issue_number: int) -> dict[str, Any]:
     """Fetch issue title, body, and comments from GitHub."""
-    return _gh([
-        "issue", "view", str(issue_number),
-        "--repo", repo,
-        "--json", "title,body,comments",
-    ], parse_json=True)
-
-
+    return _gh(
+        [
+            "issue",
+            "view",
+            str(issue_number),
+            "--repo",
+            repo,
+            "--json",
+            "title,body,comments",
+        ],
+        parse_json=True,
+    )
 
 
 _PLAN_MARKERS = (
@@ -89,6 +96,7 @@ def _extract_plan_from_issue_data(issue_data: dict[str, Any] | None) -> str | No
             return body
     return None
 
+
 def fetch_pr_diff(repo: str, pr_number: int) -> str:
     """Fetch the diff for a PR."""
     return _gh(["pr", "diff", str(pr_number), "--repo", repo])
@@ -97,11 +105,18 @@ def fetch_pr_diff(repo: str, pr_number: int) -> str:
 def fetch_pr_threads(repo: str, pr_number: int) -> str:
     """Fetch review threads from a PR as JSON."""
     try:
-        data = _gh([
-            "pr", "view", str(pr_number),
-            "--repo", repo,
-            "--json", "reviewThreads,body",
-        ], parse_json=True)
+        data = _gh(
+            [
+                "pr",
+                "view",
+                str(pr_number),
+                "--repo",
+                repo,
+                "--json",
+                "reviewThreads,body",
+            ],
+            parse_json=True,
+        )
         return json.dumps(data, indent=2)
     except RuntimeError:
         return "[]"
@@ -110,6 +125,7 @@ def fetch_pr_threads(repo: str, pr_number: int) -> str:
 # ---------------------------------------------------------------------------
 # Prompt builders
 # ---------------------------------------------------------------------------
+
 
 def build_prompt(
     stage: str,
@@ -126,18 +142,18 @@ def build_prompt(
     Calls the appropriate Hephaestus prompt builder function from
     ``hephaestus.automation.prompts``.
     """
-    from hephaestus.automation.prompts.planning import (
-        get_plan_loop_review_prompt,
-        get_plan_prompt,
-        get_plan_review_prompt,
-    )
+    from hephaestus.automation.prompts.advise import get_advise_prompt
+    from hephaestus.automation.prompts.follow_up import get_follow_up_prompt
     from hephaestus.automation.prompts.implementation import (
         get_impl_loop_review_prompt,
         get_impl_resume_feedback_prompt,
         get_implementation_prompt,
     )
-    from hephaestus.automation.prompts.follow_up import get_follow_up_prompt
-    from hephaestus.automation.prompts.advise import get_advise_prompt
+    from hephaestus.automation.prompts.planning import (
+        get_plan_loop_review_prompt,
+        get_plan_prompt,
+        get_plan_review_prompt,
+    )
 
     if stage not in STAGES:
         raise ValueError(f"Unknown stage: {stage!r}. Supported stages: {', '.join(STAGES)}")
@@ -187,10 +203,8 @@ def build_prompt(
         diff_text = ""
         files_changed = ""
         if pr_number:
-            try:
+            with contextlib.suppress(RuntimeError):
                 diff_text = fetch_pr_diff(repo, pr_number)
-            except RuntimeError:
-                pass
         return get_impl_loop_review_prompt(
             issue_number=issue_number,
             issue_title=issue_title,
@@ -215,10 +229,8 @@ def build_prompt(
 
         diff_text = ""
         if pr_number:
-            try:
+            with contextlib.suppress(RuntimeError):
                 diff_text = fetch_pr_diff(repo, pr_number)
-            except RuntimeError:
-                pass
         return get_pr_review_analysis_prompt(
             pr_number=pr_number,
             issue_number=issue_number,
@@ -258,7 +270,9 @@ def build_prompt(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for the show-prompt CLI."""
     parser = argparse.ArgumentParser(
         description="Display the agent prompt for a given GitHub issue and pipeline stage.",
     )
@@ -274,7 +288,9 @@ def build_parser() -> argparse.ArgumentParser:
         default="HomericIntelligence/ProjectHephaestus",
         help="GitHub repo (owner/name)",
     )
-    parser.add_argument("--pr", type=int, default=0, help="PR number (for pr-review, address-review, impl-review)")
+    parser.add_argument(
+        "--pr", type=int, default=0, help="PR number (for pr-review, address-review, impl-review)"
+    )
     parser.add_argument("--branch", default="", help="Branch name (for implementation stage)")
     parser.add_argument("--worktree", default="", help="Worktree path (for implementation stage)")
     parser.add_argument("--iteration", type=int, default=0, help="Review iteration number")
@@ -282,6 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Entry point for the show-prompt CLI."""
     parser = build_parser()
     args = parser.parse_args(argv)
 

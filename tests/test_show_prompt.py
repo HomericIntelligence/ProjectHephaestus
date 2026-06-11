@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -13,9 +13,9 @@ import pytest
 # without requiring scripts/__init__.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.show_prompt import (  # noqa: E402
-    STAGES,
+from scripts.show_prompt import (
     _PLAN_MARKERS,
+    STAGES,
     _extract_plan_from_issue_data,
     build_parser,
     build_prompt,
@@ -24,12 +24,14 @@ from scripts.show_prompt import (  # noqa: E402
     main,
 )
 
-
 # ---------------------------------------------------------------------------
 # Parser tests
 # ---------------------------------------------------------------------------
 
+
 class TestBuildParser:
+    """Tests for the argument parser."""
+
     def test_requires_issue(self) -> None:
         parser = build_parser()
         with pytest.raises(SystemExit):
@@ -54,14 +56,22 @@ class TestBuildParser:
 
     def test_optional_args(self) -> None:
         parser = build_parser()
-        args = parser.parse_args([
-            "--issue", "10",
-            "--stage", "implementation",
-            "--branch", "feature/foo",
-            "--worktree", "/tmp/wt",
-            "--pr", "5",
-            "--iteration", "2",
-        ])
+        args = parser.parse_args(
+            [
+                "--issue",
+                "10",
+                "--stage",
+                "implementation",
+                "--branch",
+                "feature/foo",
+                "--worktree",
+                "/tmp/wt",
+                "--pr",
+                "5",
+                "--iteration",
+                "2",
+            ]
+        )
         assert args.branch == "feature/foo"
         assert args.worktree == "/tmp/wt"
         assert args.pr == 5
@@ -72,7 +82,10 @@ class TestBuildParser:
 # build_prompt tests
 # ---------------------------------------------------------------------------
 
+
 class TestBuildPrompt:
+    """Tests for build_prompt across all stages."""
+
     def test_planning_stage(self) -> None:
         """Planning stage does not fetch issue data."""
         with patch("scripts.show_prompt.fetch_issue") as mock_issue:
@@ -83,9 +96,7 @@ class TestBuildPrompt:
 
     @patch("scripts.show_prompt.fetch_issue")
     @patch("scripts.show_prompt._extract_plan_from_issue_data")
-    def test_plan_review_stage(
-        self, mock_extract: MagicMock, mock_issue: MagicMock
-    ) -> None:
+    def test_plan_review_stage(self, mock_extract: MagicMock, mock_issue: MagicMock) -> None:
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
         mock_extract.return_value = "# Plan"
         prompt = build_prompt("plan-review", 1, "owner/repo")
@@ -94,9 +105,7 @@ class TestBuildPrompt:
 
     @patch("scripts.show_prompt.fetch_issue")
     @patch("scripts.show_prompt._extract_plan_from_issue_data")
-    def test_plan_loop_review_stage(
-        self, mock_extract: MagicMock, mock_issue: MagicMock
-    ) -> None:
+    def test_plan_loop_review_stage(self, mock_extract: MagicMock, mock_issue: MagicMock) -> None:
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
         mock_extract.return_value = "# Plan"
         prompt = build_prompt("plan-loop-review", 1, "owner/repo", iteration=1)
@@ -107,31 +116,33 @@ class TestBuildPrompt:
     def test_implementation_stage(self, mock_issue: MagicMock) -> None:
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
         prompt = build_prompt(
-            "implementation", 1, "owner/repo",
-            branch_name="feat/x", worktree_path="/tmp/wt",
+            "implementation",
+            1,
+            "owner/repo",
+            branch_name="feat/x",
+            worktree_path="/tmp/wt",
         )
         assert isinstance(prompt, str)
         assert len(prompt) > 0
 
     @patch("scripts.show_prompt.fetch_issue")
     @patch("scripts.show_prompt.fetch_pr_diff")
-    def test_impl_review_stage(
-        self, mock_diff: MagicMock, mock_issue: MagicMock
-    ) -> None:
+    def test_impl_review_stage(self, mock_diff: MagicMock, mock_issue: MagicMock) -> None:
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
         mock_diff.return_value = "diff --git a/foo.py b/foo.py"
         prompt = build_prompt(
-            "impl-review", 1, "owner/repo",
-            pr_number=5, iteration=0,
+            "impl-review",
+            1,
+            "owner/repo",
+            pr_number=5,
+            iteration=0,
         )
         mock_diff.assert_called_once_with("owner/repo", 5)
         assert isinstance(prompt, str)
         assert len(prompt) > 0
 
     @patch("scripts.show_prompt.fetch_issue")
-    def test_impl_review_no_pr_skips_diff(
-        self, mock_issue: MagicMock
-    ) -> None:
+    def test_impl_review_no_pr_skips_diff(self, mock_issue: MagicMock) -> None:
         """When pr_number is 0, fetch_pr_diff is not called."""
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
         with patch("scripts.show_prompt.fetch_pr_diff") as mock_diff:
@@ -148,8 +159,11 @@ class TestBuildPrompt:
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
         mock_diff.side_effect = RuntimeError("gh failed")
         prompt = build_prompt(
-            "impl-review", 1, "owner/repo",
-            pr_number=5, iteration=0,
+            "impl-review",
+            1,
+            "owner/repo",
+            pr_number=5,
+            iteration=0,
         )
         assert isinstance(prompt, str)
         assert len(prompt) > 0
@@ -163,9 +177,7 @@ class TestBuildPrompt:
 
     @patch("scripts.show_prompt.fetch_issue")
     @patch("scripts.show_prompt.fetch_pr_diff")
-    def test_pr_review_stage(
-        self, mock_diff: MagicMock, mock_issue: MagicMock
-    ) -> None:
+    def test_pr_review_stage(self, mock_diff: MagicMock, mock_issue: MagicMock) -> None:
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
         mock_diff.return_value = "diff --git a/foo.py b/foo.py"
         prompt = build_prompt("pr-review", 1, "owner/repo", pr_number=5)
@@ -187,9 +199,7 @@ class TestBuildPrompt:
 
     @patch("scripts.show_prompt.fetch_issue")
     @patch("scripts.show_prompt.fetch_pr_threads")
-    def test_address_review_stage(
-        self, mock_threads: MagicMock, mock_issue: MagicMock
-    ) -> None:
+    def test_address_review_stage(self, mock_threads: MagicMock, mock_issue: MagicMock) -> None:
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
         mock_threads.return_value = "[]"
         prompt = build_prompt("address-review", 1, "owner/repo", pr_number=5)
@@ -198,9 +208,7 @@ class TestBuildPrompt:
         assert len(prompt) > 0
 
     @patch("scripts.show_prompt.fetch_issue")
-    def test_address_review_no_pr_skips_threads(
-        self, mock_issue: MagicMock
-    ) -> None:
+    def test_address_review_no_pr_skips_threads(self, mock_issue: MagicMock) -> None:
         """When pr_number is 0, fetch_pr_threads is not called."""
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
         with patch("scripts.show_prompt.fetch_pr_threads") as mock_threads:
@@ -231,9 +239,14 @@ class TestBuildPrompt:
 # main() integration tests
 # ---------------------------------------------------------------------------
 
+
 class TestMain:
+    """Integration tests for the main entry point."""
+
     @patch("scripts.show_prompt.build_prompt")
-    def test_main_prints_prompt(self, mock_build: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_main_prints_prompt(
+        self, mock_build: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         mock_build.return_value = "THE PROMPT TEXT"
         rc = main(["--issue", "1", "--stage", "planning"])
         assert rc == 0
@@ -247,12 +260,13 @@ class TestMain:
         assert rc == 1
 
 
-
 # ---------------------------------------------------------------------------
 # Coverage: all stages are listed
 # ---------------------------------------------------------------------------
 
+
 def test_all_stages_covered() -> None:
+    """Verify STAGES tuple covers all expected pipeline stages."""
     expected = {
         "planning",
         "plan-review",
@@ -271,6 +285,7 @@ def test_all_stages_covered() -> None:
 # ---------------------------------------------------------------------------
 # Direct unit tests for helper functions (M5)
 # ---------------------------------------------------------------------------
+
 
 class TestExtractPlanFromIssueData:
     """Direct tests for _extract_plan_from_issue_data."""
@@ -313,11 +328,13 @@ class TestExtractPlanFromIssueData:
     def test_returns_most_recent_plan(self) -> None:
         old_plan = "# Implementation Plan\nOld version"
         new_plan = "# Implementation Plan\nNew version"
-        data = {"comments": [
-            {"body": old_plan},
-            {"body": "noise"},
-            {"body": new_plan},
-        ]}
+        data = {
+            "comments": [
+                {"body": old_plan},
+                {"body": "noise"},
+                {"body": new_plan},
+            ]
+        }
         assert _extract_plan_from_issue_data(data) == new_plan
 
     def test_plan_markers_tuple_entries(self) -> None:
@@ -341,8 +358,7 @@ class TestFetchPrThreads:
         mock_gh.return_value = {"reviewThreads": [], "body": ""}
         result = fetch_pr_threads("owner/repo", 5)
         mock_gh.assert_called_once_with(
-            ["pr", "view", "5", "--repo", "owner/repo",
-             "--json", "reviewThreads,body"],
+            ["pr", "view", "5", "--repo", "owner/repo", "--json", "reviewThreads,body"],
             parse_json=True,
         )
         parsed = json.loads(result)
@@ -362,9 +378,7 @@ class TestFetchPrDiff:
     def test_calls_gh_with_correct_args(self, mock_gh: MagicMock) -> None:
         mock_gh.return_value = "diff content"
         result = fetch_pr_diff("owner/repo", 10)
-        mock_gh.assert_called_once_with(
-            ["pr", "diff", "10", "--repo", "owner/repo"]
-        )
+        mock_gh.assert_called_once_with(["pr", "diff", "10", "--repo", "owner/repo"])
         assert result == "diff content"
 
     @patch("scripts.show_prompt._gh")

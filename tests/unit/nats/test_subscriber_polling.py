@@ -1,37 +1,212 @@
-"""Tests for the inner polling timeout behavior of _subscribe_loop (#753)."""
+"""Behavioral tests for the inner polling timeout of _subscribe_loop (#753).
+
+Issue #753: the polling loop previously wrapped ``sub.next_msg(timeout=0.5)``
+in a redundant ``asyncio.wait_for(..., timeout=1.0)``. ``next_msg``'s own
+``timeout`` argument already governs the full receive, so the outer wrapper
+added no ceiling the inner one lacked. These tests pin the runtime behavior:
+the loop must poll ``next_msg`` directly, ``continue`` on an inner timeout, and
+exit when ``_stop_event`` is set — proving the removed wrapper changed nothing.
+
+The tests drive the real ``_subscribe_loop`` coroutine (via ``asyncio.run``)
+with the entire nats-py surface mocked, rather than asserting on the text of
+the source via ``inspect.getsource`` (which is brittle to formatting and adds
+no coverage of behavior).
+"""
+
 from __future__ import annotations
 
-import inspect
+import asyncio
+import json
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from hephaestus.nats import subscriber
+import pytest
 
-
-def test_polling_loop_source_code_does_not_use_asyncio_wait_for() -> None:
-    """Regression: source code must not contain asyncio.wait_for around next_msg (#753)."""
-    source = inspect.getsource(subscriber.NATSSubscriberThread._subscribe_loop)
-    assert (
-        "asyncio.wait_for" not in source
-    ), "asyncio.wait_for must not be used to wrap next_msg (issue #753)"
-
-
-def test_polling_loop_uses_only_next_msg_timeout() -> None:
-    """The inner timeout=0.5 on next_msg is the only timeout mechanism."""
-    source = inspect.getsource(subscriber.NATSSubscriberThread._subscribe_loop)
-    # Check that next_msg is called with timeout=0.5
-    assert (
-        "next_msg(timeout=0.5)" in source
-    ), "next_msg must be called with timeout=0.5"
-    # Check the except clause catches TimeoutError only
-    assert "except TimeoutError:" in source, "except clause must catch TimeoutError"
+from hephaestus.nats.config import NATSConfig
+from hephaestus.nats.events import NATSEvent
+from hephaestus.nats.subscriber import NATSSubscriberThread
 
 
-def test_except_clause_not_redundant() -> None:
-    """The except clause should not catch both asyncio.TimeoutError and TimeoutError."""
-    source = inspect.getsource(subscriber.NATSSubscriberThread._subscribe_loop)
-    # On Python 3.10+, catching both is redundant
-    assert (
-        "except (asyncio.TimeoutError, TimeoutError):" not in source
-    ), "except clause must not catch both asyncio.TimeoutError and TimeoutError"
-    assert (
-        "except TimeoutError:" in source
-    ), "except clause should catch TimeoutError only"
+class _FakeNatsTimeoutError(asyncio.TimeoutError):
+    """Stand-in for ``nats.errors.TimeoutError``.
+
+    The real ``nats.errors.TimeoutError`` subclasses ``asyncio.TimeoutError``,
+    which is what ``next_msg`` raises on its own ``timeout``. Subclassing the
+    same base here proves the loop's ``except TimeoutError`` clause still
+    catches what ``next_msg`` raises after the outer wrapper was removed.
+    """
+
+
+def _make_msg(payload: dict[str, Any]) -> MagicMock:
+    """Build a mock JetStream message carrying ``payload`` as JSON."""
+    msg = MagicMock()
+    msg.data = json.dumps(payload).encode()
+    msg.subject = "hi.tasks.demo"
+    msg.headers = None
+    msg.metadata = None
+    msg.ack = AsyncMock()
+    return msg
+
+
+def _install_fake_nats(
+    next_msg: AsyncMock,
+) -> tuple[MagicMock, MagicMock]:
+    """Patch ``nats.connect`` so ``_subscribe_loop`` runs against a fake broker.
+
+    Returns the (connection, subscription) mocks so callers can assert on
+    ``next_msg`` call patterns and connection lifecycle.
+    """
+    sub = MagicMock()
+    sub.next_msg = next_msg
+
+    js = MagicMock()
+    js.subscribe = AsyncMock(return_value=sub)
+
+    nc = MagicMock()
+    nc.jetstream = MagicMock(return_value=js)
+    nc.drain = AsyncMock()
+
+    nats_module = MagicMock()
+    nats_module.connect = AsyncMock(return_value=nc)
+    return nats_module, nc
+
+
+def _run_loop(thread: NATSSubscriberThread, nats_module: MagicMock) -> None:
+    """Run ``_subscribe_loop`` once with the nats-py import patched.
+
+    ``_subscribe_loop`` lazily imports ``nats`` and ``nats.js.api`` inside the
+    coroutine, so we patch ``sys.modules`` for the duration of the run.
+    """
+    deliver_policy_cls = MagicMock()
+    deliver_policy_cls.return_value = "new"
+    nats_js_api = MagicMock()
+    nats_js_api.DeliverPolicy = deliver_policy_cls
+
+    with patch.dict(
+        "sys.modules",
+        {"nats": nats_module, "nats.js": MagicMock(), "nats.js.api": nats_js_api},
+    ):
+        asyncio.run(thread._subscribe_loop())
+
+
+def test_loop_continues_past_inner_timeout_then_dispatches() -> None:
+    """A ``next_msg`` timeout is swallowed; the next message is dispatched.
+
+    The loop must ``continue`` on the inner ``TimeoutError`` (not abort), then
+    process the subsequent real message — the exact behavior the redundant
+    ``asyncio.wait_for`` wrapper was claimed to provide.
+    """
+    received: list[NATSEvent] = []
+
+    def handler(event: NATSEvent) -> None:
+        received.append(event)
+
+    thread = NATSSubscriberThread(
+        config=NATSConfig(enabled=True, subjects=["hi.tasks.>"]),
+        handler=handler,
+    )
+
+    msg = _make_msg({"hello": "world"})
+
+    call_count = {"n": 0}
+
+    async def next_msg(timeout: float = 0.0) -> MagicMock:
+        # First poll times out (inner next_msg timeout), second yields a
+        # message, then we request shutdown so the loop exits cleanly.
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise _FakeNatsTimeoutError
+        thread._stop_event.set()
+        return msg
+
+    nats_module, nc = _install_fake_nats(AsyncMock(side_effect=next_msg))
+    _run_loop(thread, nats_module)
+
+    assert call_count["n"] == 2, "loop must poll again after the inner timeout"
+    assert len(received) == 1, "the message after the timeout must be dispatched"
+    assert received[0].data == {"hello": "world"}
+    msg.ack.assert_awaited_once()
+    nc.drain.assert_awaited_once()
+
+
+def test_loop_exits_when_stop_event_set() -> None:
+    """The loop terminates via ``_stop_event`` even under a steady timeout stream.
+
+    With ``next_msg`` perpetually timing out, the only exit path is the
+    ``while not self._stop_event.is_set()`` guard. Setting the event from the
+    side-effect proves the bounded 0.5s poll tick still services shutdown.
+    """
+    thread = NATSSubscriberThread(
+        config=NATSConfig(enabled=True, subjects=["hi.tasks.>"]),
+        handler=MagicMock(),
+    )
+
+    async def next_msg(timeout: float = 0.0) -> MagicMock:
+        thread._stop_event.set()
+        raise _FakeNatsTimeoutError
+
+    nats_module, nc = _install_fake_nats(AsyncMock(side_effect=next_msg))
+
+    # Must return rather than spin forever; a wall-clock guard catches regressions.
+    _run_loop(thread, nats_module)
+
+    nc.drain.assert_awaited_once()
+
+
+def test_next_msg_called_with_bounded_timeout() -> None:
+    """``next_msg`` is polled with an explicit, bounded timeout.
+
+    The bounded ``timeout`` on ``next_msg`` is what makes the redundant outer
+    ``asyncio.wait_for`` unnecessary: it both caps the receive and serves as
+    the poll tick for ``_stop_event``. Assert it is passed (and is finite)
+    rather than grepping the source for the literal ``timeout=0.5``.
+    """
+    thread = NATSSubscriberThread(
+        config=NATSConfig(enabled=True, subjects=["hi.tasks.>"]),
+        handler=MagicMock(),
+    )
+
+    seen_timeout: dict[str, float | None] = {"value": None}
+
+    async def next_msg(timeout: float = 0.0) -> MagicMock:
+        seen_timeout["value"] = timeout
+        thread._stop_event.set()
+        raise _FakeNatsTimeoutError
+
+    nats_module, _ = _install_fake_nats(AsyncMock(side_effect=next_msg))
+    _run_loop(thread, nats_module)
+
+    assert seen_timeout["value"] is not None, "next_msg must receive a timeout"
+    assert 0 < seen_timeout["value"] < 5, "the poll timeout must be bounded"
+
+
+@pytest.mark.parametrize("exc_type", [asyncio.TimeoutError, TimeoutError])
+def test_both_timeout_aliases_are_caught(exc_type: type[BaseException]) -> None:
+    """The handler catches whichever timeout alias ``next_msg`` raises.
+
+    On Python 3.11+ ``asyncio.TimeoutError`` *is* ``TimeoutError``; nats-py's
+    ``TimeoutError`` subclasses ``asyncio.TimeoutError``. A single
+    ``except TimeoutError`` therefore covers every case the removed dual-catch
+    handled — verified behaviorally so a future reflow cannot silently
+    reintroduce a redundant ``except (asyncio.TimeoutError, TimeoutError)``.
+    """
+    thread = NATSSubscriberThread(
+        config=NATSConfig(enabled=True, subjects=["hi.tasks.>"]),
+        handler=MagicMock(),
+    )
+
+    raised = {"done": False}
+
+    async def next_msg(timeout: float = 0.0) -> MagicMock:
+        if not raised["done"]:
+            raised["done"] = True
+            raise exc_type
+        thread._stop_event.set()
+        raise _FakeNatsTimeoutError
+
+    nats_module, nc = _install_fake_nats(AsyncMock(side_effect=next_msg))
+
+    # If the alias were not caught, _subscribe_loop would propagate it out of
+    # asyncio.run; reaching the drain assertion proves it was swallowed.
+    _run_loop(thread, nats_module)
+    nc.drain.assert_awaited_once()

@@ -243,7 +243,7 @@ class TestRunImplReviewLoop:
                 return_value="mvillmow",
             ),
             patch(
-                "hephaestus.automation.implementer_phase_runner.gh_pr_resolve_thread"
+                "hephaestus.automation.github_api.gh_pr_resolve_thread"
             ) as mock_resolve,
             patch.object(implementer, "_run_address_review_step") as mock_addr2,
             patch(
@@ -316,7 +316,7 @@ class TestRunImplReviewLoop:
                 return_value="mvillmow",
             ),
             patch(
-                "hephaestus.automation.implementer_phase_runner.gh_pr_resolve_thread"
+                "hephaestus.automation.github_api.gh_pr_resolve_thread"
             ) as mock_resolve,
         ):
             iters, verdict, _grade = implementer._run_impl_review_loop(
@@ -854,7 +854,7 @@ class TestRunImplReviewLoop:
                 "hephaestus.automation.implementer_phase_runner.gh_current_login",
                 return_value="mvillmow",
             ),
-            patch("hephaestus.automation.implementer_phase_runner.gh_pr_resolve_thread"),
+            patch("hephaestus.automation.github_api.gh_pr_resolve_thread"),
             # R0 clean, R1 re-opens (overrides GO), R2 clean.
             patch.object(
                 implementer.phase_runner,

@@ -42,13 +42,6 @@ def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def _make_existing_jsonl(home: Path, cwd: Path, sid: str) -> None:
-    encoded = str(cwd.resolve()).replace("/", "-")
-    target_dir = home / ".claude" / "projects" / encoded
-    target_dir.mkdir(parents=True)
-    (target_dir / f"{sid}.jsonl").write_text("{}\n")
-
-
 class TestAlwaysResume:
     """#1166: every call uses --resume; the harness creates on first use."""
 
@@ -133,9 +126,7 @@ class TestAlwaysResume:
         err = subprocess.CalledProcessError(
             returncode=2, cmd=["claude"], output="", stderr="some error"
         )
-        with patch(
-            "hephaestus.automation.claude_invoke.subprocess.run", side_effect=err
-        ) as m:
+        with patch("hephaestus.automation.claude_invoke.subprocess.run", side_effect=err) as m:
             with pytest.raises(subprocess.CalledProcessError):
                 invoke_claude_with_session(
                     repo="R",
@@ -238,9 +229,7 @@ class TestRecreateOnResumeFailureToggle:
             returncode=1, cmd=["claude"], output="", stderr="session not found"
         )
         for toggle in (True, False):
-            with patch(
-                "hephaestus.automation.claude_invoke.subprocess.run", side_effect=boom
-            ) as m:
+            with patch("hephaestus.automation.claude_invoke.subprocess.run", side_effect=boom) as m:
                 with pytest.raises(subprocess.CalledProcessError):
                     invoke_claude_with_session(
                         repo="R",

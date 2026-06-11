@@ -64,14 +64,28 @@ def fetch_issue(repo: str, issue_number: int) -> dict[str, Any]:
 
 
 
+_PLAN_MARKERS = (
+    "# Implementation Plan",
+    "## Implementation Plan",
+    "## Approach",
+    "### Approach",
+    "## Proposed Solution",
+    "## Design",
+)
+
+
 def _extract_plan_from_issue_data(issue_data: dict[str, Any] | None) -> str | None:
-    """Extract the latest plan comment from already-fetched issue data."""
+    """Extract the latest plan comment from already-fetched issue data.
+
+    Searches for comments whose body contains any of the recognised plan
+    heading markers and returns the most recent match.
+    """
     if issue_data is None:
         return None
     comments = issue_data.get("comments", [])
     for comment in reversed(comments):
         body = comment.get("body", "")
-        if "# Implementation Plan" in body or "## Approach" in body:
+        if any(marker in body for marker in _PLAN_MARKERS):
             return body
     return None
 
@@ -83,13 +97,13 @@ def fetch_pr_diff(repo: str, pr_number: int) -> str:
 def fetch_pr_threads(repo: str, pr_number: int) -> str:
     """Fetch review threads from a PR as JSON."""
     try:
-        data = _gh_json([
+        data = _gh([
             "pr", "view", str(pr_number),
             "--repo", repo,
             "--json", "reviewThreads,body",
-        ])
+        ], parse_json=True)
         return json.dumps(data, indent=2)
-    except Exception:
+    except RuntimeError:
         return "[]"
 
 
@@ -175,7 +189,7 @@ def build_prompt(
         if pr_number:
             try:
                 diff_text = fetch_pr_diff(repo, pr_number)
-            except Exception:  # noqa: BLE001
+            except RuntimeError:  # noqa: BLE001
                 pass
         return get_impl_loop_review_prompt(
             issue_number=issue_number,
@@ -203,7 +217,7 @@ def build_prompt(
         if pr_number:
             try:
                 diff_text = fetch_pr_diff(repo, pr_number)
-            except Exception:  # noqa: BLE001
+            except RuntimeError:  # noqa: BLE001
                 pass
         return get_pr_review_analysis_prompt(
             pr_number=pr_number,
@@ -237,6 +251,7 @@ def build_prompt(
             marketplace_path="",
         )
 
+    raise AssertionError(f"Unhandled stage: {stage!r}")  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------

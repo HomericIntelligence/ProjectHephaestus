@@ -3,32 +3,26 @@
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
 
-from scripts.show_prompt import STAGES, build_parser, build_prompt, main
+# Ensure the repo root is on sys.path so scripts.show_prompt resolves
+# without requiring scripts/__init__.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture()
-def mock_issue_data() -> dict:
-    return {
-        "title": "Test Issue Title",
-        "body": "Test issue body with acceptance criteria.",
-        "comments": [
-            {"body": "Some random comment"},
-            {"body": "# Implementation Plan\n\n## Approach\nDo stuff."},
-        ],
-    }
-
-
-@pytest.fixture()
-def mock_extract_comment() -> str:
-    return "# Implementation Plan\n\n## Approach\nCreate foo.py with bar()."
+from scripts.show_prompt import (  # noqa: E402
+    STAGES,
+    _PLAN_MARKERS,
+    _extract_plan_from_issue_data,
+    build_parser,
+    build_prompt,
+    fetch_pr_diff,
+    fetch_pr_threads,
+    main,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -79,13 +73,11 @@ class TestBuildParser:
 # ---------------------------------------------------------------------------
 
 class TestBuildPrompt:
-    @patch("scripts.show_prompt.fetch_issue")
-    @patch("scripts.show_prompt._extract_plan_from_issue_data")
-    def test_planning_stage(
-        self, mock_extract: MagicMock, mock_issue: MagicMock
-    ) -> None:
-        mock_extract.return_value = "# Implementation Plan"
-        prompt = build_prompt("planning", 1, "owner/repo")
+    def test_planning_stage(self) -> None:
+        """Planning stage does not fetch issue data."""
+        with patch("scripts.show_prompt.fetch_issue") as mock_issue:
+            prompt = build_prompt("planning", 1, "owner/repo")
+            mock_issue.assert_not_called()
         assert isinstance(prompt, str)
         assert len(prompt) > 0
 
@@ -122,11 +114,30 @@ class TestBuildPrompt:
         assert len(prompt) > 0
 
     @patch("scripts.show_prompt.fetch_issue")
-    def test_impl_review_stage(self, mock_issue: MagicMock) -> None:
+    @patch("scripts.show_prompt.fetch_pr_diff")
+    def test_impl_review_stage(
+        self, mock_diff: MagicMock, mock_issue: MagicMock
+    ) -> None:
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
-        prompt = build_prompt("impl-review", 1, "owner/repo", iteration=0)
+        mock_diff.return_value = "diff --git a/foo.py b/foo.py"
+        prompt = build_prompt(
+            "impl-review", 1, "owner/repo",
+            pr_number=5, iteration=0,
+        )
+        mock_diff.assert_called_once_with("owner/repo", 5)
         assert isinstance(prompt, str)
         assert len(prompt) > 0
+
+    @patch("scripts.show_prompt.fetch_issue")
+    def test_impl_review_no_pr_skips_diff(
+        self, mock_issue: MagicMock
+    ) -> None:
+        """When pr_number is 0, fetch_pr_diff is not called."""
+        mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
+        with patch("scripts.show_prompt.fetch_pr_diff") as mock_diff:
+            prompt = build_prompt("impl-review", 1, "owner/repo", iteration=0)
+            mock_diff.assert_not_called()
+        assert isinstance(prompt, str)
 
     @patch("scripts.show_prompt.fetch_issue")
     def test_impl_resume_stage(self, mock_issue: MagicMock) -> None:
@@ -136,9 +147,14 @@ class TestBuildPrompt:
         assert len(prompt) > 0
 
     @patch("scripts.show_prompt.fetch_issue")
-    def test_pr_review_stage(self, mock_issue: MagicMock) -> None:
+    @patch("scripts.show_prompt.fetch_pr_diff")
+    def test_pr_review_stage(
+        self, mock_diff: MagicMock, mock_issue: MagicMock
+    ) -> None:
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
+        mock_diff.return_value = "diff --git a/foo.py b/foo.py"
         prompt = build_prompt("pr-review", 1, "owner/repo", pr_number=5)
+        mock_diff.assert_called_once_with("owner/repo", 5)
         assert isinstance(prompt, str)
         assert len(prompt) > 0
 
@@ -150,8 +166,20 @@ class TestBuildPrompt:
         mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
         mock_threads.return_value = "[]"
         prompt = build_prompt("address-review", 1, "owner/repo", pr_number=5)
+        mock_threads.assert_called_once_with("owner/repo", 5)
         assert isinstance(prompt, str)
         assert len(prompt) > 0
+
+    @patch("scripts.show_prompt.fetch_issue")
+    def test_address_review_no_pr_skips_threads(
+        self, mock_issue: MagicMock
+    ) -> None:
+        """When pr_number is 0, fetch_pr_threads is not called."""
+        mock_issue.return_value = {"title": "T", "body": "B", "comments": []}
+        with patch("scripts.show_prompt.fetch_pr_threads") as mock_threads:
+            prompt = build_prompt("address-review", 1, "owner/repo")
+            mock_threads.assert_not_called()
+        assert isinstance(prompt, str)
 
     @patch("scripts.show_prompt.fetch_issue")
     def test_follow_up_stage(self, mock_issue: MagicMock) -> None:
@@ -191,6 +219,12 @@ class TestMain:
         rc = main(["--issue", "1", "--stage", "planning"])
         assert rc == 1
 
+    @patch("scripts.show_prompt.build_prompt")
+    def test_main_returns_1_on_value_error(self, mock_build: MagicMock) -> None:
+        mock_build.side_effect = ValueError("Unknown stage")
+        rc = main(["--issue", "1", "--stage", "planning"])
+        assert rc == 1
+
 
 # ---------------------------------------------------------------------------
 # Coverage: all stages are listed
@@ -210,3 +244,103 @@ def test_all_stages_covered() -> None:
         "advise",
     }
     assert set(STAGES) == expected
+
+
+# ---------------------------------------------------------------------------
+# Direct unit tests for helper functions (M5)
+# ---------------------------------------------------------------------------
+
+class TestExtractPlanFromIssueData:
+    """Direct tests for _extract_plan_from_issue_data."""
+
+    def test_returns_none_for_none_input(self) -> None:
+        assert _extract_plan_from_issue_data(None) is None
+
+    def test_returns_none_when_no_comments(self) -> None:
+        assert _extract_plan_from_issue_data({"comments": []}) is None
+
+    def test_returns_none_when_no_plan_marker(self) -> None:
+        data = {"comments": [{"body": "random comment"}]}
+        assert _extract_plan_from_issue_data(data) is None
+
+    def test_finds_implementation_plan(self) -> None:
+        plan = "# Implementation Plan\n\n## Steps\n1. Do stuff"
+        data = {"comments": [{"body": plan}]}
+        assert _extract_plan_from_issue_data(data) == plan
+
+    def test_finds_approach_marker(self) -> None:
+        plan = "## Approach\nWe will refactor X."
+        data = {"comments": [{"body": plan}]}
+        assert _extract_plan_from_issue_data(data) == plan
+
+    def test_finds_proposed_solution(self) -> None:
+        plan = "## Proposed Solution\nAdd Y."
+        data = {"comments": [{"body": plan}]}
+        assert _extract_plan_from_issue_data(data) == plan
+
+    def test_finds_design_marker(self) -> None:
+        plan = "## Design\nHigh-level architecture."
+        data = {"comments": [{"body": plan}]}
+        assert _extract_plan_from_issue_data(data) == plan
+
+    def test_finds_h3_approach(self) -> None:
+        plan = "### Approach\nDetailed steps."
+        data = {"comments": [{"body": plan}]}
+        assert _extract_plan_from_issue_data(data) == plan
+
+    def test_returns_most_recent_plan(self) -> None:
+        old_plan = "# Implementation Plan\nOld version"
+        new_plan = "# Implementation Plan\nNew version"
+        data = {"comments": [
+            {"body": old_plan},
+            {"body": "noise"},
+            {"body": new_plan},
+        ]}
+        assert _extract_plan_from_issue_data(data) == new_plan
+
+    def test_plan_markers_tuple_entries(self) -> None:
+        """Verify _PLAN_MARKERS has the expected entries."""
+        expected = {
+            "# Implementation Plan",
+            "## Implementation Plan",
+            "## Approach",
+            "### Approach",
+            "## Proposed Solution",
+            "## Design",
+        }
+        assert set(_PLAN_MARKERS) == expected
+
+
+class TestFetchPrThreads:
+    """Direct tests for fetch_pr_threads."""
+
+    @patch("scripts.show_prompt._gh")
+    def test_returns_json_string(self, mock_gh: MagicMock) -> None:
+        mock_gh.return_value = {"reviewThreads": [], "body": ""}
+        result = fetch_pr_threads("owner/repo", 5)
+        mock_gh.assert_called_once_with(
+            ["pr", "view", "5", "--repo", "owner/repo",
+             "--json", "reviewThreads,body"],
+            parse_json=True,
+        )
+        parsed = json.loads(result)
+        assert parsed == {"reviewThreads": [], "body": ""}
+
+    @patch("scripts.show_prompt._gh")
+    def test_returns_empty_list_on_runtime_error(self, mock_gh: MagicMock) -> None:
+        mock_gh.side_effect = RuntimeError("gh failed")
+        result = fetch_pr_threads("owner/repo", 5)
+        assert result == "[]"
+
+
+class TestFetchPrDiff:
+    """Direct tests for fetch_pr_diff."""
+
+    @patch("scripts.show_prompt._gh")
+    def test_calls_gh_with_correct_args(self, mock_gh: MagicMock) -> None:
+        mock_gh.return_value = "diff content"
+        result = fetch_pr_diff("owner/repo", 10)
+        mock_gh.assert_called_once_with(
+            ["pr", "diff", "10", "--repo", "owner/repo"]
+        )
+        assert result == "diff content"

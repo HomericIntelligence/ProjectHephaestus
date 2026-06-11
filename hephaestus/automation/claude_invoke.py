@@ -11,9 +11,9 @@ What lives here:
   ``--resume`` targets a session that no longer exists locally.
 - :func:`invoke_claude_with_session` — the single entry point every
   automation phase must use. Picks ``--session-id`` (first call) vs
-  ``--resume`` (subsequent calls) based on whether the session's JSONL
-  transcript already exists, and falls back to ``--session-id`` on any
-  resume failure.
+  ``--resume`` (subsequent calls) based on whether the model-keyed JSONL
+  transcript already exists. No recreate-on-failure cascade — a create/resume
+  error propagates (#1168).
 """
 
 from __future__ import annotations

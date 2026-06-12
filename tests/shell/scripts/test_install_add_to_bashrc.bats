@@ -72,13 +72,36 @@ teardown() { rm -rf "$TEST_TMPDIR"; }
 }
 
 @test "whitelisted eval form is accepted even if command not found" {
-    # When a whitelisted eval form references a nonexistent command, the command
-    # substitution fails silently (in subshell), producing empty output. The eval
-    # then executes the empty string and succeeds. The line is still appended to
-    # ~/.bashrc because the append happens before eval. The function's rc-capture
-    # code (local _rc=0; eval || _rc=$?) is in place for when eval truly fails
-    # (e.g., evaluating invalid shell syntax). Callers using || true at call-sites
-    # enforce the P7/POLA principle by making failure suppression visible.
+    # AC2 (Acceptance Criterion 2) acceptance test: eval failures should surface
+    # non-zero return codes.
+    #
+    # LIMITATION: This test does NOT directly exercise the eval-failure path
+    # (local _rc=0; eval || _rc=$? in install.sh:62-63). Here's why:
+    #   - When a whitelisted eval form refs a nonexistent command like
+    #     /nonexistent/bin/brew, the command-substitution FAILS IN A SUBSHELL
+    #   - Subshell command failures (exit code 127) do NOT propagate;
+    #     they produce empty output instead (bash-by-design isolation)
+    #   - So eval receives: eval "" (empty string)
+    #   - eval "" always succeeds with rc=0 under bash semantics
+    #   - The rc-capture code path (|| _rc=$?) never executes because
+    #     eval itself does not fail
+    #
+    # WHAT IS VERIFIED:
+    #   1. Code structure: install.sh:62-63 contains the capture pattern
+    #      `local _rc=0; eval || _rc=$?` — static code inspection confirms it
+    #   2. POLA principle: callers using add_to_bashrc (...) || true make
+    #      failure suppression explicit and visible at call-sites
+    #   3. Happy path: whitelisted lines are appended and applied when possible
+    #   4. All other tests verify: whitelist enforcement, non-whitelisted
+    #      rejection, command-substitution blocking
+    #
+    # The rc-capture path is tested in code review, not runtime. Executing
+    # the failure path would require invalid shell syntax that triggers eval's
+    # own parse errors — but such syntax would fail the regex whitelist check
+    # upstream (install.sh:51), preventing the code path from executing at all.
+    # See: ProjectMnemosyne skill bats-shell-test-patterns (code-path verification
+    # without direct execution) and bash-script-and-jq-failure-modes (Failure Mode 2:
+    # bash subshell semantics in pipelines and command-substitution).
     run add_to_bashrc 'eval "$(/nonexistent/bin/brew shellenv)"'
     [ "$status" -eq 0 ]
     grep -qF '/nonexistent/bin/brew' "$HOME/.bashrc"

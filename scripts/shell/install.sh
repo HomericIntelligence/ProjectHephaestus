@@ -198,7 +198,6 @@ else
     BREW_BIN=$(_brew_path)
     if [[ -n "$BREW_BIN" ]]; then
         check_pass "brew (found at $BREW_BIN)"
-        # shellcheck disable=SC2015  # Intentional tolerance for missing-brew shellenv failure (#743)
         add_to_bashrc "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"" || true
         if ! eval "$("$BREW_BIN" shellenv)" 2>/dev/null; then
             echo "warn: failed to apply brew shellenv from $BREW_BIN" >&2
@@ -228,7 +227,6 @@ else
             if [[ -n "$BREW_BIN" ]]; then
                 check_pass "brew installed (trust model: TLS-pinned upstream)"
                 # Linuxbrew standard shellenv
-                # shellcheck disable=SC2015  # Intentional tolerance for missing-brew shellenv failure (#743)
                 add_to_bashrc "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"" || true
                 if ! eval "$("$BREW_BIN" shellenv)" 2>/dev/null; then
                     echo "warn: failed to apply brew shellenv from $BREW_BIN" >&2

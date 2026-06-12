@@ -475,7 +475,12 @@ class TestRunLoopEarlyExit:
         """
         projects = tmp_path
         (projects / "r1" / ".git").mkdir(parents=True)
-        cfg = LoopConfig(loops=3, projects_dir=projects, org="testorg")
+        cfg = LoopConfig(
+            loops=3,
+            projects_dir=projects,
+            org="testorg",
+            phases=("plan", "implement", "drive-green"),
+        )
 
         call_count = 0
 
@@ -504,7 +509,10 @@ class TestRunLoopEarlyExit:
         """
         projects = tmp_path
         (projects / "r1" / ".git").mkdir(parents=True)
-        cfg = LoopConfig(loops=5, projects_dir=projects)  # default phases incl. drive-green
+        # Default phases are loop-body-only (``ALL_PHASES`` = plan, implement);
+        # drive-green is NOT in the bare-``LoopConfig()`` default post-#818, so
+        # the post-loop block is exercised separately and stubbed out here.
+        cfg = LoopConfig(loops=5, projects_dir=projects)
 
         call_count = 0
 
@@ -515,7 +523,7 @@ class TestRunLoopEarlyExit:
 
         with (
             patch.object(loop_runner, "process_repo", side_effect=fake_process),
-            patch.object(loop_runner, "_count_failing_prs", return_value=0),
+            patch.object(loop_runner, "_run_post_loop_stages", return_value=[]),
         ):
             results = run_loop(cfg, repos=["r1"])
 

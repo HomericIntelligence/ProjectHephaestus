@@ -222,6 +222,11 @@ class RepoResult:
     # metrics (#818). Populated only by the post-loop RepoResult returned
     # by ``_run_post_loop_stages``; per-loop RepoResults leave this empty.
     post_loop_phases: list[PhaseResult] = field(default_factory=list)
+    # True only for records produced by ``_run_post_loop_stages`` (#818).
+    # Tagging explicitly lets per-loop counting exclude post-loop records
+    # even when a crashed/uncloned repo leaves BOTH phase lists empty —
+    # emptiness alone cannot distinguish a post-loop record from a per-loop one.
+    is_post_loop: bool = False
     # Populated when the WORKER itself crashed (not a phase failure).
     runner_error: str | None = None
 
@@ -299,6 +304,13 @@ class LoopConfig:
     loops: int = 5
     max_workers: int = 3
     parallel_repos: int = 1
+    # Dataclass default is loop-body-only by design: it covers ONLY the
+    # iteration phases (``ALL_PHASES``), deliberately excluding post-loop
+    # terminal stages like drive-green. This differs from the CLI ``--phases``
+    # default (``ALL_SELECTABLE`` = loop phases + post-loop stages, set in
+    # ``_parse_args``): an operator on the CLI opts into drive-green by default,
+    # but a bare ``LoopConfig()`` (tests/programmatic callers) gets a quiet
+    # loop-only run that never touches existing PRs via ``_run_post_loop_stages``.
     phases: tuple[str, ...] = ALL_PHASES
     agent: str = "claude"
     issues: list[int] = field(default_factory=list)
@@ -1352,7 +1364,7 @@ def _run_post_loop_stages(cfg: LoopConfig, repos: list[str]) -> list[RepoResult]
         if _shutdown_requested():
             LOG.warning("[%s] post-loop SKIP (shutdown requested)", repo)
             break
-        result = RepoResult(repo=repo, loop_idx=cfg.loops)
+        result = RepoResult(repo=repo, loop_idx=cfg.loops, is_post_loop=True)
         repo_dir = _resolve_repo_dir(cfg.projects_dir, repo)
         if not (repo_dir / ".git").exists():
             result.runner_error = f"repo {repo} not cloned at {repo_dir}"
@@ -1477,11 +1489,12 @@ def run_loop(cfg: LoopConfig, repos: list[str]) -> list[RepoResult]:
     all_results.extend(post_loop_results)
 
     # Report actual loops run (may be less than cfg.loops due to early
-    # exit). Post-loop RepoResults always have non-empty post_loop_phases
-    # AND empty phases, so filtering by ``not r.post_loop_phases`` reliably
-    # excludes them — this prevents the post-loop record's loop_idx=cfg.loops
-    # from spuriously inflating the count when early-exit cut the loop short.
-    per_loop_results = [r for r in all_results if not r.post_loop_phases]
+    # exit). Post-loop RepoResults are tagged ``is_post_loop=True`` by
+    # ``_run_post_loop_stages``, so filtering on that flag reliably excludes
+    # them even when a crashed/uncloned repo leaves both phase lists empty.
+    # This prevents the post-loop record's loop_idx=cfg.loops from spuriously
+    # inflating the count when early-exit cut the loop body short.
+    per_loop_results = [r for r in all_results if not r.is_post_loop]
     actual_loops = max((r.loop_idx for r in per_loop_results), default=0)
     LOG.info(
         "✓ Completed %d of %d loop(s) across %d repo(s).",

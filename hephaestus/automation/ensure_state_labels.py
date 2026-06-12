@@ -39,10 +39,6 @@ from .state_labels import STATE_LABEL_SPECS
 
 logger = logging.getLogger(__name__)
 
-# Repo names to skip when iterating an org (matches loop_runner's policy: skip
-# archives, forks, and the special "Odysseus" sandbox repo).
-_SKIP_REPO_NAMES: frozenset[str] = frozenset({"Odysseus"})
-
 
 def _gh_list_org_repos(org: str, *, timeout: int = 60) -> list[str]:
     """Return non-archived, non-fork repo names for ``org``.
@@ -81,7 +77,6 @@ def _gh_list_org_repos(org: str, *, timeout: int = 60) -> list[str]:
         for e in entries
         if not e.get("isArchived", False)
         and not e.get("isFork", False)
-        and e["name"] not in _SKIP_REPO_NAMES
     )
 
 
@@ -169,10 +164,7 @@ def _build_parser() -> argparse.ArgumentParser:
     target.add_argument(
         "--org",
         metavar="ORG",
-        help=(
-            "Apply to every non-archived, non-fork repo in the org "
-            "(Odysseus is skipped, matching loop_runner)."
-        ),
+        help="Apply to every non-archived, non-fork repo in the org.",
     )
     parser.add_argument(
         "--dry-run",

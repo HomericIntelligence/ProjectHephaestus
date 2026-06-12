@@ -567,7 +567,7 @@ def _detect_cwd_repo() -> tuple[str | None, str | None]:
 
 
 def _gh_list_repos(org: str) -> list[str]:
-    """Return non-archived, non-fork, non-Odysseus repos for ``org``."""
+    """Return non-archived, non-fork repos for ``org``."""
     try:
         out = subprocess.run(
             [
@@ -599,7 +599,6 @@ def _gh_list_repos(org: str) -> list[str]:
         for e in entries
         if not e.get("isArchived", False)
         and not e.get("isFork", False)
-        and e.get("name") != "Odysseus"
     ]
 
 

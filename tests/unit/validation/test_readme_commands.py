@@ -298,10 +298,12 @@ class TestValidateSyntax:
         assert result.exit_code == -1
 
     def test_empty_command(self) -> None:
-        """Empty string tokenizes to [] and is treated as valid syntax."""
+        """Empty/whitespace-only command is rejected, mirroring validate_execution."""
         result = ReadmeValidator().validate_syntax("")
-        assert result.passed is True
-        assert result.exit_code == 0
+        assert result.passed is False
+        assert result.exit_code == -1
+        assert result.error_message is not None
+        assert "empty" in result.error_message.lower()
 
 
 # ---------------------------------------------------------------------------

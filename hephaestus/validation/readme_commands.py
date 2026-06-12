@@ -237,6 +237,9 @@ class ReadmeValidator:
         is not relevant. shlex.split raises ValueError on unterminated quotes,
         which is the realistic failure mode for argv commands.
 
+        Empty or whitespace-only input is rejected (passed=False, exit_code=-1),
+        mirroring validate_execution's behaviour for the same input.
+
         A failed result carries exit_code=-1 (sentinel) so consumers reading
         ValidationResult.exit_code never see exit_code=0 alongside passed=False.
 
@@ -248,13 +251,21 @@ class ReadmeValidator:
 
         """
         try:
-            shlex.split(command, posix=True)
+            tokens = shlex.split(command, posix=True)
         except ValueError as e:
             return ValidationResult(
                 command=command,
                 passed=False,
                 check_type="syntax",
                 error_message=str(e),
+                exit_code=-1,
+            )
+        if not tokens:
+            return ValidationResult(
+                command=command,
+                passed=False,
+                check_type="syntax",
+                error_message="Empty command",
                 exit_code=-1,
             )
         return ValidationResult(

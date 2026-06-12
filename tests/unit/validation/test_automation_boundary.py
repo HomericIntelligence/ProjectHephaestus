@@ -24,13 +24,8 @@ def test_no_library_subpackage_imports_automation() -> None:
         text = py.read_text(encoding="utf-8")
         for lineno, line in enumerate(text.splitlines(), start=1):
             stripped = line.strip()
-            if stripped.startswith(
-                ("from hephaestus.automation", "import hephaestus.automation")
-            ):
-                violations.append(
-                    f"{py.relative_to(LIB_ROOT)}:{lineno}: {stripped}"
-                )
+            if stripped.startswith(("from hephaestus.automation", "import hephaestus.automation")):
+                violations.append(f"{py.relative_to(LIB_ROOT)}:{lineno}: {stripped}")
     assert not violations, (
-        "library subpackages must not import from hephaestus.automation:\n"
-        + "\n".join(violations)
+        "library subpackages must not import from hephaestus.automation:\n" + "\n".join(violations)
     )

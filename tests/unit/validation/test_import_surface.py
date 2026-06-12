@@ -1,7 +1,7 @@
 """Regression test for ADR-0001 import surface contract.
 
 Issue #711 acceptance criterion 3: `import hephaestus` MUST NOT pull
-`curses`, `fcntl`, `pydantic`, or `hephaestus.automation.*` into
+`curses`, `pydantic`, or `hephaestus.automation.*` into
 sys.modules. Subprocess isolation is required because pytest itself
 loads pydantic — we need a clean interpreter to make the assertion
 meaningful.
@@ -44,12 +44,9 @@ def test_base_import_does_not_load_automation_or_heavy_deps() -> None:
         capture_output=True,
         text=True,
     )
-    leaked_line = next(
-        line for line in result.stdout.splitlines() if line.startswith("LEAKED:")
-    )
+    leaked_line = next(line for line in result.stdout.splitlines() if line.startswith("LEAKED:"))
     payload = leaked_line.removeprefix("LEAKED:")
     leaked = payload.split(",") if payload else []
     assert leaked == [], (
-        "forbidden modules loaded by `import hephaestus` "
-        f"(ADR-0001 / issue #711 AC#3): {leaked}"
+        f"forbidden modules loaded by `import hephaestus` (ADR-0001 / issue #711 AC#3): {leaked}"
     )

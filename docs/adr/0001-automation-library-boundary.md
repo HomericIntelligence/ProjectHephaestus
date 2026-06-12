@@ -34,14 +34,14 @@ Adopt a **dual-layer package** with four guarantees:
    `pydantic` (used by `hephaestus/automation/models.py`) and `tzdata` on
    Windows (used indirectly via `hephaestus.github.rate_limit`).
 
-3. **Seven console scripts** ship registered in `[project.scripts]` —
+3. **Six console scripts** ship registered in `[project.scripts]` —
    `hephaestus-automation-loop`, `hephaestus-plan-issues`,
    `hephaestus-implement-issues`, `hephaestus-review-prs`,
-   `hephaestus-agent-stage`, `hephaestus-ensure-state-labels`,
-   `hephaestus-audit-prs`. They require the `[automation]` extra to be
-   honest about their dependency surface. Today they happen to run from a
-   base install because `pydantic` is currently also a base dependency
-   (via `hephaestus.nats`); this is a transitional state.
+   `hephaestus-agent-stage`, `hephaestus-ensure-state-labels`. They require
+   the `[automation]` extra to be honest about their dependency surface.
+   Today they happen to run from a base install because `pydantic` is
+   currently also a base dependency (via `hephaestus.nats`); this is a
+   transitional state.
 
 4. **Boundary contract** — `hephaestus.automation` may import from any
    library subpackage; library subpackages MUST NOT import from
@@ -68,8 +68,8 @@ Adopt a **dual-layer package** with four guarantees:
 - README and CLAUDE.md gain a "Library vs product layer" section pointing
   here.
 - `tests/unit/test_import_surface.py` fails CI if `import hephaestus` ever
-  pulls `curses`, `fcntl`, `pydantic`, or any `hephaestus.automation.*`
-  module into `sys.modules`.
+  pulls `curses`, `pydantic`, or any `hephaestus.automation.*` module into
+  `sys.modules`.
 - `tests/unit/test_automation_boundary.py` fails CI if any library
   subpackage gains a `from hephaestus.automation` import.
 - If `hephaestus.nats` is ever stripped of its pydantic use (or moved

@@ -81,7 +81,6 @@ nats = [
 # library-side import surface stays clean via tests/unit/test_import_surface.py.
 automation = [
     "pydantic>=2.12.5,<3",
-    "tzdata; platform_system == 'Windows'",
 ]
 all = [
     "HomericIntelligence-Hephaestus[automation,github,nats,toml,xml,schema]",

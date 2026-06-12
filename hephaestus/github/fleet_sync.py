@@ -208,6 +208,29 @@ def get_resign_exec() -> str:
     return f"git -c user.email={get_resign_email()} commit --amend --no-edit -S --reset-author"
 
 
+def _parse_env_repos(env_repos_raw: str | None) -> list[str] | None:
+    """Parse comma-separated FLEET_REPOS and validate non-empty.
+
+    Args:
+        env_repos_raw: Raw FLEET_REPOS value from environment
+
+    Returns:
+        List of repo names with whitespace trimmed, or None if input is None
+
+    Raises:
+        RuntimeError: If repos are set but all empty after trimming
+
+    """
+    if env_repos_raw is None:
+        return None
+    env_repos = [r.strip() for r in env_repos_raw.split(",") if r.strip()]
+    if not env_repos:
+        raise RuntimeError(
+            "FLEET_REPOS is set but contains no valid repos after splitting on commas"
+        )
+    return env_repos
+
+
 def _find_default_config() -> Path | None:
     """Return the first existing .fleet.yml in CWD or repo-root, else None."""
     cwd_path = Path.cwd() / DEFAULT_FLEET_CONFIG_FILENAME
@@ -248,7 +271,7 @@ def _load_fleet_config(config_path: str | None) -> tuple[str | None, list[str] |
                 file_repos_raw = cfg.get("repos")
                 if isinstance(file_repos_raw, list):
                     file_repos = file_repos_raw
-            except Exception as e:
+            except (FileNotFoundError, ValueError) as e:
                 raise RuntimeError(f"Failed to load fleet config from {config_path}: {e}") from e
 
     return file_org, file_repos
@@ -287,11 +310,7 @@ def resolve_fleet_config(
     env_repos_raw = os.environ.get("FLEET_REPOS")
 
     if env_org and env_repos_raw is not None:
-        env_repos = [r.strip() for r in env_repos_raw.split(",") if r.strip()]
-        if not env_repos:
-            raise RuntimeError(
-                "FLEET_REPOS is set but contains no valid repos after splitting on commas"
-            )
+        env_repos = _parse_env_repos(env_repos_raw)
         return env_org, env_repos
 
     # Step 3: Try config file
@@ -304,9 +323,7 @@ def resolve_fleet_config(
             "no fleet org configured. Set --org, FLEET_ORG, or org: in .fleet.yml"
         )
 
-    final_repos = cli_repos or (
-        [r.strip() for r in env_repos_raw.split(",") if r.strip()] if env_repos_raw else None
-    ) or file_repos
+    final_repos = cli_repos or _parse_env_repos(env_repos_raw) or file_repos
 
     if not final_repos:
         raise RuntimeError(
@@ -359,7 +376,9 @@ def _gh(
     """
     full_args = args
     if repo and not any(a.startswith("--repo") or a == "-R" for a in args):
-        repo_arg = f"{org}/{repo}" if org else repo
+        if not org:
+            raise ValueError("org must be provided when repo is specified")
+        repo_arg = f"{org}/{repo}"
         full_args = ["--repo", repo_arg, *args]
 
     if dry_run:

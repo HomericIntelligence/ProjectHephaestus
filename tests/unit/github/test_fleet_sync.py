@@ -344,7 +344,17 @@ class TestMain:
         monkeypatch.setattr(fleet_sync, "process_repo", fake_process)
         monkeypatch.setattr(
             "sys.argv",
-            ["fleet-sync", "--org", "owner", "--repos", "a", "--json", "--dry-run", "--agent", "claude"],
+            [
+                "fleet-sync",
+                "--org",
+                "owner",
+                "--repos",
+                "a",
+                "--json",
+                "--dry-run",
+                "--agent",
+                "claude",
+            ],
         )
         assert fleet_sync.main() == 0
         payload = json.loads(capsys.readouterr().out)
@@ -368,7 +378,17 @@ class TestMain:
         monkeypatch.setattr(fleet_sync, "process_repo", fake_process)
         monkeypatch.setattr(
             "sys.argv",
-            ["fleet-sync", "--org", "owner", "--repos", "a", "--json", "--dry-run", "--agent", "claude"],
+            [
+                "fleet-sync",
+                "--org",
+                "owner",
+                "--repos",
+                "a",
+                "--json",
+                "--dry-run",
+                "--agent",
+                "claude",
+            ],
         )
         assert fleet_sync.main() == 1
         payload = json.loads(capsys.readouterr().out)
@@ -443,7 +463,7 @@ class TestTimeoutHandling:
         """_gh function uses NETWORK_TIMEOUT."""
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="[]")
-            fleet_sync_module._gh(["pr", "list"], repo="TestRepo")
+            fleet_sync_module._gh(["pr", "list"], repo="TestRepo", org="TestOrg")
             assert mock_run.called
             call_kwargs = mock_run.call_args[1]
             assert "timeout" in call_kwargs

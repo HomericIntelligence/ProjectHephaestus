@@ -50,8 +50,6 @@ _GH_BREAKER = _gh_client._GH_BREAKER
 _GH_THROTTLE = _gh_client._GH_THROTTLE
 
 __all__ = [
-    "_GH_BREAKER",
-    "_GH_THROTTLE",
     "ClaudeUsageCapError",
     "GitHubRateLimitError",
     "GitHubUnavailableError",

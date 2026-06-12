@@ -1394,7 +1394,7 @@ class TestGhPrCreate:
             )
         mock_gh_call.assert_not_called()
 
-    @patch("hephaestus.github.client.run_subprocess")
+    @patch("hephaestus.automation.github_api.run")
     @patch("hephaestus.automation.github_api._gh_call")
     def test_accepts_good_untrusted_signature(self, mock_gh_call: Any, mock_run: Any) -> None:
         """'U' (good sig, untrusted key) is accepted; GitHub re-validates server-side."""

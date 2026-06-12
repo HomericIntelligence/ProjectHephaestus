@@ -693,8 +693,8 @@ class TestGhCall:
         # (range(2) = [0, 1], each iteration tries resilient_call with max_retries=2)
         assert mock_run.call_count >= 2  # At least the outer iterations
 
-    @patch("hephaestus.automation.github_api.time")
-    @patch("hephaestus.automation.github_api.run")
+    @patch("hephaestus.github.client.time")
+    @patch("hephaestus.github.client.run_subprocess")
     def test_secondary_rate_limit_retries_with_15s_base_backoff(
         self, mock_run: Any, mock_time: Any
     ) -> None:
@@ -728,8 +728,8 @@ class TestGhCall:
         first_wait = sleep_calls[0]
         assert first_wait == 15, f"Expected 15s base wait, got {first_wait}s"
 
-    @patch("hephaestus.automation.github_api.time")
-    @patch("hephaestus.automation.github_api.run")
+    @patch("hephaestus.github.client.time")
+    @patch("hephaestus.github.client.run_subprocess")
     def test_secondary_rate_limit_raises_rate_limit_error_when_retry_disabled(
         self, mock_run: Any, mock_time: Any
     ) -> None:
@@ -746,8 +746,8 @@ class TestGhCall:
         with pytest.raises(GitHubRateLimitError):
             _gh_call(["issue", "view", "123"], max_retries=6, retry_on_rate_limit=False)
 
-    @patch("hephaestus.automation.github_api.time")
-    @patch("hephaestus.automation.github_api.run")
+    @patch("hephaestus.github.client.time")
+    @patch("hephaestus.github.client.run_subprocess")
     def test_secondary_rate_limit_backoff_doubles_each_attempt(
         self, mock_run: Any, mock_time: Any
     ) -> None:

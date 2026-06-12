@@ -21,19 +21,48 @@ set -uo pipefail
 # shellcheck source=scripts/shell/lib/install_helpers.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/install_helpers.sh"
 
-# ─── Script-local helpers ────────────────────────────────────────────────────
-# Append a line to ~/.bashrc if not already present, then source it in current shell
+# ─── add_to_bashrc whitelist (single source of truth, #743) ──────────────────
+# This regex defines the ONLY two shell-line shapes that may be passed to
+# add_to_bashrc. The pre-commit hook `forbid-unwhitelisted-add-to-bashrc`
+# in .pre-commit-config.yaml mirrors this whitelist at lint time. If you
+# extend this regex, update the pre-commit hook in the SAME commit.
+#   1. eval "$(<absolute-path> shellenv)"       — brew/linuxbrew shellenv
+#   2. export PATH=$PATH:<path>                 — language toolchain PATH
+# Path chars: alphanumeric, '/', '.', '-', '_', and '$' (for caller-side
+# $dir expansion). Notably forbidden: '"', '`', whitespace, and any '$('.
+readonly ADD_TO_BASHRC_ALLOWED_RE='^(eval "\$\(/[A-Za-z0-9._/-]+ shellenv\)"|export PATH=\$PATH:[A-Za-z0-9._/$-]+)$'
+
+# Append a line to ~/.bashrc if not already present, then apply it to the
+# current shell.
+#
+# SAFETY INVARIANT (#743): $line is passed to `eval`, so callers MUST supply
+# a string literal matching ADD_TO_BASHRC_ALLOWED_RE. The regex forbids
+# embedded '"', '`', and arbitrary '$(' command substitution, so user-
+# controlled values cannot reach eval.
+#
+# Return code: 0 on success; 2 on whitelist refusal; non-zero (eval's rc) on
+# eval failure. Callers that intentionally tolerate runtime eval failure
+# (e.g. brew shellenv against a not-yet-installed brew) MUST suppress with
+# an explicit `|| true` at the call-site so the intent is visible.
 add_to_bashrc() {
     local line="$1"
+    if ! [[ "$line" =~ $ADD_TO_BASHRC_ALLOWED_RE ]]; then
+        echo "add_to_bashrc: refusing to eval non-whitelisted line: $line" >&2
+        return 2
+    fi
     if ! grep -qF "$line" ~/.bashrc 2>/dev/null; then
         echo "$line" >> ~/.bashrc
         echo -e "    ${BLUE}→${NC} Added to ~/.bashrc: $line"
     fi
-    # Apply to current shell immediately; the line is user/installer-controlled
-    # and may legitimately fail (e.g. shellenv against a not-yet-extant brew).
-    if ! eval "$line" 2>/dev/null; then
-        echo "warn: failed to apply '$line' to current shell" >&2
+    # Apply to current shell. Whitelisted forms only — no untrusted input
+    # reaches this eval. Failure (e.g. shellenv on a missing brew) is
+    # surfaced via non-zero return; tolerate at the call-site with `|| true`.
+    local _rc=0
+    eval "$line" || _rc=$?
+    if (( _rc != 0 )); then
+        echo "warn: failed to apply '$line' to current shell (rc=$_rc)" >&2
     fi
+    return "$_rc"
 }
 
 should_check_worker()  { [[ "$ROLE" == "all" || "$ROLE" == "worker" ]]; }
@@ -168,7 +197,7 @@ else
     BREW_BIN=$(_brew_path)
     if [[ -n "$BREW_BIN" ]]; then
         check_pass "brew (found at $BREW_BIN)"
-        add_to_bashrc "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\""
+        add_to_bashrc "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"" || true
         if ! eval "$("$BREW_BIN" shellenv)" 2>/dev/null; then
             echo "warn: failed to apply brew shellenv from $BREW_BIN" >&2
         fi
@@ -197,7 +226,7 @@ else
             if [[ -n "$BREW_BIN" ]]; then
                 check_pass "brew installed (trust model: TLS-pinned upstream)"
                 # Linuxbrew standard shellenv
-                add_to_bashrc "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\""
+                add_to_bashrc "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"" || true
                 if ! eval "$("$BREW_BIN" shellenv)" 2>/dev/null; then
                     echo "warn: failed to apply brew shellenv from $BREW_BIN" >&2
                 fi

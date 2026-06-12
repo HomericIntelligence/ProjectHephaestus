@@ -14,7 +14,9 @@ reliability bug — route them through ``gh_call``.
 Raises:
     GitHubRateLimitError, GitHubUnavailableError, ClaudeUsageCapError,
     subprocess.CalledProcessError.
+
 """
+
 from __future__ import annotations
 
 import logging
@@ -29,7 +31,6 @@ from hephaestus.github.rate_limit import (
     detect_claude_usage_limit,
     detect_rate_limit,
     gh_global_throttle_acquire,
-    gh_rate_limit_reset_epoch,
     wait_until,
 )
 from hephaestus.resilience.circuit_breaker import (
@@ -55,7 +56,10 @@ def gh_cli_timeout() -> int:
 
 _GH_THROTTLE = threading.local()
 _GH_BREAKER = get_circuit_breaker(
-    "github-api", failure_threshold=5, recovery_timeout=60, half_open_max_calls=2,
+    "github-api",
+    failure_threshold=5,
+    recovery_timeout=60,
+    half_open_max_calls=2,
 )
 
 

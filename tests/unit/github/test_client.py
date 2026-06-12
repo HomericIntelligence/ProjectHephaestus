@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Tests for hephaestus.github.client.gh_call public contract."""
 
-import os
 import subprocess
 from collections.abc import Generator
 from unittest.mock import Mock, patch
@@ -9,6 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from hephaestus.github.client import (
+    _GH_BREAKER,
     ClaudeUsageCapError,
     GitHubRateLimitError,
     GitHubUnavailableError,
@@ -20,10 +20,9 @@ from hephaestus.github.client import (
 @pytest.fixture(autouse=True)
 def _reset_breaker() -> Generator[None, None, None]:
     """Reset the GitHub API circuit breaker before each test."""
-    import hephaestus.github.client as client_module
-    client_module._GH_BREAKER.reset()
+    _GH_BREAKER.reset()
     yield
-    client_module._GH_BREAKER.reset()
+    _GH_BREAKER.reset()
 
 
 class TestGhCallCircuitBreaker:
@@ -122,12 +121,14 @@ class TestGhCallPublicExports:
     def test_gh_call_exported_from_package(self) -> None:
         """gh_call is exported from hephaestus.github.__init__."""
         import hephaestus.github as github_pkg
+
         assert hasattr(github_pkg, "gh_call")
         assert github_pkg.gh_call is gh_call
 
     def test_error_classes_exported_from_package(self) -> None:
         """Error classes are exported from hephaestus.github.__init__."""
         import hephaestus.github as github_pkg
+
         assert hasattr(github_pkg, "GitHubRateLimitError")
         assert hasattr(github_pkg, "GitHubUnavailableError")
         assert hasattr(github_pkg, "ClaudeUsageCapError")

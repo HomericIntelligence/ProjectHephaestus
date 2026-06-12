@@ -44,21 +44,20 @@ _label_cache: set[str] | None = None
 # unittest.mock.patch walks the dotted path's module attributes at patch
 # time; these names exist as attributes of this module after the
 # aliases, so @patch("hephaestus.automation.github_api._gh_call") and
-# @patch("hephaestus.automation.github_api._gh_call_impl") continue to work
-# without test churn.
+# similar test patches continue to work without churn.
 _gh_call = gh_call
-_gh_call_impl = _gh_client._gh_call_impl
 _GH_BREAKER = _gh_client._GH_BREAKER
 _GH_THROTTLE = _gh_client._GH_THROTTLE
 
 __all__ = [
+    "_GH_BREAKER",
+    "_GH_THROTTLE",
     "ClaudeUsageCapError",
     "GitHubRateLimitError",
     "GitHubUnavailableError",
     "gh_call",
     "gh_cli_timeout",
 ]
-
 
 
 def gh_list_labels(refresh: bool = False, *, raise_on_error: bool = False) -> set[str]:

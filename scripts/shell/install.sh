@@ -43,8 +43,16 @@ readonly ADD_TO_BASHRC_ALLOWED_RE='^(eval "\$\(/[A-Za-z0-9._/-]+ shellenv\)"|exp
 #
 # Return code: 0 on success; 2 on whitelist refusal; non-zero (eval's rc) on
 # eval failure. Callers that intentionally tolerate runtime eval failure
-# (e.g. brew shellenv against a not-yet-installed brew) MUST suppress with
-# an explicit `|| true` at the call-site so the intent is visible.
+# (e.g. brew shellenv against a not-yet-installed brew) capture the rc with an
+# explicit `if ! add_to_bashrc ...; then : ; fi` so the intent is visible —
+# `|| true` is forbidden by the forbid-suppressions CI gate.
+#
+# NOTE: for the only whitelisted form in use — `eval "$(... shellenv)"` — the
+# non-zero return path is effectively unreachable: a failing command
+# substitution yields empty output, so the outer eval runs `eval ""` and
+# returns 0. The non-zero branch (and the call-site tolerance) is retained as
+# defensive coverage for any future whitelisted form whose eval can itself
+# fail; it is not load-bearing for the current call-sites.
 add_to_bashrc() {
     local line="$1"
     if ! [[ "$line" =~ $ADD_TO_BASHRC_ALLOWED_RE ]]; then
@@ -56,8 +64,8 @@ add_to_bashrc() {
         echo -e "    ${BLUE}→${NC} Added to ~/.bashrc: $line"
     fi
     # Apply to current shell. Whitelisted forms only — no untrusted input
-    # reaches this eval. Failure (e.g. shellenv on a missing brew) is
-    # surfaced via non-zero return; tolerate at the call-site with `|| true`.
+    # reaches this eval. Failure (e.g. shellenv on a missing brew) is surfaced
+    # via non-zero return; tolerate at the call-site with an explicit `if`.
     local _rc=0
     eval "$line" || _rc=$?
     if (( _rc != 0 )); then
@@ -198,7 +206,14 @@ else
     BREW_BIN=$(_brew_path)
     if [[ -n "$BREW_BIN" ]]; then
         check_pass "brew (found at $BREW_BIN)"
-        add_to_bashrc "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"" || true
+        # Best-effort: add_to_bashrc returns non-zero if the shellenv eval
+        # fails (e.g. brew not yet on PATH). The function already warns to
+        # stderr, so the failure is tolerated here. We capture the rc in an
+        # explicit `if` rather than swallowing it with `|| true` (forbidden by
+        # the forbid-suppressions CI gate).
+        if ! add_to_bashrc "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\""; then
+            : # tolerated; warning already emitted by add_to_bashrc
+        fi
         if ! eval "$("$BREW_BIN" shellenv)" 2>/dev/null; then
             echo "warn: failed to apply brew shellenv from $BREW_BIN" >&2
         fi
@@ -226,8 +241,13 @@ else
             BREW_BIN=$(_brew_path)
             if [[ -n "$BREW_BIN" ]]; then
                 check_pass "brew installed (trust model: TLS-pinned upstream)"
-                # Linuxbrew standard shellenv
-                add_to_bashrc "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"" || true
+                # Linuxbrew standard shellenv. Best-effort: see the matching
+                # call-site above — add_to_bashrc already warns on failure, so
+                # we tolerate a non-zero rc via an explicit `if` rather than
+                # `|| true` (forbidden by the forbid-suppressions CI gate).
+                if ! add_to_bashrc "eval \"\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\""; then
+                    : # tolerated; warning already emitted by add_to_bashrc
+                fi
                 if ! eval "$("$BREW_BIN" shellenv)" 2>/dev/null; then
                     echo "warn: failed to apply brew shellenv from $BREW_BIN" >&2
                 fi

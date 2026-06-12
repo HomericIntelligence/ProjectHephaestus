@@ -10,8 +10,9 @@ setup() {
     export HOME="$TEST_TMPDIR"
     touch "$HOME/.bashrc"
     export BLUE="" NC=""
-    # source install.sh; the existing BASH_SOURCE guard (install.sh:46-48)
-    # stops the installer body, leaving helper functions defined.
+    # source install.sh; the existing `BASH_SOURCE[0] != $0` guard in
+    # install.sh stops the installer body from running, leaving the helper
+    # functions defined.
     # shellcheck source=/dev/null
     source "$SRC_SCRIPT"
 }
@@ -36,9 +37,9 @@ teardown() { rm -rf "$TEST_TMPDIR"; }
     grep -qF '/usr/local/go/bin' "$HOME/.bashrc"
 }
 
-@test "line 721 caller shape (post-\$dir expansion) is accepted" {
-    # install.sh:721 is `add_to_bashrc "export PATH=\$PATH:$dir"`; after the
-    # caller's shell expands $dir, the function receives this literal:
+@test "export-PATH caller shape (post-\$dir expansion) is accepted" {
+    # install.sh has a caller `add_to_bashrc "export PATH=\$PATH:$dir"`; after
+    # the caller's shell expands $dir, the function receives this literal:
     local expanded="export PATH=\$PATH:$HOME/.local/bin"
     run add_to_bashrc "$expanded"
     [ "$status" -eq 0 ]
@@ -76,7 +77,8 @@ teardown() { rm -rf "$TEST_TMPDIR"; }
     # non-zero return codes.
     #
     # LIMITATION: This test does NOT directly exercise the eval-failure path
-    # (local _rc=0; eval || _rc=$? in install.sh:62-63). Here's why:
+    # (the `local _rc=0; eval "$line" || _rc=$?` capture in add_to_bashrc).
+    # Here's why:
     #   - When a whitelisted eval form refs a nonexistent command like
     #     /nonexistent/bin/brew, the command-substitution FAILS IN A SUBSHELL
     #   - Subshell command failures (exit code 127) do NOT propagate;
@@ -87,10 +89,11 @@ teardown() { rm -rf "$TEST_TMPDIR"; }
     #     eval itself does not fail
     #
     # WHAT IS VERIFIED:
-    #   1. Code structure: install.sh:62-63 contains the capture pattern
-    #      `local _rc=0; eval || _rc=$?` — static code inspection confirms it
-    #   2. POLA principle: callers using add_to_bashrc (...) || true make
-    #      failure suppression explicit and visible at call-sites
+    #   1. Code structure: add_to_bashrc contains the capture pattern
+    #      `local _rc=0; eval "$line" || _rc=$?` — static inspection confirms it
+    #   2. POLA principle: callers tolerate failure with an explicit
+    #      `if ! add_to_bashrc ...; then : ; fi` (not `|| true`, which the
+    #      forbid-suppressions CI gate rejects), keeping intent visible
     #   3. Happy path: whitelisted lines are appended and applied when possible
     #   4. All other tests verify: whitelist enforcement, non-whitelisted
     #      rejection, command-substitution blocking
@@ -98,7 +101,7 @@ teardown() { rm -rf "$TEST_TMPDIR"; }
     # The rc-capture path is tested in code review, not runtime. Executing
     # the failure path would require invalid shell syntax that triggers eval's
     # own parse errors — but such syntax would fail the regex whitelist check
-    # upstream (install.sh:51), preventing the code path from executing at all.
+    # at the top of add_to_bashrc, preventing the code path from executing.
     # See: ProjectMnemosyne skill bats-shell-test-patterns (code-path verification
     # without direct execution) and bash-script-and-jq-failure-modes (Failure Mode 2:
     # bash subshell semantics in pipelines and command-substitution).

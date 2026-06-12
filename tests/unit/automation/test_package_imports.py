@@ -84,8 +84,7 @@ def test_every_all_entry_resolves_via_package_root() -> None:
         value = getattr(automation, name)
         source = importlib.import_module(source_module)
         assert value is getattr(source, name), (
-            f"hephaestus.automation.{name} is not the same object as "
-            f"{source_module}.{name}"
+            f"hephaestus.automation.{name} is not the same object as {source_module}.{name}"
         )
 
 

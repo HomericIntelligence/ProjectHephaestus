@@ -72,40 +72,47 @@ teardown() { rm -rf "$TEST_TMPDIR"; }
     [ "$(grep -cF '/usr/local/go/bin' "$HOME/.bashrc")" -eq 1 ]
 }
 
-@test "whitelisted eval form is accepted even if command not found" {
-    # AC2 (Acceptance Criterion 2) acceptance test: eval failures should surface
-    # non-zero return codes.
+@test "whitelisted eval form is accepted even when the command is absent" {
+    # Documents the bash subshell semantics that make a *whitelisted* eval line
+    # return 0 even when its inner command is missing:
+    #   - `$(/nonexistent/bin/brew shellenv)` FAILS IN A SUBSHELL (exit 127)
+    #   - that failure does NOT propagate; it yields empty output instead
+    #   - so the outer eval runs `eval ""`, which always returns 0
+    # Hence, for the only whitelisted eval shape in use, the rc-capture branch
+    # is unreachable — matching the function-header note in install.sh.
     #
-    # LIMITATION: This test does NOT directly exercise the eval-failure path
-    # (the `local _rc=0; eval "$line" || _rc=$?` capture in add_to_bashrc).
-    # Here's why:
-    #   - When a whitelisted eval form refs a nonexistent command like
-    #     /nonexistent/bin/brew, the command-substitution FAILS IN A SUBSHELL
-    #   - Subshell command failures (exit code 127) do NOT propagate;
-    #     they produce empty output instead (bash-by-design isolation)
-    #   - So eval receives: eval "" (empty string)
-    #   - eval "" always succeeds with rc=0 under bash semantics
-    #   - The rc-capture code path (|| _rc=$?) never executes because
-    #     eval itself does not fail
-    #
-    # WHAT IS VERIFIED:
-    #   1. Code structure: add_to_bashrc contains the capture pattern
-    #      `local _rc=0; eval "$line" || _rc=$?` — static inspection confirms it
-    #   2. POLA principle: callers tolerate failure with an explicit
-    #      `if ! add_to_bashrc ...; then : ; fi` (not `|| true`, which the
-    #      forbid-suppressions CI gate rejects), keeping intent visible
-    #   3. Happy path: whitelisted lines are appended and applied when possible
-    #   4. All other tests verify: whitelist enforcement, non-whitelisted
-    #      rejection, command-substitution blocking
-    #
-    # The rc-capture path is tested in code review, not runtime. Executing
-    # the failure path would require invalid shell syntax that triggers eval's
-    # own parse errors — but such syntax would fail the regex whitelist check
-    # at the top of add_to_bashrc, preventing the code path from executing.
-    # See: ProjectMnemosyne skill bats-shell-test-patterns (code-path verification
-    # without direct execution) and bash-script-and-jq-failure-modes (Failure Mode 2:
-    # bash subshell semantics in pipelines and command-substitution).
+    # Direct runtime coverage of the rc-capture branch itself (for any future
+    # whitelisted shape whose eval CAN fail) lives in the
+    # "AC2: eval failure surfaces non-zero return code and warning" test below.
     run add_to_bashrc 'eval "$(/nonexistent/bin/brew shellenv)"'
     [ "$status" -eq 0 ]
     grep -qF '/nonexistent/bin/brew' "$HOME/.bashrc"
+}
+
+@test "AC2: eval failure surfaces non-zero return code and warning" {
+    # Direct runtime coverage of AC2 (the P7/POLA fix): when eval itself
+    # fails, add_to_bashrc must capture eval's rc, emit a 'failed to apply'
+    # warning, and return that non-zero rc.
+    #
+    # The whitelist regex normally blocks any line whose eval can fail, so to
+    # exercise the rc-capture branch we source a copy of install.sh with the
+    # `readonly` qualifier on the whitelist constant stripped, then widen the
+    # constant to a permissive pattern. This lets a line containing valid
+    # shell syntax that exits non-zero (`false`) reach eval, exercising the
+    # `eval "$line" || _rc=$?` capture, the warning, and the non-zero return.
+    # Build the stub in the test tmpdir (auto-cleaned by teardown). Symlink
+    # the real lib/ next to it so the stub's relative
+    # `source .../lib/install_helpers.sh` still resolves.
+    local stub="${TEST_TMPDIR}/install_eval_failure.sh"
+    ln -sfn "$(dirname "$SRC_SCRIPT")/lib" "${TEST_TMPDIR}/lib"
+    sed 's/^readonly ADD_TO_BASHRC_ALLOWED_RE=/ADD_TO_BASHRC_ALLOWED_RE=/' \
+        "$SRC_SCRIPT" > "$stub"
+    run bash -c '
+        export HOME="'"$HOME"'" BLUE="" NC=""
+        source "'"$stub"'"
+        ADD_TO_BASHRC_ALLOWED_RE=".*"
+        add_to_bashrc "false"
+    '
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"failed to apply"* ]]
 }

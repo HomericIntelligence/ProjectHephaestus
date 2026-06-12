@@ -477,6 +477,47 @@ def _pr(number: int, status: PRStatus, head: str = "feat") -> PRInfo:
     )
 
 
+@pytest.fixture
+def capture_fleet_sync_logs():
+    r"""Fixture to capture fleet_sync logger messages.
+
+    Context manager that captures log messages from the fleet_sync module logger
+    by attaching a custom handler. Automatically cleans up on exit.
+
+    Yields:
+        list: A list that will be populated with log message strings as they are emitted.
+
+    Usage:
+        with capture_fleet_sync_logs() as messages:
+            # ... code that logs ...
+            assert "expected message" in "\n".join(messages)
+
+    """
+    import logging
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _capture():
+        messages = []
+
+        class _TestHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                messages.append(record.getMessage())
+
+        # Get the underlying logger (ContextLogger wraps a LoggerAdapter)
+        logger_adapter = fleet_sync_module.logger
+        underlying_logger = logger_adapter.logger
+        handler = _TestHandler()
+        underlying_logger.addHandler(handler)
+
+        try:
+            yield messages
+        finally:
+            underlying_logger.removeHandler(handler)
+
+    return _capture()
+
+
 class TestCloneReuseAndWorktrees:
     """#1044: clone each repo once, use worktrees per PR instead of re-cloning."""
 
@@ -881,28 +922,14 @@ class TestAsciiFlag:
         assert fleet_sync_module.ASCII_SYMBOLS.dash == "--"
 
     def test_process_repo_emits_ascii_banner_when_ascii_symbols_passed(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capture_fleet_sync_logs
     ) -> None:
         """process_repo logs ASCII banner under ASCII_SYMBOLS — no module state."""
         monkeypatch.setattr(fleet_sync_module, "list_prs", lambda _repo: [])
 
         import argparse
-        import logging
 
-        # Capture logger output directly
-        logged_messages = []
-
-        class TestHandler(logging.Handler):
-            def emit(self, record: logging.LogRecord) -> None:
-                logged_messages.append(record.getMessage())
-
-        # Get the underlying logger (ContextLogger wraps a LoggerAdapter)
-        logger_adapter = fleet_sync_module.logger
-        underlying_logger = logger_adapter.logger
-        handler = TestHandler()
-        underlying_logger.addHandler(handler)
-
-        try:
+        with capture_fleet_sync_logs as logged_messages:
             args = argparse.Namespace(
                 dry_run=True,
                 skip_conflict_resolution=True,
@@ -920,32 +947,16 @@ class TestAsciiFlag:
             output = "\n".join(logged_messages)
             assert "== test-repo ==" in output, f"Expected ASCII banner in: {output}"
             assert "══" not in output, f"Unexpected Unicode banner in: {output}"
-        finally:
-            underlying_logger.removeHandler(handler)
 
     def test_process_repo_emits_unicode_banner_by_default(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capture_fleet_sync_logs
     ) -> None:
         """Default kwarg gives Unicode — backward-compat for existing callers."""
         monkeypatch.setattr(fleet_sync_module, "list_prs", lambda _repo: [])
 
         import argparse
-        import logging
 
-        # Capture logger output directly
-        logged_messages = []
-
-        class TestHandler(logging.Handler):
-            def emit(self, record: logging.LogRecord) -> None:
-                logged_messages.append(record.getMessage())
-
-        # Get the underlying logger (ContextLogger wraps a LoggerAdapter)
-        logger_adapter = fleet_sync_module.logger
-        underlying_logger = logger_adapter.logger
-        handler = TestHandler()
-        underlying_logger.addHandler(handler)
-
-        try:
+        with capture_fleet_sync_logs as logged_messages:
             args = argparse.Namespace(
                 dry_run=True,
                 skip_conflict_resolution=True,
@@ -960,5 +971,3 @@ class TestAsciiFlag:
             # Check logged messages
             output = "\n".join(logged_messages)
             assert "══ test-repo ══" in output, f"Expected Unicode banner in: {output}"
-        finally:
-            underlying_logger.removeHandler(handler)

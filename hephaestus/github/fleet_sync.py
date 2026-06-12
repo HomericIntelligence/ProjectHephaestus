@@ -868,7 +868,7 @@ def main() -> int:
         "--ascii",
         action="store_true",
         help="Use ASCII equivalents for Unicode glyphs in log output "
-             "(== for ══, * for ✓, -> for →, -- for —). "
+             "(== for ==, * for *, -> for ->, -- for --). "
              "Use this when piping stdout to ASCII-only consumers.",
     )
     add_json_arg(parser)

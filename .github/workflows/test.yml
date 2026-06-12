@@ -6,7 +6,7 @@
 #
 # macOS and Windows support is tracked separately in #539 and is currently
 # out of scope. The published wheels remain pure-Python and importable on
-# other platforms (see CONTRIBUTING.md "Platform asymmetry"), but CI does
+# other platforms (see CONTRIBUTING.md "Platform Support"), but CI does
 # not exercise them there.
 #
 # When #539 lands, expand `matrix.os` here and remove this header.

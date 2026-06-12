@@ -189,16 +189,21 @@ class TestMaxWorkersValidation:
 
     def test_automation_loop_rejects_zero_max_workers(self) -> None:
         """hephaestus-automation-loop --max-workers=0 exits non-zero with clear error."""
+        import os
+
         binary = shutil.which("hephaestus-automation-loop")
         if binary is None:
             pytest.skip("hephaestus-automation-loop not on PATH")
 
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
         result = subprocess.run(
             [binary, "--max-workers", "0"],
             capture_output=True,
             text=True,
             timeout=10,
             check=False,
+            env=env,
         )
         assert result.returncode != 0, "Expected non-zero exit for --max-workers=0"
         assert "--max-workers" in result.stderr, "Error must mention --max-workers argument"

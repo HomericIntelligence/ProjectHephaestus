@@ -194,6 +194,7 @@ class TestMaxWorkersValidation:
         binary = shutil.which("hephaestus-automation-loop")
         if binary is None:
             pytest.skip("hephaestus-automation-loop not on PATH")
+        assert binary is not None  # narrow Optional[str] for mypy
 
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)

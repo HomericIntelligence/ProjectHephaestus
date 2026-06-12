@@ -28,12 +28,17 @@ from hephaestus.nats.subscriber import NATSSubscriberThread
 
 
 class _FakeNatsTimeoutError(asyncio.TimeoutError):
-    """Stand-in for ``nats.errors.TimeoutError``.
+    """Stand-in for the inner timeout ``next_msg`` raises.
 
-    The real ``nats.errors.TimeoutError`` subclasses ``asyncio.TimeoutError``,
-    which is what ``next_msg`` raises on its own ``timeout``. Subclassing the
-    same base here proves the loop's ``except TimeoutError`` clause still
-    catches what ``next_msg`` raises after the outer wrapper was removed.
+    ``next_msg``'s timeout path is built on ``asyncio.wait_for``, which raises
+    ``asyncio.TimeoutError``; nats-py re-raises it as ``nats.errors.TimeoutError``
+    (a subclass of the *builtin* ``TimeoutError``). On Python 3.10 those two
+    bases are DISTINCT classes, so the loop must catch both. Subclassing
+    ``asyncio.TimeoutError`` here exercises the ``asyncio`` arm of that dual
+    catch; the parametrized ``test_both_timeout_aliases_are_caught`` covers the
+    builtin arm. Together they prove removing the redundant ``asyncio.wait_for``
+    wrapper (#753) did not drop timeout handling on the project's minimum
+    version.
     """
 
 
@@ -184,11 +189,14 @@ def test_next_msg_called_with_bounded_timeout() -> None:
 def test_both_timeout_aliases_are_caught(exc_type: type[BaseException]) -> None:
     """The handler catches whichever timeout alias ``next_msg`` raises.
 
-    On Python 3.11+ ``asyncio.TimeoutError`` *is* ``TimeoutError``; nats-py's
-    ``TimeoutError`` subclasses ``asyncio.TimeoutError``. A single
-    ``except TimeoutError`` therefore covers every case the removed dual-catch
-    handled — verified behaviorally so a future reflow cannot silently
-    reintroduce a redundant ``except (asyncio.TimeoutError, TimeoutError)``.
+    On Python 3.11+ ``asyncio.TimeoutError`` *is* the builtin ``TimeoutError``,
+    but on Python 3.10 (the project minimum) they are two DISTINCT classes:
+    ``asyncio.wait_for`` raises ``asyncio.TimeoutError`` while nats-py's
+    ``nats.errors.TimeoutError`` subclasses the builtin ``TimeoutError``. The
+    loop's ``except (asyncio.TimeoutError, TimeoutError)`` must therefore catch
+    both arms. Driving the real loop with each alias proves the handler swallows
+    every timeout the poll can surface across 3.10-3.13, so a future single-name
+    narrowing of the except clause is caught here rather than in production.
     """
     thread = NATSSubscriberThread(
         config=NATSConfig(enabled=True, subjects=["hi.tasks.>"]),

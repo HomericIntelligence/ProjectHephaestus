@@ -324,7 +324,15 @@ class NATSSubscriberThread(threading.Thread):
                 for sub in subscriptions:
                     try:
                         msg = await sub.next_msg(timeout=0.5)
-                    except TimeoutError:
+                    except (asyncio.TimeoutError, TimeoutError):
+                        # nats-py's next_msg raises nats.errors.TimeoutError (a
+                        # subclass of the builtin TimeoutError) on its own timeout,
+                        # but the underlying asyncio.wait_for can surface a bare
+                        # asyncio.TimeoutError too. On Python 3.10 these are TWO
+                        # DISTINCT classes (unified only in 3.11), so a single-name
+                        # except would let one alias escape and crash the poll loop
+                        # on the project's minimum version. Catch both to stay
+                        # correct across 3.10-3.13 (#753).
                         continue
 
                     try:

@@ -31,6 +31,7 @@ import logging
 import subprocess
 import threading
 from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal
 
 from hephaestus.agents.runtime import is_codex, run_codex_text

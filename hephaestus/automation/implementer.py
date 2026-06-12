@@ -36,7 +36,8 @@ with ``grep -rn 'patch.*hephaestus\.automation\.implementer\.' tests/``):
   _parse_args                     .implementer_cli          re-export (``as`` alias)
   _setup_logging                  .implementer_cli          re-export (``as`` alias)
   main                            .implementer_cli          re-export (``as`` alias)
-  subprocess.run                  ``import subprocess``     stdlib import (line 13);
+  subprocess.run                  ``import subprocess``     stdlib import (top-level
+                                                            ``import subprocess``);
                                                             patched via dotted-path
                                                             traversal at
                                                             ``…implementer.subprocess.run``
@@ -85,8 +86,8 @@ from hephaestus.agents.runtime import (
 # Why these re-exports exist:
 #   - ``implementer_phase_runner`` (the runtime call site) deliberately does
 #     NOT import these symbols directly. Instead, it dynamically looks them
-#     up via ``ImplementationPhaseRunner._impl_module`` (see
-#     ``implementer_phase_runner.py:188-199``), which returns *this* module.
+#     up via the ``ImplementationPhaseRunner._impl_module`` property (see
+#     :mod:`.implementer_phase_runner`), which returns *this* module.
 #   - That indirection means a test calling
 #     ``patch("hephaestus.automation.implementer.X", ...)`` intercepts the
 #     runtime call inside the phase runner too — without the runner needing

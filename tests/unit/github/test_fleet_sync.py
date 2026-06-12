@@ -971,3 +971,36 @@ class TestAsciiFlag:
             # Check logged messages
             output = "\n".join(logged_messages)
             assert "══ test-repo ══" in output, f"Expected Unicode banner in: {output}"
+
+    def test_ascii_flag_registered_on_production_parser(self) -> None:
+        """The real parser registers --ascii as a default-False store_true flag.
+
+        Guards against the flag being dropped from ``main`` without a test
+        failing — the behavioral tests pass ``symbols=`` directly and bypass
+        argparse entirely.
+        """
+        parser = fleet_sync_module._build_parser()
+
+        ascii_action = next((a for a in parser._actions if "--ascii" in a.option_strings), None)
+        assert ascii_action is not None, "--ascii flag is not registered on the parser"
+        assert ascii_action.default is False
+        assert ascii_action.const is True  # store_true
+
+        # Parsing without the flag yields ascii=False; with it, ascii=True.
+        assert parser.parse_args([]).ascii is False
+        assert parser.parse_args(["--ascii"]).ascii is True
+
+    def test_ascii_help_describes_glyph_swap_not_identity_mapping(self) -> None:
+        """--ascii help text describes what it replaces, not ASCII->ASCII noise.
+
+        Regression guard for the self-contradictory ``== for ==`` mapping that
+        conveyed nothing about what the flag swaps.
+        """
+        parser = fleet_sync_module._build_parser()
+        ascii_action = next(a for a in parser._actions if "--ascii" in a.option_strings)
+        help_text = ascii_action.help or ""
+
+        assert "Unicode" in help_text, "help must name what is being replaced"
+        # The garbled self-mapping must not reappear.
+        assert "== for ==" not in help_text
+        assert "* for *" not in help_text

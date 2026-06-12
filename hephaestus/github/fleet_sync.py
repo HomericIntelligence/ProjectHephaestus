@@ -843,8 +843,16 @@ def process_repo(
     return counts
 
 
-def main() -> int:
-    """Entry point for hephaestus-fleet-sync."""
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for hephaestus-fleet-sync.
+
+    Extracted from ``main`` so the production parser (including the
+    ``--ascii`` flag) can be inspected directly by unit tests.
+
+    Returns:
+        The fully configured :class:`argparse.ArgumentParser`.
+
+    """
     parser = argparse.ArgumentParser(
         description="Sync all PRs across the HomericIntelligence fleet",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -867,12 +875,20 @@ def main() -> int:
     parser.add_argument(
         "--ascii",
         action="store_true",
-        help="Use ASCII equivalents for Unicode glyphs in log output "
-             "(== for ==, * for *, -> for ->, -- for --). "
-             "Use this when piping stdout to ASCII-only consumers.",
+        help=(
+            "Use ASCII fallbacks (==, *, ->, --) instead of Unicode "
+            "box/check/arrow/dash glyphs in log output; use when piping "
+            "stdout to ASCII-only consumers."
+        ),
     )
     add_json_arg(parser)
     add_version_arg(parser)
+    return parser
+
+
+def main() -> int:
+    """Entry point for hephaestus-fleet-sync."""
+    parser = _build_parser()
     args = parser.parse_args()
     agent = resolve_agent(args.agent)
     args.agent = agent

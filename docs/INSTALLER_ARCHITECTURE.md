@@ -28,17 +28,21 @@ Both violate KISS/YAGNI for a script with no current caller pain.
 
 ### 2. The `--role` Filter
 
-A single `--role` argument (values: `all`, `worker`, `control`) is parsed once at the entry point and used by the `should_check_worker` and `should_check_control` helper functions (lines 40–41 of `install.sh`) to gate entire sections. All 12 sections obey the same filter. A per-tool split would require either:
+A single `--role` argument (values: `all`, `worker`, `control`) is parsed once at the entry point and used by the `should_check_worker` and `should_check_control` helper functions (lines 53–54 of `install.sh`) to gate entire sections. All 12 sections obey the same filter. A per-tool split would require either:
 - Replicating role-gating logic in each child, or
 - Threading role state through a dispatcher
 
 ### 3. The Unified Trailing Summary
 
-The final summary block (`install.sh:730–751`) aggregates results from **all sections** to produce a single outcome report. Splitting would require coordinating summary output across N processes, or building a state-collection mechanism at the dispatcher level.
+The final summary block (`install.sh:968–988`) aggregates results from **all sections** to produce a single outcome report. Splitting would require coordinating summary output across N processes, or building a state-collection mechanism at the dispatcher level.
 
 ## What the Script Is *Not*
 
-Although the source guard at `install.sh:46–48` permits sourcing the script, **no callers currently source it**. This guard is defensive infrastructure with no actual consumer. Verified 2026-06-05 via:
+The entry-point guard at `install.sh:136–138` returns early when the script is
+sourced rather than executed (its inline comment anticipates Odysseus phase
+scripts as the intended sourcing consumer). **No caller within this repository
+currently sources it**, so the guard is defensive infrastructure with no
+in-repo consumer today. Verified 2026-06-05 via:
 
 ```bash
 grep -rn "source.*install\.sh\|\. .*install\.sh\|source.*scripts/shell/install" \
@@ -46,7 +50,7 @@ grep -rn "source.*install\.sh\|\. .*install\.sh\|source.*scripts/shell/install" 
 # Result: zero hits (except install_helpers inclusion within install.sh itself)
 ```
 
-The source guard must **not** be cited as a reason to preserve the monolith. The three verified pillars above are the load-bearing justifications.
+The entry-point guard must **not** be cited as a reason to preserve the monolith. The three verified pillars above are the load-bearing justifications.
 
 ## Triggers That Would Justify Revisiting This Decision
 

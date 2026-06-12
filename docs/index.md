@@ -45,6 +45,7 @@ See the [README](../README.md) for installation and development setup instructio
 
 - [Plugin Installation Guide](plugin-installation.md) — Install the Claude Code or Codex plugin and enable skills in your project
 - [Audit Reviewer](audit-reviewer.md) — `hephaestus-audit-prs`: coordinator-pattern auditor for ALL open PRs (issue #994)
+- [Architecture Design Document](architecture/DESIGN_DOC.md) — Comprehensive design reference covering structure, automation, tooling, and design decisions
 
 ## Contributing
 

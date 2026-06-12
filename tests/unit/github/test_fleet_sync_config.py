@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from hephaestus.github.fleet_sync import resolve_fleet_config
@@ -28,9 +30,7 @@ class TestResolveFleetConfig:
         cfg.write_text("org: FromFile\nrepos: [a, b]\n")
         monkeypatch.setenv("FLEET_ORG", "FromEnv")
         monkeypatch.setenv("FLEET_REPOS", "x,y")
-        org, repos = resolve_fleet_config(
-            cli_org=None, cli_repos=None, config_path=str(cfg)
-        )
+        org, repos = resolve_fleet_config(cli_org=None, cli_repos=None, config_path=str(cfg))
         assert org == "FromEnv"
         assert repos == ["x", "y"]
 
@@ -40,9 +40,7 @@ class TestResolveFleetConfig:
         monkeypatch.delenv("FLEET_REPOS", raising=False)
         cfg = tmp_path / ".fleet.yml"
         cfg.write_text("org: FromFile\nrepos: [a, b]\n")
-        org, repos = resolve_fleet_config(
-            cli_org=None, cli_repos=None, config_path=str(cfg)
-        )
+        org, repos = resolve_fleet_config(cli_org=None, cli_repos=None, config_path=str(cfg))
         assert org == "FromFile"
         assert repos == ["a", "b"]
 
@@ -69,7 +67,8 @@ class TestResolveFleetConfig:
         monkeypatch.setenv("FLEET_ORG", "Org")
         monkeypatch.setenv("FLEET_REPOS", "r1, r2 ,r3")
         _, repos = resolve_fleet_config(
-            cli_org=None, cli_repos=None,
+            cli_org=None,
+            cli_repos=None,
             config_path=str(tmp_path / "nonexistent.yml"),
         )
         assert repos == ["r1", "r2", "r3"]
@@ -79,7 +78,8 @@ class TestResolveFleetConfig:
         monkeypatch.setenv("FLEET_ORG", "Org")
         monkeypatch.setenv("FLEET_REPOS", "123,456")
         _, repos = resolve_fleet_config(
-            cli_org=None, cli_repos=None,
+            cli_org=None,
+            cli_repos=None,
             config_path=str(tmp_path / "nonexistent.yml"),
         )
         assert repos == ["123", "456"]
@@ -91,7 +91,8 @@ class TestResolveFleetConfig:
         monkeypatch.setenv("FLEET_REPOS", " , , ")
         with pytest.raises(RuntimeError, match="FLEET_REPOS"):
             resolve_fleet_config(
-                cli_org=None, cli_repos=None,
+                cli_org=None,
+                cli_repos=None,
                 config_path=str(tmp_path / "nope.yml"),
             )
 
@@ -100,7 +101,8 @@ class TestResolveFleetConfig:
         monkeypatch.setenv("FLEET_ORG", "Org")
         monkeypatch.setenv("FLEET_REPOS", "r1")
         org, repos = resolve_fleet_config(
-            cli_org=None, cli_repos=None,
+            cli_org=None,
+            cli_repos=None,
             config_path=str(tmp_path / "nope.yml"),
         )
         assert org == "Org"
@@ -110,16 +112,21 @@ class TestResolveFleetConfig:
         """When config_path is None, searches ./.fleet.yml then repo-root."""
         monkeypatch.delenv("FLEET_ORG", raising=False)
         monkeypatch.delenv("FLEET_REPOS", raising=False)
-        # In an arbitrary tmp_path with no local .fleet.yml, _find_default_config()
-        # will still find the bundled repo-root .fleet.yml (because __file__ is in the module).
-        # This test verifies that behavior.
+        # Create a temporary .fleet.yml in tmp_path
+        cfg = tmp_path / ".fleet.yml"
+        cfg.write_text("org: DiscoveredOrg\nrepos: [repo1, repo2]\n")
         monkeypatch.chdir(tmp_path)
-        org, repos = resolve_fleet_config(cli_org=None, cli_repos=None, config_path=None)
-        # Should find the bundled .fleet.yml at repo root — verify structural properties
-        assert org is not None  # Config was successfully discovered and loaded
-        assert isinstance(org, str)
-        assert len(repos) > 0  # At least one repo configured
-        assert all(isinstance(r, str) for r in repos)
+
+        # Mock _find_default_config to return the tmp_path config file
+        # This isolates the test from the development environment and makes it portable
+        # to installed packages where the bundled .fleet.yml won't exist
+        with patch("hephaestus.github.fleet_sync._find_default_config") as mock_find:
+            mock_find.return_value = cfg
+            org, repos = resolve_fleet_config(cli_org=None, cli_repos=None, config_path=None)
+
+        # Verify the mocked config was loaded
+        assert org == "DiscoveredOrg"
+        assert repos == ["repo1", "repo2"]
 
     def test_config_path_none_finds_cwd_file(self, monkeypatch, tmp_path) -> None:
         """config_path=None finds .fleet.yml in CWD if it exists."""

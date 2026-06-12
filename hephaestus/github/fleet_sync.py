@@ -209,26 +209,19 @@ def get_resign_exec() -> str:
 
 
 def _parse_env_repos(env_repos_raw: str | None) -> list[str] | None:
-    """Parse comma-separated FLEET_REPOS and validate non-empty.
+    """Parse comma-separated FLEET_REPOS, returning None if empty after splitting.
 
     Args:
         env_repos_raw: Raw FLEET_REPOS value from environment
 
     Returns:
-        List of repo names with whitespace trimmed, or None if input is None
-
-    Raises:
-        RuntimeError: If repos are set but all empty after trimming
+        List of repo names with whitespace trimmed, or None if input is None or empty after split
 
     """
     if env_repos_raw is None:
         return None
     env_repos = [r.strip() for r in env_repos_raw.split(",") if r.strip()]
-    if not env_repos:
-        raise RuntimeError(
-            "FLEET_REPOS is set but contains no valid repos after splitting on commas"
-        )
-    return env_repos
+    return env_repos if env_repos else None
 
 
 def _find_default_config() -> Path | None:
@@ -271,7 +264,9 @@ def _load_fleet_config(config_path: str | None) -> tuple[str | None, list[str] |
                 file_repos_raw = cfg.get("repos")
                 if isinstance(file_repos_raw, list):
                     file_repos = file_repos_raw
-            except (FileNotFoundError, ValueError) as e:
+            except FileNotFoundError as e:
+                raise RuntimeError(f"Failed to load fleet config from {config_path}: {e}") from e
+            except ValueError as e:
                 raise RuntimeError(f"Failed to load fleet config from {config_path}: {e}") from e
 
     return file_org, file_repos
@@ -285,7 +280,7 @@ def resolve_fleet_config(
     """Resolve fleet organization and repo list with layered config sources.
 
     Resolution order (highest to lowest priority):
-    1. CLI flags (cli_org, cli_repos)
+    1. CLI flags (cli_org, cli_repos) — applied per-key, partial CLI args merge
     2. Environment variables (FLEET_ORG, FLEET_REPOS)
     3. Config file (.fleet.yml at config_path, or auto-discovered)
 
@@ -301,29 +296,20 @@ def resolve_fleet_config(
         RuntimeError: If org or repos cannot be resolved from any source
 
     """
-    # Step 1: Try CLI flags
-    if cli_org is not None and cli_repos is not None:
-        return cli_org, cli_repos
-
-    # Step 2: Try environment variables (as strings, bypassing merge_with_env type coercion)
+    # Step 1: Load environment variables (as strings, bypassing merge_with_env type coercion)
     env_org = os.environ.get("FLEET_ORG", "").strip()
     env_repos_raw = os.environ.get("FLEET_REPOS")
+    env_repos = _parse_env_repos(env_repos_raw) if env_repos_raw is not None else None
 
-    if env_org and env_repos_raw is not None:
-        env_repos = _parse_env_repos(env_repos_raw)
-        return env_org, env_repos
-
-    # Step 3: Try config file
+    # Step 2: Load config file
     file_org, file_repos = _load_fleet_config(config_path)
 
-    # Merge results with fallback to environment or file values
+    # Step 3: Merge per-key with CLI taking precedence, then env, then file
     final_org = cli_org or env_org or file_org
     if not final_org:
-        raise RuntimeError(
-            "no fleet org configured. Set --org, FLEET_ORG, or org: in .fleet.yml"
-        )
+        raise RuntimeError("no fleet org configured. Set --org, FLEET_ORG, or org: in .fleet.yml")
 
-    final_repos = cli_repos or _parse_env_repos(env_repos_raw) or file_repos
+    final_repos = cli_repos or env_repos or file_repos
 
     if not final_repos:
         raise RuntimeError(

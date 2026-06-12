@@ -73,10 +73,7 @@ def _gh_list_org_repos(org: str, *, timeout: int = 60) -> list[str]:
     except json.JSONDecodeError as exc:
         raise SystemExit(f"gh repo list returned invalid JSON: {exc}") from exc
     return sorted(
-        e["name"]
-        for e in entries
-        if not e.get("isArchived", False)
-        and not e.get("isFork", False)
+        e["name"] for e in entries if not e.get("isArchived", False) and not e.get("isFork", False)
     )
 
 

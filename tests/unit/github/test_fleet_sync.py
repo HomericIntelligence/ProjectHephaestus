@@ -332,7 +332,7 @@ class TestMain:
         """main() with --json emits ok envelope when no failures occur."""
         from hephaestus.github import fleet_sync
 
-        def fake_process(repo, args, clone_dir):
+        def fake_process(repo, args, clone_dir, *, symbols=None):
             return {
                 "merged": 1,
                 "rebased": 0,
@@ -356,7 +356,7 @@ class TestMain:
         """main() with failures returns 1 and JSON envelope shows error."""
         from hephaestus.github import fleet_sync
 
-        def fake_process(repo, args, clone_dir):
+        def fake_process(repo, args, clone_dir, *, symbols=None):
             return {
                 "merged": 0,
                 "rebased": 0,
@@ -381,7 +381,7 @@ class TestMain:
 
         calls = []
 
-        def fake_process(repo, args, clone_dir):
+        def fake_process(repo, args, clone_dir, *, symbols=None):
             calls.append(repo)
             return {
                 "merged": 0,
@@ -857,3 +857,108 @@ class TestListPrsAuthorScope:
         prs = fleet_sync_module.list_prs("RepoA")
 
         assert [p.number for p in prs] == [1]
+
+
+class TestAsciiFlag:
+    """--ascii swaps Unicode glyphs in log output for portable ASCII."""
+
+    def test_symbols_dataclass_is_frozen(self) -> None:
+        """Symbols instances are frozen to prevent accidental mutation."""
+        from dataclasses import FrozenInstanceError
+
+        with pytest.raises(FrozenInstanceError):
+            fleet_sync_module.ASCII_SYMBOLS.check = "X"
+
+    def test_presets_have_expected_glyphs(self) -> None:
+        """Unicode and ASCII symbol presets have the correct glyphs."""
+        assert fleet_sync_module.UNICODE_SYMBOLS.check == "✓"
+        assert fleet_sync_module.UNICODE_SYMBOLS.banner == "══"
+        assert fleet_sync_module.UNICODE_SYMBOLS.arrow == "→"
+        assert fleet_sync_module.UNICODE_SYMBOLS.dash == "—"
+        assert fleet_sync_module.ASCII_SYMBOLS.check == "*"
+        assert fleet_sync_module.ASCII_SYMBOLS.banner == "=="
+        assert fleet_sync_module.ASCII_SYMBOLS.arrow == "->"
+        assert fleet_sync_module.ASCII_SYMBOLS.dash == "--"
+
+    def test_process_repo_emits_ascii_banner_when_ascii_symbols_passed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """process_repo logs ASCII banner under ASCII_SYMBOLS — no module state."""
+        monkeypatch.setattr(fleet_sync_module, "list_prs", lambda _repo: [])
+
+        import argparse
+        import logging
+
+        # Capture logger output directly
+        logged_messages = []
+
+        class TestHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                logged_messages.append(record.getMessage())
+
+        # Get the underlying logger (ContextLogger wraps a LoggerAdapter)
+        logger_adapter = fleet_sync_module.logger
+        underlying_logger = logger_adapter.logger
+        handler = TestHandler()
+        underlying_logger.addHandler(handler)
+
+        try:
+            args = argparse.Namespace(
+                dry_run=True,
+                skip_conflict_resolution=True,
+                agent="claude",
+                json=False,
+                verbose=False,
+                ascii=True,
+            )
+
+            fleet_sync_module.process_repo(
+                "test-repo", args, tmp_path, symbols=fleet_sync_module.ASCII_SYMBOLS
+            )
+
+            # Check logged messages
+            output = "\n".join(logged_messages)
+            assert "== test-repo ==" in output, f"Expected ASCII banner in: {output}"
+            assert "══" not in output, f"Unexpected Unicode banner in: {output}"
+        finally:
+            underlying_logger.removeHandler(handler)
+
+    def test_process_repo_emits_unicode_banner_by_default(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Default kwarg gives Unicode — backward-compat for existing callers."""
+        monkeypatch.setattr(fleet_sync_module, "list_prs", lambda _repo: [])
+
+        import argparse
+        import logging
+
+        # Capture logger output directly
+        logged_messages = []
+
+        class TestHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                logged_messages.append(record.getMessage())
+
+        # Get the underlying logger (ContextLogger wraps a LoggerAdapter)
+        logger_adapter = fleet_sync_module.logger
+        underlying_logger = logger_adapter.logger
+        handler = TestHandler()
+        underlying_logger.addHandler(handler)
+
+        try:
+            args = argparse.Namespace(
+                dry_run=True,
+                skip_conflict_resolution=True,
+                agent="claude",
+                json=False,
+                verbose=False,
+                ascii=False,
+            )
+
+            fleet_sync_module.process_repo("test-repo", args, tmp_path)
+
+            # Check logged messages
+            output = "\n".join(logged_messages)
+            assert "══ test-repo ══" in output, f"Expected Unicode banner in: {output}"
+        finally:
+            underlying_logger.removeHandler(handler)

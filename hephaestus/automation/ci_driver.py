@@ -131,6 +131,11 @@ class CIDriver:
         # arming record (and therefore its own /learn capture once the PR
         # actually merges in a subsequent run). #840 +on top of #834.
         self.shared_pr_issues: dict[int, list[int]] = {}
+        # Viewer login cache (#821). Resolved lazily on first use of the
+        # author filter; empty string means "not yet resolved". When
+        # options.include_all_authors=True the filter is bypassed and this
+        # stays empty so a broken `gh auth` does not block --all runs.
+        self._viewer_login: str = ""
 
     def run(self) -> dict[int, WorkerResult]:  # noqa: C901  # thread pool + finally + preserve report
         """Run the CI driver on all configured issues.
@@ -331,8 +336,12 @@ class CIDriver:
 
         # The REST shape exposes ``head.ref`` and ``auto_merge`` (snake_case);
         # normalise to the gh-CLI shape consumers downstream already use.
+        viewer = "" if self.options.include_all_authors else self._resolve_viewer_login()
         normalised: list[dict[str, Any]] = []
         for pr in raw_pulls:
+            user = pr.get("user") or {}
+            if viewer and user.get("login") != viewer:
+                continue  # #821: hide other-author PRs from the done-gate sweep
             labels = pr.get("labels") or []
             normalised.append(
                 {
@@ -343,7 +352,7 @@ class CIDriver:
                     "labels": [
                         label.get("name", "") for label in labels if isinstance(label, dict)
                     ],
-                    "isBot": (pr.get("user") or {}).get("type") == "Bot",
+                    "isBot": user.get("type") == "Bot",
                 }
             )
         return normalised
@@ -384,6 +393,33 @@ class CIDriver:
         # Re-list so the final gate sees the freshly-armed PRs as armed_pending
         # rather than needs_action.
         return self._list_open_prs_remaining()
+
+    def _resolve_viewer_login(self) -> str:
+        """Return the authenticated `gh api user` login. Fail CLOSED on error.
+
+        Lazy + cached: only called when the author filter is active. Raises
+        ``RuntimeError`` with operator guidance on any failure so a broken
+        `gh` auth never silently widens scope to all PRs (#821 POLA).
+        """
+        if self._viewer_login:
+            return self._viewer_login
+        try:
+            result = _gh_call(["api", "user", "-q", ".login"], check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+            raise RuntimeError(
+                "Could not resolve viewer login via `gh api user`: "
+                f"{exc}. Re-authenticate with `gh auth login`, or pass "
+                "--all to opt out of the @me filter (#821)."
+            ) from exc
+        login = (result.stdout or "").strip()
+        if not login:
+            raise RuntimeError(
+                "Could not resolve viewer login via `gh api user`: "
+                "empty response. Re-authenticate with `gh auth login`, "
+                "or pass --all to opt out of the @me filter (#821)."
+            )
+        self._viewer_login = login
+        return login
 
     def _discover_bot_prs(self) -> dict[int, int]:
         """Enumerate every open ``is_bot=true`` PR on the repo (#848).
@@ -431,11 +467,14 @@ class CIDriver:
             logger.info("Bot-PR discovery skipped: gh api failed (%s)", exc)
             return {}
 
+        viewer = "" if self.options.include_all_authors else self._resolve_viewer_login()
         bot_prs: dict[int, int] = {}
         for pr in raw_pulls:
             user = pr.get("user") or {}
             if user.get("type") != "Bot":
                 continue
+            if viewer and user.get("login") != viewer:
+                continue  # #821: not viewer-owned and --all not set
             number = pr.get("number")
             if isinstance(number, int):
                 bot_prs[number] = number
@@ -3092,6 +3131,9 @@ Examples:
 
   # Verbose
   %(prog)s -v
+
+  # Drive every open PR, including teammates' and bots' (default is @me only)
+  %(prog)s --all
         """,
     )
 
@@ -3153,6 +3195,19 @@ Examples:
             "unions every open is_bot=true PR with the issue-driven list so "
             "Dependabot PRs are not architecturally invisible (#848). Pass "
             "this flag only when you explicitly want issue-driven scope."
+        ),
+    )
+    parser.add_argument(
+        "--all",
+        dest="include_all_authors",
+        action="store_true",
+        default=False,
+        help=(
+            "Include PRs opened by other actors (teammates, bots). Without "
+            "this flag, only PRs authored by the authenticated viewer "
+            "(`gh api user`) are driven (#821). NOTE: when scoped to issues "
+            "(--issues N), the resolved PR is processed regardless of "
+            "author — issue-scoped takes precedence."
         ),
     )
     parser.add_argument(
@@ -3267,6 +3322,7 @@ def main() -> int:
             enable_ui=not args.no_ui and not args.json,
             verbose=args.verbose,
             include_bot_prs=args.include_bot_prs,
+            include_all_authors=args.include_all_authors,
             enable_mechanical_rebase=args.enable_mechanical_rebase,
         )
 

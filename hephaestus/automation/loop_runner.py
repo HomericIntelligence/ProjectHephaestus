@@ -266,6 +266,7 @@ class LoopConfig:
     dry_run: bool = False
     no_advise: bool = False
     nitpick: bool = False
+    drive_green_all: bool = False
     allow_unsafe_phase_order: bool = False
     # ``model`` is the catch-all applied to every phase when set; per-phase
     # fields below take precedence over it. The /learn step is not a separate
@@ -374,6 +375,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--nitpick",
         action="store_true",
         help="Pass --nitpick to review phases (reviewer emits nitpick comments)",
+    )
+    p.add_argument(
+        "--drive-green-all",
+        action="store_true",
+        help=(
+            "Pass --all to the drive-green phase: drive every open PR, "
+            "including those opened by teammates and bots. By default "
+            "drive-green operates only on PRs authored by the authenticated "
+            "viewer (#821)."
+        ),
     )
     p.add_argument(
         "--allow-unsafe-phase-order",
@@ -997,6 +1008,9 @@ def _build_phase_argv(
     if isinstance(threshold, int) and loop_idx >= threshold:
         argv.append("--no-follow-up")
 
+    if phase == "drive-green" and cfg.drive_green_all:
+        argv.append("--all")
+
     return argv
 
 
@@ -1500,6 +1514,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         dry_run=args.dry_run,
         no_advise=args.no_advise,
         nitpick=args.nitpick,
+        drive_green_all=args.drive_green_all,
         allow_unsafe_phase_order=args.allow_unsafe_phase_order,
         model=args.model,
         planner_model=args.planner_model,

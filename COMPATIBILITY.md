@@ -118,6 +118,7 @@ bypass a misfiring hook locally use
 | `hephaestus-merge-prs` | Provisional | Wrapper around `gh pr merge` |
 | `hephaestus-fleet-sync` | Provisional | Fleet-wide repo sync helper |
 | `hephaestus-tidy` | Provisional | Local-branch rebase + cleanup helper |
+| `hephaestus-label-severity` | Provisional | Reconciles `severity:*` label from issue-form Severity answer |
 | `hephaestus-system-info` | Provisional | Dispatches to Stable `hephaestus.system` but CLI flags still evolving |
 | `hephaestus-download-dataset` | Provisional | Dataset URL/layout not contracted |
 | `hephaestus-check-python-version` | Internal | Repo CI pre-commit hook |
@@ -272,6 +273,7 @@ bypass a misfiring hook locally use
 | `hephaestus-merge-prs` | Provisional | Wrapper around `gh pr merge` |
 | `hephaestus-fleet-sync` | Provisional | Fleet-wide repo sync helper |
 | `hephaestus-tidy` | Provisional | Local-branch rebase + cleanup helper |
+| `hephaestus-label-severity` | Provisional | Reconciles `severity:*` label from issue-form Severity answer |
 | `hephaestus-system-info` | Provisional | Dispatches to Stable `hephaestus.system` but CLI flags still evolving |
 | `hephaestus-download-dataset` | Provisional | Dataset URL/layout not contracted |
 | `hephaestus-check-python-version` | Internal | Repo CI pre-commit hook |

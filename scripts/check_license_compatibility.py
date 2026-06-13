@@ -62,7 +62,7 @@ ALLOWED_EXTRA_COPYLEFT: dict[str, frozenset[str]] = {
 # test suite cross-checks both keys and values against NOTICE and against real
 # installed metadata when the dep is actually installable.
 STATIC_FALLBACK_LICENSES: dict[str, list[str]] = {
-    "tomli": ["MIT"],          # python_version < '3.11'; NOTICE:58
+    "tomli": ["MIT"],  # python_version < '3.11'; NOTICE:58
     "tzdata": ["Apache-2.0"],  # platform_system == 'Windows'; NOTICE:28
 }
 

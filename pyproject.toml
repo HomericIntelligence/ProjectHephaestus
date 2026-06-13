@@ -241,7 +241,7 @@ omit = [
     "*/__init__.py",
     # Full orchestration loops require a live claude/gh CLI — integration test territory.
     # Pure-function helpers in these modules are tested in tests/unit/automation/ instead.
-    # The allowlist of these 12 modules is frozen in tests/unit/validation/test_omit_allowlist.py
+    # The allowlist of these 16 modules is frozen in tests/unit/validation/test_omit_allowlist.py
     # to prevent silent growth of the omit list, and their importability is guarded by
     # tests/integration/test_orchestration_smoke.py.
     "hephaestus/automation/implementer.py",
@@ -262,6 +262,15 @@ omit = [
     "hephaestus/automation/pr_reviewer.py",
     # audit_reviewer.py drives a live agent coordinator session; integration-only
     "hephaestus/automation/audit_reviewer.py",
+    # Collaborators extracted from CIDriver (#1179) — same live-session reasoning:
+    # pr_discovery.py shells out to gh CLI for PR enumeration; integration-only
+    "hephaestus/automation/pr_discovery.py",
+    # ci_check_inspector.py shells out to gh CLI for CI check queries; integration-only
+    "hephaestus/automation/ci_check_inspector.py",
+    # ci_fix_orchestrator.py drives live claude/codex sessions; integration-only
+    "hephaestus/automation/ci_fix_orchestrator.py",
+    # post_merge_processor.py drives live claude/codex sessions; integration-only
+    "hephaestus/automation/post_merge_processor.py",
 ]
 
 [tool.coverage.report]

@@ -61,9 +61,14 @@ SELF_AGENT_PHASES: list[tuple[str, str, tuple[str, ...]]] = [
             "_review_phase.py",
         ),
     ),
-    # ci_driver owns Session 3 (AGENT_CI_DRIVER): its fix sessions and its
-    # post-green learnings run on a transcript independent of the implementer.
-    ("ci_driver.py", "AGENT_CI_DRIVER", ()),
+    # ci_driver owns Session 3 (AGENT_CI_DRIVER): extracted collaborators
+    # ci_fix_orchestrator and post_merge_processor now hold the live import;
+    # ci_driver.py is the orchestrating entry point (refs #1179).
+    (
+        "ci_driver.py",
+        "AGENT_CI_DRIVER",
+        ("ci_fix_orchestrator.py", "post_merge_processor.py"),
+    ),
 ]
 
 

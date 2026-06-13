@@ -169,7 +169,12 @@ def build_prompt(
     # -- Planning stages ----------------------------------------------------
 
     if stage == "plan-review":
-        plan_text = _extract_plan_from_issue_data(issue_data) or "(no plan found)"
+        plan_text = (
+            _extract_plan_from_issue_data(issue_data)
+            or issue_body
+            or issue_title
+            or "(no plan found)"
+        )
         return get_plan_review_prompt(
             issue_number=issue_number,
             issue_title=issue_title,
@@ -178,7 +183,12 @@ def build_prompt(
         )
 
     if stage == "plan-loop-review":
-        plan_text = _extract_plan_from_issue_data(issue_data) or "(no plan found)"
+        plan_text = (
+            _extract_plan_from_issue_data(issue_data)
+            or issue_body
+            or issue_title
+            or "(no plan found)"
+        )
         return get_plan_loop_review_prompt(
             issue_number=issue_number,
             issue_title=issue_title,

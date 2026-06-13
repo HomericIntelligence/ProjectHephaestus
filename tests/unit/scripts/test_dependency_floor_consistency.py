@@ -408,7 +408,7 @@ class TestPipPinning:
     """
 
     def test_pip_has_floor_and_cap(self, repo_root: Path) -> None:
-        """pip spec must be parseable by both _floor() and _upper_cap()."""
+        """Pip spec must be parseable by both _floor() and _upper_cap()."""
         pixi_path = repo_root / "pixi.toml"
         with open(pixi_path, "rb") as f:
             pixi = tomllib.load(f)
@@ -422,7 +422,7 @@ class TestPipPinning:
         _upper_cap(spec)
 
     def test_pip_floor_is_at_least_23(self, repo_root: Path) -> None:
-        """pip floor must be >= 23.0 for stable PEP 660 editable-install support."""
+        """Pip floor must be >= 23.0 for stable PEP 660 editable-install support."""
         pixi_path = repo_root / "pixi.toml"
         with open(pixi_path, "rb") as f:
             pixi = tomllib.load(f)
@@ -434,7 +434,7 @@ class TestPipPinning:
         )
 
     def test_pip_cap_blocks_next_major_only(self, repo_root: Path) -> None:
-        """pip cap must be exactly one major ahead of the installed 26.x series.
+        """Pip cap must be exactly one major ahead of the installed 26.x series.
 
         Asserts Version("26") < cap <= Version("27") so the test rejects both
         a downgrade cap (<= 26) and a permissive cap (>= 28) that would admit

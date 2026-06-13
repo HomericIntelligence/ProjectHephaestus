@@ -81,7 +81,7 @@ class TestParsing:
             "| `hephaestus-bar` | Provisional | Another |\n"
             "\n## Next Section\n"
         )
-        tiers, _ = load_documented_tiers(md)
+        tiers, _, _ = load_documented_tiers(md)
         assert tiers == {"hephaestus-foo": "Stable", "hephaestus-bar": "Provisional"}
 
     def test_load_tiers_stops_at_next_section(self, tmp_path: Path) -> None:
@@ -94,13 +94,13 @@ class TestParsing:
             "## Other Section\n"
             "| `hephaestus-bar` | Internal | y |\n"  # NOT in scope
         )
-        tiers, _ = load_documented_tiers(md)
+        tiers, _, _ = load_documented_tiers(md)
         assert tiers == {"hephaestus-foo": "Stable"}
 
     def test_load_tiers_missing_section_returns_empty(self, tmp_path: Path) -> None:
         md = tmp_path / "COMPATIBILITY.md"
         md.write_text("# Just a doc\nNo section here.\n")
-        tiers, _ = load_documented_tiers(md)
+        tiers, _, _ = load_documented_tiers(md)
         assert tiers == {}
 
 
@@ -129,7 +129,7 @@ class TestDuplicateDetection:
             "| `hephaestus-foo` | Internal | contradictory second |\n"
             "## Next\n"
         )
-        tiers, occ = load_documented_tiers(md)
+        tiers, occ, _ = load_documented_tiers(md)
         assert occ == {"hephaestus-foo": ["Stable", "Internal"]}
         assert tiers == {"hephaestus-foo": "Internal"}  # flattened: last-write-wins
         assert find_duplicate_tiers(occ)[0].kind == "conflicting-tier"
@@ -139,6 +139,80 @@ class TestDuplicateDetection:
         dups = find_duplicate_tiers({"hephaestus-foo": ["Stable", "Internal"]})
         v = find_violations({"hephaestus-foo": "x:y"}, {"hephaestus-foo": "Internal"}, dups)
         assert any(f.kind == "conflicting-tier" for f in v)
+
+
+class TestCrossSectionDetection:
+    """Tests for cross-section duplicate detection (issue #1257)."""
+
+    def test_two_tier_sections_same_cli_conflict_flagged(self, tmp_path: Path) -> None:
+        """Concrete repro from issue #1257: two sections, contradictory tiers."""
+        md = tmp_path / "COMPATIBILITY.md"
+        md.write_text(
+            "## Console-Script Stability Tiers\n"
+            "| CLI | Tier |\n"
+            "|-----|------|\n"
+            "| `hephaestus-foo` | Stable |\n"
+            "\n## Public API\n\n"
+            "Some text.\n\n"
+            "## Console-Script Stability Tiers\n"
+            "| CLI | Tier |\n"
+            "|-----|------|\n"
+            "| `hephaestus-foo` | Internal |\n"
+        )
+        tiers, occ, section_count = load_documented_tiers(md)
+        assert occ == {"hephaestus-foo": ["Stable", "Internal"]}
+        assert section_count == 2
+        findings = find_duplicate_tiers(occ)
+        assert any(f.kind == "conflicting-tier" for f in findings)
+
+    def test_section_count_one_for_normal_doc(self, tmp_path: Path) -> None:
+        md = tmp_path / "COMPATIBILITY.md"
+        md.write_text(
+            "## Console-Script Stability Tiers\n"
+            "| CLI | Tier |\n"
+            "|-----|------|\n"
+            "| `hephaestus-foo` | Stable |\n"
+        )
+        _, _, section_count = load_documented_tiers(md)
+        assert section_count == 1
+
+    def test_duplicate_section_finding_emitted_by_main(self, tmp_path: Path) -> None:
+        """main() emits duplicate-section when COMPATIBILITY.md has two tier sections."""
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text(
+            '[project]\nname = "test"\n\n'
+            '[project.scripts]\nhephaestus-foo = "pkg:main"\n'
+        )
+        md = tmp_path / "COMPATIBILITY.md"
+        md.write_text(
+            "## Console-Script Stability Tiers\n"
+            "| CLI | Tier |\n"
+            "|-----|------|\n"
+            "| `hephaestus-foo` | Stable |\n"
+            "\n## Other\n\n"
+            "## Console-Script Stability Tiers\n"
+            "| CLI | Tier |\n"
+            "|-----|------|\n"
+            "| `hephaestus-foo` | Stable |\n"
+        )
+        result = main(["--repo-root", str(tmp_path)])
+        assert result == 1  # non-zero exit due to duplicate-section
+
+    def test_non_tier_h2_still_ends_section(self, tmp_path: Path) -> None:
+        """Existing contract: rows under ## Other Section are NOT parsed."""
+        md = tmp_path / "COMPATIBILITY.md"
+        md.write_text(
+            "## Console-Script Stability Tiers\n"
+            "| CLI | Tier |\n"
+            "|-----|------|\n"
+            "| `hephaestus-foo` | Stable |\n"
+            "## Other Section\n"
+            "| `hephaestus-bar` | Internal |\n"
+        )
+        tiers, occ, section_count = load_documented_tiers(md)
+        assert tiers == {"hephaestus-foo": "Stable"}
+        assert "hephaestus-bar" not in occ
+        assert section_count == 1
 
 
 class TestRealRepo:

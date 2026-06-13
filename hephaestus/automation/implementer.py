@@ -18,8 +18,8 @@ top-level comment block for the full list).  Only two patch paths still target
   get_repo_root     direct import + ``as``   Used by ``IssueImplementer.__init__``
                     alias (mypy re-export)   and ``main``; patched in every test that
                                              constructs an ``IssueImplementer``.
-  subprocess.run    stdlib ``import          Patched at the dotted path
-                    subprocess`` (line 13)   ``…implementer.subprocess.run`` via
+  subprocess.run    stdlib top-level         Patched at the dotted path
+                    ``import subprocess``    ``…implementer.subprocess.run`` via
                                              Python's standard attribute-traversal
                                              during ``patch()``.
 

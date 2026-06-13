@@ -14,6 +14,7 @@ from hephaestus.automation.pr_discovery import PRDiscovery
 
 @pytest.fixture()
 def discovery() -> PRDiscovery:
+    """Return a PRDiscovery wired with test doubles."""
     options_mock = MagicMock()
     options_mock.include_all_authors = False
     return PRDiscovery(
@@ -24,6 +25,8 @@ def discovery() -> PRDiscovery:
 
 
 class TestResolveViewerLogin:
+    """Tests for PRDiscovery.resolve_viewer_login."""
+
     def test_caches_login_on_success(self, discovery: PRDiscovery) -> None:
         discovery._viewer_login = ""
         with patch(
@@ -65,6 +68,8 @@ class TestResolveViewerLogin:
 
 
 class TestIsBotPrMode:
+    """Tests for PRDiscovery.is_bot_pr_mode."""
+
     def test_equal_numbers_returns_true(self, discovery: PRDiscovery) -> None:
         assert discovery.is_bot_pr_mode(42, 42) is True
 
@@ -76,6 +81,8 @@ class TestIsBotPrMode:
 
 
 class TestDiscoverBotPrs:
+    """Tests for PRDiscovery.discover_bot_prs."""
+
     def test_returns_bot_prs_keyed_by_pr_number(self, discovery: PRDiscovery) -> None:
         pulls: list[dict[str, Any]] = [
             {"number": 10, "user": {"type": "Bot", "login": "depbot"}},
@@ -114,6 +121,8 @@ class TestDiscoverBotPrs:
 
 
 class TestDiscoverFailingPrs:
+    """Tests for PRDiscovery.discover_failing_prs."""
+
     def test_returns_matching_prs(self, discovery: PRDiscovery) -> None:
         pulls = [
             {

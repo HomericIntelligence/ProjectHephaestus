@@ -14,6 +14,7 @@ from hephaestus.automation.ci_check_inspector import (
 
 @pytest.fixture()
 def inspector() -> CICheckInspector:
+    """Return a CICheckInspector wired with test doubles."""
     return CICheckInspector(
         get_pr_branch=lambda pr: f"branch-{pr}",
         options_provider=lambda: MagicMock(dry_run=False),
@@ -21,6 +22,8 @@ def inspector() -> CICheckInspector:
 
 
 class TestFailingCheckConclusions:
+    """Tests for the FAILING_CHECK_CONCLUSIONS constant."""
+
     def test_contains_expected_values(self) -> None:
         assert "FAILURE" in FAILING_CHECK_CONCLUSIONS
         assert "CANCELLED" in FAILING_CHECK_CONCLUSIONS
@@ -35,6 +38,8 @@ class TestFailingCheckConclusions:
 
 
 class TestFailingRequiredCheckNames:
+    """Tests for CICheckInspector.failing_required_check_names."""
+
     def test_returns_required_failing_check_names(self, inspector: CICheckInspector) -> None:
         # gh_pr_checks returns dicts with lowercase "conclusion" and "required" key
         checks = [
@@ -62,6 +67,8 @@ class TestFailingRequiredCheckNames:
 
 
 class TestPendingRequiredCheckNames:
+    """Tests for CICheckInspector.pending_required_check_names."""
+
     def test_returns_pending_required_checks(self, inspector: CICheckInspector) -> None:
         checks = [
             {"name": "slow-ci", "conclusion": None, "status": "in_progress", "required": True},

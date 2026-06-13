@@ -32,6 +32,8 @@ def _make_processor(tmp_path: Path) -> tuple[PostMergeProcessor, dict[int, dict[
 
 
 class TestMarkDriveGreenLearnResult:
+    """Tests for PostMergeProcessor.mark_drive_green_learn_result."""
+
     def test_succeeded_writes_succeeded_status(self, tmp_path: Path) -> None:
         processor, _ = _make_processor(tmp_path)
         record: dict[str, Any] = {}

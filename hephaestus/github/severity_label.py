@@ -95,12 +95,16 @@ def apply_severity_label(repo: str, issue_number: int, selected: str | None) -> 
         selected: A value from :data:`VALID_SEVERITIES`, or ``None`` to clear.
 
     """
-    current = _gh(
-        "api",
-        f"repos/{repo}/issues/{issue_number}/labels",
-        "--jq",
-        ".[].name",
-    ).split()
+    current = [
+        name
+        for name in _gh(
+            "api",
+            f"repos/{repo}/issues/{issue_number}/labels",
+            "--jq",
+            ".[].name",
+        ).splitlines()
+        if name
+    ]
     target = f"severity:{selected}" if selected else None
     # Remove any stale severity:* label (reconciliation, not just add).
     for name in current:

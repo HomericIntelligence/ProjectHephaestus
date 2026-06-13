@@ -1,39 +1,60 @@
-"""Lock the BaseReviewer test-seam contract (see issues #806, #710)."""
+"""Verify BaseReviewer constructor-injection contract (issues #710, #1194)."""
 
 from __future__ import annotations
 
-import pytest
+import inspect
+from pathlib import Path
+from unittest.mock import MagicMock
 
-from hephaestus.automation import _reviewer_base, address_review, pr_reviewer
+from hephaestus.automation import _reviewer_base
 
 
-@pytest.mark.parametrize("subclass_module", [pr_reviewer, address_review])
-@pytest.mark.parametrize(
-    "name", ["get_repo_root", "WorktreeManager", "StatusTracker", "ThreadLogManager"]
-)
-def test_subclass_module_reexports_patchable_dependency(subclass_module, name):
-    """Each concrete reviewer subclass must re-export every patchable dep."""
-    assert hasattr(subclass_module, name), (
-        f"{subclass_module.__name__} must re-export {name!r} for the "
-        f"BaseReviewer test-seam contract (issue #710)."
+def _make_options(max_workers: int = 2) -> object:
+    opts = MagicMock()
+    opts.max_workers = max_workers
+    return opts
+
+
+def _make_deps(tmp_path: Path) -> dict:
+    return dict(
+        get_repo_root=lambda: tmp_path,
+        worktree_manager_factory=MagicMock(return_value=MagicMock()),
+        status_tracker_factory=MagicMock(return_value=MagicMock()),
+        log_manager_factory=MagicMock(return_value=MagicMock()),
     )
 
 
-def test_patchable_dependencies_tuple_is_single_source_of_truth():
-    """The class-level tuple is the documented contract — do not drift."""
-    assert _reviewer_base.BaseReviewer._PATCHABLE_DEPENDENCIES == (
-        "get_repo_root",
-        "WorktreeManager",
-        "StatusTracker",
-        "ThreadLogManager",
-    )
+class ConcreteReviewer(_reviewer_base.BaseReviewer):
+    pass
 
 
-def test_missing_reexport_raises_actionable_typeerror():
-    """A third subclass that forgets the contract gets a pointed error."""
+def test_injection_wires_repo_root(tmp_path: Path) -> None:
+    deps = _make_deps(tmp_path)
+    r = ConcreteReviewer(_make_options(), **deps)
+    assert r.repo_root == tmp_path
 
-    class BogusSubclass(_reviewer_base.BaseReviewer):
-        pass
 
-    with pytest.raises(TypeError, match="test-seam contract"):
-        BogusSubclass(options=object())
+def test_injection_calls_factories(tmp_path: Path) -> None:
+    deps = _make_deps(tmp_path)
+    r = ConcreteReviewer(_make_options(max_workers=3), **deps)
+    deps["worktree_manager_factory"].assert_called_once_with()
+    deps["status_tracker_factory"].assert_called_once_with(3)
+    deps["log_manager_factory"].assert_called_once_with()
+
+
+def test_injected_instances_attached(tmp_path: Path) -> None:
+    deps = _make_deps(tmp_path)
+    r = ConcreteReviewer(_make_options(), **deps)
+    assert r.worktree_manager is deps["worktree_manager_factory"].return_value
+    assert r.status_tracker is deps["status_tracker_factory"].return_value
+    assert r.log_manager is deps["log_manager_factory"].return_value
+
+
+def test_subclass_modules_no_longer_need_reexports() -> None:
+    """The importlib monkeypatch contract is gone — no _PATCHABLE_DEPENDENCIES."""
+    assert not hasattr(_reviewer_base.BaseReviewer, "_PATCHABLE_DEPENDENCIES")
+
+
+def test_no_importlib_in_base() -> None:
+    src = inspect.getsource(_reviewer_base.BaseReviewer)
+    assert "importlib" not in src

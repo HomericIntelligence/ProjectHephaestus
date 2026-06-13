@@ -2,14 +2,13 @@
 
 import importlib.metadata as md
 import json
-import re
 import sys
+import tomllib
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-from hephaestus.io.toml import import_tomllib
+from packaging.requirements import Requirement
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
@@ -194,24 +193,14 @@ class TestAllExtraCompleteness:
     """Coverage depends on `[all]` aggregating every runtime extra (Finding 3)."""
 
     def test_all_extra_covers_runtime_extras(self):
-        # Parse pyproject.toml properly rather than regex-scraping it: a hand-rolled
-        # pattern breaks the moment `[all]` is reformatted (multi-line array, a
-        # comment, or the dist-name placement shifts). tomllib gives the structured
-        # value; we then pull the extras out of the single aggregate requirement,
-        # e.g. "HomericIntelligence-Hephaestus[automation,github,nats,toml,xml,schema]".
-        tomllib = import_tomllib()
-        if tomllib is None:
-            pytest.skip("tomllib/tomli not available to parse pyproject.toml")
-            return  # unreachable (pytest.skip raises); narrows tomllib for mypy
-        with (_REPO_ROOT / "pyproject.toml").open("rb") as fh:
-            pyproject = tomllib.load(fh)
-        all_specs = pyproject["project"]["optional-dependencies"]["all"]
-        m = re.search(r"\[([^\]]+)\]", " ".join(all_specs))
-        assert m, (
-            "could not find the bracketed extras aggregate in the `all` extra "
-            f"{all_specs!r} of pyproject.toml"
-        )
-        aggregated = {e.strip() for e in m.group(1).split(",")}
+        data = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
+        optional = data["project"]["optional-dependencies"]
+        all_specs = optional["all"]  # list[str], e.g. ["HomericIntelligence-Hephaestus[automation,github,nats,toml,xml,schema]"]
+        # Union the extras from every spec in `all` using the PEP 508 parser —
+        # formatting-immune and handles multi-line arrays, comments, and name shifts.
+        aggregated: set[str] = set()
+        for spec in all_specs:
+            aggregated |= Requirement(spec).extras
         # Every runtime extra except the self-referential `all` must be aggregated.
         for extra in RUNTIME_EXTRAS - {"all"}:
             assert extra in aggregated, (

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -70,6 +71,9 @@ class CIFixOrchestrator:
     - ``_format_review_threads_block_fn``: ``(pr_number) -> str``
     - ``_failing_required_check_names_fn``: ``(pr_number) -> list[str]``
     - ``_tracked_worktree_changes_fn``: ``(worktree_path, issue_number) -> list[str]``
+    - ``_get_failing_ci_logs_fn``: ``(pr_number) -> str`` — canonical impl lives in
+      :class:`~hephaestus.automation.ci_check_inspector.CICheckInspector`; wired by
+      CIDriver so a single code path handles all CI-log queries.
 
     """
 
@@ -100,6 +104,11 @@ class CIFixOrchestrator:
         self._format_review_threads_block_fn: Any = None
         self._failing_required_check_names_fn: Any = None
         self._tracked_worktree_changes_fn: Any = None
+        self._get_failing_ci_logs_fn: Any = None
+
+    def _get_failing_ci_logs(self, pr_number: int) -> str:
+        """Delegate to _get_failing_ci_logs_fn; preserved as a patch.object target."""
+        return self._get_failing_ci_logs_fn(pr_number)  # type: ignore[no-any-return]
 
     # ------------------------------------------------------------------
     # Mechanical rebase
@@ -284,8 +293,6 @@ class CIFixOrchestrator:
                 acquired_slot,
                 f"{issue_ref(issue_number)}: awaiting post-fix CI ({elapsed}s)",
             )
-            import time
-
             time.sleep(sleep_secs)
             elapsed += sleep_secs
             attempt += 1
@@ -458,53 +465,6 @@ class CIFixOrchestrator:
             logger.warning("Issue #%s: CI fix attempt %s failed", issue_number, iteration + 1)
 
         return None
-
-    # ------------------------------------------------------------------
-    # CI log fetching (mirrored from CICheckInspector for use in sessions)
-    # ------------------------------------------------------------------
-
-    def _get_failing_ci_logs(self, pr_number: int) -> str:
-        """Fetch combined failure logs for recent failed CI runs on a PR."""
-        try:
-            branch = self._get_pr_branch_fn(pr_number)
-            result2 = _gh_call(
-                [
-                    "run",
-                    "list",
-                    "--branch",
-                    branch,
-                    "--status",
-                    "failure",
-                    "--limit",
-                    "10",
-                    "--json",
-                    "databaseId,conclusion,name,headSha",
-                ],
-                check=False,
-            )
-            runs: list[dict[str, Any]] = json.loads(result2.stdout or "[]")
-            failed_runs = [r for r in runs if r.get("conclusion") == "failure"][:3]
-
-            logs: list[str] = []
-            for run_info in failed_runs:
-                run_id = run_info.get("databaseId")
-                run_name = run_info.get("name", str(run_id))
-                if not run_id:
-                    continue
-                try:
-                    log_result = _gh_call(
-                        ["run", "view", str(run_id), "--log-failed"],
-                        check=False,
-                    )
-                    logs.append(f"=== {run_name} ===\n{log_result.stdout[:3000]}")
-                except Exception as log_err:
-                    logger.debug("Could not fetch log for run %s: %s", run_id, log_err)
-
-            return "\n\n".join(logs)[:10000]
-
-        except Exception as e:
-            logger.warning("Could not fetch CI logs for PR #%s: %s", pr_number, e)
-            return ""
 
     # ------------------------------------------------------------------
     # Session-id loading

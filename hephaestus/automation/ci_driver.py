@@ -134,9 +134,7 @@ class CIDriver:
             load_arming_state=self._load_arming_state,
             clear_arming_state=self._clear_arming_state,
             learn_record_terminal=self._learn_record_terminal,
-        )
-        self._post_merge._shared_pr_issues_getter = lambda pr_number: self.shared_pr_issues.get(
-            pr_number, []
+            shared_pr_issues_getter=lambda pr_number: self.shared_pr_issues.get(pr_number, []),
         )
 
         self._ci_check = CICheckInspector(
@@ -174,6 +172,9 @@ class CIDriver:
         self._ci_fix._format_review_threads_block_fn = self._format_review_threads_block
         self._ci_fix._failing_required_check_names_fn = self._failing_required_check_names
         self._ci_fix._tracked_worktree_changes_fn = self._tracked_worktree_changes
+        self._ci_fix._get_failing_ci_logs_fn = lambda *a, **kw: self._ci_check._get_failing_ci_logs(
+            *a, **kw
+        )
 
     def __setattr__(self, name: str, value: object) -> None:
         """Propagate state_dir changes to collaborators so tests can override it."""

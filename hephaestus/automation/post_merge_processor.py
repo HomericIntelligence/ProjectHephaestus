@@ -68,6 +68,8 @@ class PostMergeProcessor:
         load_arming_state: Callable ``(issue_number) -> dict | None``.
         clear_arming_state: Callable ``(issue_number) -> None``.
         learn_record_terminal: Callable ``(record) -> bool``.
+        shared_pr_issues_getter: Callable ``(pr_number) -> list[int]`` that returns
+            the list of issue numbers sharing the same PR.
 
     """
 
@@ -81,8 +83,9 @@ class PostMergeProcessor:
         load_arming_state: Any,  # Callable[[int], dict | None]
         clear_arming_state: Any,  # Callable[[int], None]
         learn_record_terminal: Any,  # Callable[[dict], bool]
+        shared_pr_issues_getter: Any,  # Callable[[int], list[int]]
     ) -> None:
-        """Initialize the processor; wire shared_pr_issues_getter slot after construction."""
+        """Initialize the processor with all required provider callables."""
         self.options = options
         self.repo_root = repo_root
         self._get_worktree_path = get_worktree_path
@@ -90,6 +93,7 @@ class PostMergeProcessor:
         self._load_arming_state = load_arming_state
         self._clear_arming_state = clear_arming_state
         self._learn_record_terminal = learn_record_terminal
+        self._shared_pr_issues_getter = shared_pr_issues_getter
 
         # Mutable evidence slot — populated by _run_drive_green_learnings.
         self._last_drive_green_learn_evidence: dict[str, Any] = mnemosyne_update_evidence("")
@@ -209,12 +213,6 @@ class PostMergeProcessor:
                 pr_head_branch,
                 pr_head_sha[:8] if pr_head_sha else "?",
             )
-
-    # Wired by CIDriver after construction so _arm_drive_green can query siblings
-    # without holding a reference to shared_pr_issues itself.
-    def _shared_pr_issues_getter(self, pr_number: int) -> list[int]:
-        """Raise until CIDriver wires this slot after construction."""
-        raise NotImplementedError("_shared_pr_issues_getter not wired")
 
     # ------------------------------------------------------------------
     # Learn-result stamping

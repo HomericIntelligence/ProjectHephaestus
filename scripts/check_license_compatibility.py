@@ -15,6 +15,9 @@ FAILS LOUDLY (never silently passes):
     -> coverage hole -> exit 2. CI installs `.[all]` on a setup-python runner first.
   * a license string not in the mapping tables -> exit (PR:1 / main:0) with a
     hint to extend TROVE_TO_SPDX / LICENSE_ALIASES.
+  * a markered-out dep (installable_now=False) with no entry in
+    STATIC_FALLBACK_LICENSES -> exit 2. Add the package + SPDX id from NOTICE,
+    then update the cross-check tests in tests/unit/scripts/.
 
 Stdlib only (importlib.metadata + packaging, both already runtime deps); runs
 under plain `python3` once the package + extras are pip-installed.
@@ -50,6 +53,17 @@ PERMISSIVE: frozenset[str] = frozenset({"MIT", "BSD-2-Clause", "BSD-3-Clause", "
 ALLOWED_EXTRA_COPYLEFT: dict[str, frozenset[str]] = {
     "pygithub": frozenset({"LGPL-3.0", "LGPL-3.0-only", "LGPL-3.0-or-later", "LGPL"}),
     "defusedxml": frozenset({"PSF-2.0", "Python-2.0"}),
+}
+
+# Static license fallback for deps whose markers exclude the current interpreter
+# or platform. These are never installed in this CI leg (Python 3.13 / Linux)
+# so importlib.metadata cannot reach them. Values are SPDX IDs taken from NOTICE
+# (the authoritative human-readable analysis). Keep in sync with NOTICE — the
+# test suite cross-checks both keys and values against NOTICE and against real
+# installed metadata when the dep is actually installable.
+STATIC_FALLBACK_LICENSES: dict[str, list[str]] = {
+    "tomli": ["MIT"],          # python_version < '3.11'; NOTICE:58
+    "tzdata": ["Apache-2.0"],  # platform_system == 'Windows'; NOTICE:28
 }
 
 TROVE_TO_SPDX: dict[str, str] = {
@@ -263,13 +277,22 @@ def scan(records: dict[str, dict] | None = None) -> list[tuple[str, list[str]]]:
                     file=sys.stderr,
                 )
                 sys.exit(2)
+            fallback = STATIC_FALLBACK_LICENSES.get(pkg)
+            if fallback is None:
+                print(
+                    f"FATAL: {pkg!r} is distributed (marker holds on another "
+                    "Python/platform) but not installed here and has no entry "
+                    "in STATIC_FALLBACK_LICENSES. Add it with its SPDX license "
+                    "from NOTICE, then update the cross-check tests.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
             print(
-                f"note: skipping {pkg!r} — distributed only under another "
-                "Python/platform (marker excludes this interpreter); it is "
-                "classified on the matching CI matrix row.",
+                f"note: {pkg!r} excluded by marker in this env; "
+                f"classifying via static fallback from NOTICE: {fallback}",
                 file=sys.stderr,
             )
-            continue
+            ids = fallback
         if not is_compatible(pkg, ids):
             violations.append((pkg, ids))
     return violations

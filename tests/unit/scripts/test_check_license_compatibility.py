@@ -17,6 +17,7 @@ from check_license_compatibility import (
     ALLOWED_EXTRA_COPYLEFT,
     DIST_NAME,
     RUNTIME_EXTRAS,
+    STATIC_FALLBACK_LICENSES,
     _FixtureMeta,
     distributed_requirements,
     is_compatible,
@@ -139,9 +140,9 @@ class TestLoudFailure:
                     scan(None)
         assert exc.value.code == 2
 
-    def test_uninstalled_other_python_dep_skipped_not_failed(self):
-        # installable_now=False (marker excludes this interpreter, e.g. tomli on
-        # Python >= 3.11) => correctly absent => skipped, not a coverage hole.
+    def test_uninstalled_other_python_dep_with_fallback_classifies_not_fails(self):
+        # installable_now=False + known static fallback => classified compatible,
+        # not a coverage hole. tomli's fallback is MIT.
         with patch(
             "check_license_compatibility.distributed_requirements",
             return_value=[("tomli", False)],
@@ -257,3 +258,100 @@ class TestMain:
     def test_allowlist_covers_notice_extras(self):
         assert "pygithub" in ALLOWED_EXTRA_COPYLEFT
         assert "defusedxml" in ALLOWED_EXTRA_COPYLEFT
+
+
+class TestStaticFallback:
+    """STATIC_FALLBACK_LICENSES classifies marker-excluded deps instead of skipping.
+
+    Staleness mitigations:
+    - test_static_values_match_installed_metadata: cross-checks against real
+      importlib.metadata when the dep IS installable (catches license drift).
+    - test_static_values_match_notice: cross-checks against NOTICE (the
+      authoritative human-readable analysis per the script's own docstring).
+    """
+
+    def test_tomli_fallback_classifies_as_compatible(self):
+        # tomli: python_version < '3.11' marker; installable_now=False on Python 3.13.
+        with patch(
+            "check_license_compatibility.distributed_requirements",
+            return_value=[("tomli", False)],
+        ):
+            with patch(
+                "check_license_compatibility.md.metadata",
+                side_effect=md.PackageNotFoundError("tomli"),
+            ):
+                assert scan(None) == []
+
+    def test_tzdata_fallback_classifies_as_compatible(self):
+        # tzdata: platform_system == 'Windows' marker; installable_now=False on Linux.
+        with patch(
+            "check_license_compatibility.distributed_requirements",
+            return_value=[("tzdata", False)],
+        ):
+            with patch(
+                "check_license_compatibility.md.metadata",
+                side_effect=md.PackageNotFoundError("tzdata"),
+            ):
+                assert scan(None) == []
+
+    def test_unknown_markered_dep_exits_nonzero(self):
+        # A future marker-excluded dep with no static fallback must exit(2).
+        with patch(
+            "check_license_compatibility.distributed_requirements",
+            return_value=[("future-windows-only-dep", False)],
+        ):
+            with patch(
+                "check_license_compatibility.md.metadata",
+                side_effect=md.PackageNotFoundError("future-windows-only-dep"),
+            ):
+                with pytest.raises(SystemExit) as exc:
+                    scan(None)
+        assert exc.value.code == 2
+
+    def test_static_fallback_covers_all_markered_out_distributed_deps(self):
+        # Every dep that distributed_requirements() marks installable_now=False
+        # must be in STATIC_FALLBACK_LICENSES (presence check).
+        try:
+            reqs = distributed_requirements(None)
+        except (md.PackageNotFoundError, SystemExit):
+            pytest.skip("HomericIntelligence-Hephaestus not installed in this env")
+            return
+        markered_out = [name for name, installable_now in reqs if not installable_now]
+        for pkg in markered_out:
+            assert pkg in STATIC_FALLBACK_LICENSES, (
+                f"{pkg!r} is distributed but installable_now=False AND missing from "
+                "STATIC_FALLBACK_LICENSES — add it with its SPDX license from NOTICE."
+            )
+
+    @pytest.mark.parametrize("pkg", list(STATIC_FALLBACK_LICENSES))
+    def test_static_values_match_installed_metadata(self, pkg: str) -> None:
+        # Staleness mitigation: when the dep IS installed (e.g. tomli on Python 3.10,
+        # tzdata on Windows), the static value must match real importlib.metadata.
+        # On Python 3.13/Linux these deps are absent — skip, not fail.
+        try:
+            real_ids = set(resolve_license(md.metadata(pkg)))
+        except md.PackageNotFoundError:
+            pytest.skip(f"{pkg!r} not installed in this env (marker excludes it)")
+            return
+        static_ids = set(STATIC_FALLBACK_LICENSES[pkg])
+        assert static_ids & real_ids, (
+            f"STATIC_FALLBACK_LICENSES[{pkg!r}]={STATIC_FALLBACK_LICENSES[pkg]} "
+            f"shares no SPDX ids with real metadata {sorted(real_ids)} — "
+            "update the static map from NOTICE."
+        )
+
+    def test_static_values_match_notice(self) -> None:
+        # Staleness mitigation: every key/value in STATIC_FALLBACK_LICENSES must
+        # appear in NOTICE (the authoritative human-readable analysis). This runs
+        # on every Python/platform and catches drift without needing the dep installed.
+        notice_text = (_REPO_ROOT / "NOTICE").read_text()
+        for pkg, spdx_ids in STATIC_FALLBACK_LICENSES.items():
+            assert pkg in notice_text.lower(), (
+                f"{pkg!r} is in STATIC_FALLBACK_LICENSES but not mentioned in NOTICE — "
+                "NOTICE is the authoritative source; add the dep there first."
+            )
+            for spdx_id in spdx_ids:
+                assert spdx_id in notice_text, (
+                    f"STATIC_FALLBACK_LICENSES[{pkg!r}] = {spdx_ids!r} but SPDX id "
+                    f"{spdx_id!r} not found in NOTICE — update one to match the other."
+                )

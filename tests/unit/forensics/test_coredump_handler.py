@@ -367,6 +367,27 @@ class TestVerifyCrashBundle:
         verdict, _ = verify_crash_bundle(tmp_path)
         assert verdict == BUNDLE_RAN_WITH_ERRORS
 
+    def test_error_line_with_embedded_wrote_substring_is_not_ok(self, tmp_path: Path) -> None:
+        """An ERROR line whose path embeds the literal ' wrote ' must not be OK.
+
+        The exe basename (%e) can contain spaces, so a failure path like
+        ``/cores/x wrote y`` must not be misclassified as a successful capture.
+        The classifier anchors on the message starting with ``wrote ``, so an
+        ``ERROR:`` message is correctly RAN_WITH_ERRORS.
+        """
+        from hephaestus.forensics.coredump_handler import (
+            BUNDLE_RAN_WITH_ERRORS,
+            verify_crash_bundle,
+        )
+
+        (tmp_path / "handler.log").write_text(
+            "2026-06-12T00:00:00+00:00 ERROR: failed to write core to "
+            "/x/core.1.evil wrote me.0.sig11 (disk full)\n",
+            encoding="utf-8",
+        )
+        verdict, _ = verify_crash_bundle(tmp_path)
+        assert verdict == BUNDLE_RAN_WITH_ERRORS
+
 
 class TestMainVerify:
     """CLI --verify mode (issue #1207)."""

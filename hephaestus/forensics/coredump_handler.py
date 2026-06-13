@@ -208,7 +208,14 @@ def verify_crash_bundle(log_dir: Path) -> tuple[str, str]:
 
     # A `wrote ` line is the authoritative success signal; a successful capture
     # may also carry a chmod/max-bytes WARNING, so `wrote ` wins over WARNING.
-    if any(" wrote " in ln or ln.startswith("wrote ") for ln in lines):
+    # Each kept line is "<iso-timestamp> <message>"; split off the timestamp and
+    # check that the message portion starts with "wrote " so that an ERROR: line
+    # whose path happens to contain the substring " wrote " is not misclassified.
+    def _message_is_wrote(ln: str) -> bool:
+        parts = ln.split(maxsplit=1)
+        return len(parts) == 2 and parts[1].startswith("wrote ")
+
+    if any(_message_is_wrote(ln) for ln in lines):
         return BUNDLE_OK, f"{log_path} records a successful capture"
     return BUNDLE_RAN_WITH_ERRORS, (
         f"{log_path} records handler activity but no successful capture "

@@ -288,12 +288,12 @@ class TestMissingUserLogin:
         self, viewer_driver: CIDriver, caplog: pytest.LogCaptureFixture
     ) -> None:
         with (
-            patch("hephaestus.automation.ci_driver.get_repo_info", return_value=("o", "r")),
+            patch("hephaestus.automation.pr_discovery.get_repo_info", return_value=("o", "r")),
             patch(
-                "hephaestus.automation.ci_driver._gh_call",
+                "hephaestus.automation.pr_discovery._gh_call",
                 return_value=MagicMock(stdout=json.dumps(_MISSING_LOGIN_BOT_PULLS)),
             ),
-            caplog.at_level(logging.WARNING, logger="hephaestus.automation.ci_driver"),
+            caplog.at_level(logging.WARNING, logger="hephaestus.automation.pr_discovery"),
         ):
             result = viewer_driver._discover_bot_prs()
 

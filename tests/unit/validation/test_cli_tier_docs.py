@@ -159,7 +159,7 @@ class TestCrossSectionDetection:
             "|-----|------|\n"
             "| `hephaestus-foo` | Internal |\n"
         )
-        tiers, occ, section_count = load_documented_tiers(md)
+        _tiers, occ, section_count = load_documented_tiers(md)
         assert occ == {"hephaestus-foo": ["Stable", "Internal"]}
         assert section_count == 2
         findings = find_duplicate_tiers(occ)
@@ -180,8 +180,7 @@ class TestCrossSectionDetection:
         """main() emits duplicate-section when COMPATIBILITY.md has two tier sections."""
         pyproject = tmp_path / "pyproject.toml"
         pyproject.write_text(
-            '[project]\nname = "test"\n\n'
-            '[project.scripts]\nhephaestus-foo = "pkg:main"\n'
+            '[project]\nname = "test"\n\n[project.scripts]\nhephaestus-foo = "pkg:main"\n'
         )
         md = tmp_path / "COMPATIBILITY.md"
         md.write_text(

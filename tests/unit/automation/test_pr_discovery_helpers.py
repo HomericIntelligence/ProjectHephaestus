@@ -20,7 +20,7 @@ def discovery() -> PRDiscovery:
     return PRDiscovery(
         options_provider=lambda: options_mock,
         status_tracker_provider=MagicMock,
-        repo_root_provider=lambda: MagicMock(),
+        repo_root_provider=MagicMock(side_effect=MagicMock),
     )
 
 

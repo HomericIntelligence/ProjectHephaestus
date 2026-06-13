@@ -29,4 +29,3 @@ def _reset_circuit_breakers_for_automation_tests() -> None:
     rate-limit retries.
     """
     reset_all_circuit_breakers()
-

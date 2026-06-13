@@ -368,8 +368,7 @@ class TestExtractClassifiersPythonVersions:
 
     def test_deduplicates_versions(self) -> None:
         content = (
-            '"Programming Language :: Python :: 3.10",\n'
-            '"Programming Language :: Python :: 3.10",\n'
+            '"Programming Language :: Python :: 3.10",\n"Programming Language :: Python :: 3.10",\n'
         )
         assert extract_classifiers_python_versions(content) == ["3.10"]
 
@@ -386,9 +385,11 @@ class TestExtractCiMatrixPythonVersions:
     """Tests for extract_ci_matrix_python_versions()."""
 
     def test_extracts_quoted_versions(self) -> None:
-        assert extract_ci_matrix_python_versions(
-            'python-version: ["3.10", "3.11", "3.12"]\n'
-        ) == ["3.10", "3.11", "3.12"]
+        assert extract_ci_matrix_python_versions('python-version: ["3.10", "3.11", "3.12"]\n') == [
+            "3.10",
+            "3.11",
+            "3.12",
+        ]
 
     def test_extracts_unquoted_versions(self) -> None:
         assert extract_ci_matrix_python_versions("python-version: [3.10, 3.11]\n") == [
@@ -454,8 +455,7 @@ class TestCheckCiMatrixCoverage:
 
     def test_returns_true_when_matrix_covers_all(self, tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").write_text(
-            '"Programming Language :: Python :: 3.10",\n'
-            '"Programming Language :: Python :: 3.11",\n'
+            '"Programming Language :: Python :: 3.10",\n"Programming Language :: Python :: 3.11",\n'
         )
         workflow_dir = tmp_path / ".github" / "workflows"
         workflow_dir.mkdir(parents=True)
@@ -464,8 +464,7 @@ class TestCheckCiMatrixCoverage:
 
     def test_returns_false_when_matrix_missing_version(self, tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").write_text(
-            '"Programming Language :: Python :: 3.10",\n'
-            '"Programming Language :: Python :: 3.12",\n'
+            '"Programming Language :: Python :: 3.10",\n"Programming Language :: Python :: 3.12",\n'
         )
         workflow_dir = tmp_path / ".github" / "workflows"
         workflow_dir.mkdir(parents=True)

@@ -524,10 +524,7 @@ def main() -> int:
     pixi_ceiling_ok = check_pixi_python_ceiling(repo_root)
 
     all_ok = (
-        (consistent or not versions)
-        and project_version_ok
-        and ci_matrix_ok
-        and pixi_ceiling_ok
+        (consistent or not versions) and project_version_ok and ci_matrix_ok and pixi_ceiling_ok
     )
 
     if args.json:

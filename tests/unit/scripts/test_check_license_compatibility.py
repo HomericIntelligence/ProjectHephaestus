@@ -350,8 +350,10 @@ class TestStaticFallback:
                 f"{pkg!r} is in STATIC_FALLBACK_LICENSES but not mentioned in NOTICE — "
                 "NOTICE is the authoritative source; add the dep there first."
             )
+            pkg_lines = [line for line in notice_text.splitlines() if pkg.lower() in line.lower()]
             for spdx_id in spdx_ids:
-                assert spdx_id in notice_text, (
+                assert any(spdx_id in line for line in pkg_lines), (
                     f"STATIC_FALLBACK_LICENSES[{pkg!r}] = {spdx_ids!r} but SPDX id "
-                    f"{spdx_id!r} not found in NOTICE — update one to match the other."
+                    f"{spdx_id!r} not found on any NOTICE line mentioning {pkg!r} — "
+                    "update one to match the other."
                 )

@@ -875,6 +875,7 @@ class TestDryRunWithFailingChecks:
         checks = [_make_check("test", required=True, conclusion="failure")]
         with (
             patch.object(dry_driver, "_find_pr_for_issue", return_value=42),
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=checks),
             patch.object(dry_driver, "_get_failing_ci_logs", return_value="log"),
             patch.object(dry_driver, "_load_impl_session_id", return_value=None),
@@ -898,7 +899,10 @@ class TestNoCiChecks:
 
     def test_no_checks_returns_success(self, driver: CIDriver) -> None:
         """No CI checks for PR → returns WorkerResult(success=True)."""
-        with patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=[]):
+        with (
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=[]),
+            patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=[]),
+        ):
             result = driver._drive_issue(123, 456, 0)
 
         assert result.success is True
@@ -971,6 +975,7 @@ class TestEnableAutoMerge:
         """
         checks = [_make_check("test", required=True)]
         with (
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=checks),
             _impl_go(driver),
             patch.object(driver, "_enable_auto_merge", return_value=False),
@@ -1008,6 +1013,7 @@ class TestDriveGreenLearnings:
         # set it up directly with a single-issue PR.
         driver.shared_pr_issues = {456: [123]}
         with (
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=checks),
             _impl_go(driver),
             patch.object(driver, "_enable_auto_merge", return_value=True),
@@ -1414,7 +1420,8 @@ class TestCIPollLoop:
 
         monkeypatch.setenv("HEPH_CI_POLL_MAX_WAIT", "3600")
         with (
-            patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", side_effect=side_effect),
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", side_effect=side_effect),
+            patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=[completed_check]),
             patch("hephaestus.automation.ci_driver.time.sleep"),
             _impl_go(driver),
             patch.object(driver, "_enable_auto_merge", return_value=True),
@@ -1434,6 +1441,7 @@ class TestCIPollLoop:
 
         monkeypatch.setenv("HEPH_CI_POLL_MAX_WAIT", "0")
         with (
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=[pending_check]),
             patch(
                 "hephaestus.automation.ci_check_inspector.gh_pr_checks",
                 return_value=[pending_check],
@@ -2662,6 +2670,7 @@ class TestRecheckAndArmAfterFix:
     def test_green_after_fix_arms_and_waits(self, driver: CIDriver) -> None:
         green = [_make_check("test", required=True, conclusion="success")]
         with (
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=green),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=green),
             _impl_go(driver),
             patch.object(driver, "_enable_auto_merge", return_value=True) as mock_arm,
@@ -2684,6 +2693,7 @@ class TestRecheckAndArmAfterFix:
         monkeypatch.setenv("HEPH_CI_POLL_MAX_WAIT", "0")
         pending = [_make_check("test", status="in_progress", conclusion="", required=True)]
         with (
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=pending),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=pending),
             patch("hephaestus.automation.ci_driver.time.sleep"),
             patch.object(driver, "_enable_auto_merge") as mock_arm,
@@ -2694,6 +2704,7 @@ class TestRecheckAndArmAfterFix:
     def test_still_red_after_fix_returns_none(self, driver: CIDriver) -> None:
         red = [_make_check("test", required=True, conclusion="failure")]
         with (
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=red),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=red),
             patch.object(driver, "_enable_auto_merge") as mock_arm,
         ):

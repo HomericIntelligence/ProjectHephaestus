@@ -18,7 +18,7 @@ def discovery() -> PRDiscovery:
     options_mock.include_all_authors = False
     return PRDiscovery(
         options_provider=lambda: options_mock,
-        status_tracker_provider=lambda: MagicMock(),
+        status_tracker_provider=MagicMock,
         repo_root_provider=lambda: MagicMock(),
     )
 

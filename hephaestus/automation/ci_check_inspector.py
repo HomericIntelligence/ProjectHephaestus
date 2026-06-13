@@ -6,11 +6,12 @@ CI check state for a given PR.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from typing import Any
 
-from .github_api import gh_pr_checks
+from .github_api import _gh_call, gh_pr_checks
 
 logger = logging.getLogger(__name__)
 
@@ -124,10 +125,6 @@ class CICheckInspector:
             Combined log string, truncated to 10 000 characters.
 
         """
-        import json
-
-        from .github_api import _gh_call
-
         try:
             branch = self._get_pr_branch(pr_number)
             result2 = _gh_call(

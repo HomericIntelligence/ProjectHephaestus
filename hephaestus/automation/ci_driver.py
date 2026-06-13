@@ -135,7 +135,7 @@ class CIDriver:
             repo_root_provider=lambda: self.repo_root,
         )
         self._check_inspector = CICheckInspector(
-            get_pr_branch=lambda *a, **k: self._get_pr_branch(*a, **k),
+            get_pr_branch=self._get_pr_branch,
             options_provider=lambda: self.options,
         )
         self._fix_orchestrator = CIFixOrchestrator(
@@ -143,21 +143,19 @@ class CIDriver:
             repo_root_provider=lambda: self.repo_root,
             state_dir_provider=lambda: self.state_dir,
             status_tracker_provider=lambda: self.status_tracker,
-            format_review_threads_block=lambda *a, **k: self._format_review_threads_block(*a, **k),
-            head_advanced=lambda *a, **k: self._head_advanced(*a, **k),
-            ci_fix_head_is_pushable=lambda *a, **k: self._ci_fix_head_is_pushable(*a, **k),
-            tracked_worktree_changes=lambda *a, **k: self._tracked_worktree_changes(*a, **k),
-            failing_required_check_names=lambda *a, **k: (
-                self._check_inspector.failing_required_check_names(*a, **k)
-            ),
-            get_pr_branch=lambda *a, **k: self._get_pr_branch(*a, **k),
+            format_review_threads_block=self._format_review_threads_block,
+            head_advanced=self._head_advanced,
+            ci_fix_head_is_pushable=self._ci_fix_head_is_pushable,
+            tracked_worktree_changes=self._tracked_worktree_changes,
+            failing_required_check_names=self._check_inspector.failing_required_check_names,
+            get_pr_branch=self._get_pr_branch,
         )
         self._post_merge = PostMergeProcessor(
             options_provider=lambda: self.options,
             repo_root_provider=lambda: self.repo_root,
-            get_worktree_path=lambda *a, **k: self._get_worktree_path(*a, **k),
-            load_arming_state=lambda *a, **k: self._load_arming_state(*a, **k),
-            save_arming_state=lambda *a, **k: self._save_arming_state(*a, **k),
+            get_worktree_path=self._get_worktree_path,
+            load_arming_state=self._load_arming_state,
+            save_arming_state=self._save_arming_state,
         )
 
     def run(self) -> dict[int, WorkerResult]:  # noqa: C901  # orchestration: thread pool + finally + preserve report across exception paths

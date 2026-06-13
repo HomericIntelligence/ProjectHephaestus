@@ -41,13 +41,14 @@ RUNTIME_EXTRAS: frozenset[str] = frozenset(
     {"all", "automation", "github", "nats", "toml", "xml", "schema"}
 )
 
-PERMISSIVE: frozenset[str] = frozenset(
-    {"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC", "Python-2.0"}
-)
+PERMISSIVE: frozenset[str] = frozenset({"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC"})
 
 # Per-package, NOTICE-justified non-vendored copyleft/non-permissive licenses.
+# PSF (both SPDX spellings ``PSF-2.0`` and ``Python-2.0``) is scoped here, NOT in
+# PERMISSIVE: NOTICE allows PSF only for defusedxml, so it must be rejected for
+# any other package (see test_psf_allowed_only_for_defusedxml).
 ALLOWED_EXTRA_COPYLEFT: dict[str, frozenset[str]] = {
-    "pygithub": frozenset({"LGPL-3.0", "LGPL"}),
+    "pygithub": frozenset({"LGPL-3.0", "LGPL-3.0-only", "LGPL-3.0-or-later", "LGPL"}),
     "defusedxml": frozenset({"PSF-2.0", "Python-2.0"}),
 }
 

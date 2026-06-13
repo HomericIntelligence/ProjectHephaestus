@@ -94,6 +94,13 @@ class TestIsCompatible:
         assert is_compatible("defusedxml", ["PSF-2.0"]) is True
         assert is_compatible("other-pkg", ["PSF-2.0"]) is False
 
+    def test_python_2_0_psf_spelling_allowed_only_for_defusedxml(self):
+        # ``Python-2.0`` is the alternate SPDX spelling of PSF; it is scoped
+        # per-package to defusedxml, NOT blanket-permissive. Removing it from
+        # PERMISSIVE means any other package carrying it must be rejected.
+        assert is_compatible("defusedxml", ["Python-2.0"]) is True
+        assert is_compatible("other-pkg", ["Python-2.0"]) is False
+
 
 class TestLoudFailure:
     """The gate must FAIL, never silently pass, when blind."""

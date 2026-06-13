@@ -129,6 +129,22 @@ def test_main_rejects_non_numeric_issue_number(monkeypatch: pytest.MonkeyPatch) 
     assert sl.main([]) == 1
 
 
+def test_main_rejects_missing_github_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing GITHUB_REPOSITORY exits 1 with a descriptive error."""
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.setenv("ISSUE_NUMBER", "42")
+    monkeypatch.setenv("ISSUE_BODY", "### Severity\n\nmajor\n")
+    assert sl.main([]) == 1
+
+
+def test_main_rejects_malformed_github_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A GITHUB_REPOSITORY value without '/' exits 1 with a descriptive error."""
+    monkeypatch.setenv("GITHUB_REPOSITORY", "no-slash-here")
+    monkeypatch.setenv("ISSUE_NUMBER", "42")
+    monkeypatch.setenv("ISSUE_BODY", "### Severity\n\nmajor\n")
+    assert sl.main([]) == 1
+
+
 def test_main_reconciles_on_valid_input(monkeypatch: pytest.MonkeyPatch) -> None:
     """Valid input parses the severity and reconciles the label."""
     monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")

@@ -138,7 +138,14 @@ def main(argv: list[str] | None = None) -> int:
     add_version_arg(parser)
     args = parser.parse_args(argv)
 
-    repo = os.environ["GITHUB_REPOSITORY"]
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if not repo or "/" not in repo:
+        message = f"Unexpected GITHUB_REPOSITORY {repo!r} (expected owner/name)"
+        if args.json:
+            emit_json_status(1, message)
+        else:
+            print(message, file=sys.stderr)
+        return 1
     raw = os.environ.get("ISSUE_NUMBER", "")
     if not raw.isdigit():
         message = f"Unexpected ISSUE_NUMBER {raw!r} (not a positive integer)"

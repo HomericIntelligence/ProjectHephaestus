@@ -272,7 +272,7 @@ def test_codex_ci_fix_session_falls_back_to_fresh_on_resume_failure(
             side_effect=resume_error,
         ),
         patch(
-            "hephaestus.automation.ci_driver.run_codex_session",
+            "hephaestus.automation.ci_fix_orchestrator.run_codex_session",
             return_value=fresh_result,
         ) as mock_fresh,
         patch(
@@ -329,7 +329,7 @@ def test_codex_ci_fix_session_skips_push_when_head_did_not_advance(
 
     with (
         patch(
-            "hephaestus.automation.ci_driver.run_codex_session",
+            "hephaestus.automation.ci_fix_orchestrator.run_codex_session",
             return_value=fresh_result,
         ),
         patch(
@@ -666,6 +666,7 @@ class TestAllRequiredGreen:
             _make_check("lint", required=True),
         ]
         with (
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=checks),
             _impl_go(driver),
             patch.object(driver, "_enable_auto_merge") as mock_merge,
@@ -681,6 +682,7 @@ class TestAllRequiredGreen:
         """Green CI is not enough; implementation review must mark the PR GO."""
         checks = [_make_check("test", required=True)]
         with (
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=checks),
             patch.object(driver, "_pr_has_implementation_go", return_value=False),
             patch.object(driver, "_enable_auto_merge") as mock_merge,
@@ -706,6 +708,7 @@ class TestAllRequiredGreen:
 
         checks = [_make_check("test", required=True)]
         with (
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=checks),
             _impl_go(dry_driver),
             patch.object(dry_driver, "_enable_auto_merge") as mock_merge,
@@ -735,6 +738,7 @@ class TestRequiredVsNonRequired:
             _make_check("lint", required=False, conclusion="success"),
         ]
         with (
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=checks),
             _impl_go(driver),
             patch.object(driver, "_enable_auto_merge") as mock_merge,
@@ -755,6 +759,7 @@ class TestRequiredVsNonRequired:
             _make_check("optional-lint", required=False, conclusion="failure"),
         ]
         with (
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=checks),
             _impl_go(driver),
             patch.object(driver, "_enable_auto_merge") as mock_merge,
@@ -773,6 +778,7 @@ class TestRequiredVsNonRequired:
         ]
         with (
             patch.object(driver, "_find_pr_for_issue", return_value=42),
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=checks),
             patch.object(driver, "_get_failing_ci_logs", return_value="error log"),
             patch.object(driver, "_load_impl_session_id", return_value=None),
@@ -794,6 +800,7 @@ class TestRequiredVsNonRequired:
         monkeypatch.setenv("HEPH_CI_POLL_MAX_WAIT", "0")
         with (
             patch.object(driver, "_find_pr_for_issue", return_value=42),
+            patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch("hephaestus.automation.ci_check_inspector.gh_pr_checks", return_value=checks),
             patch.object(driver, "_run_ci_fix_session") as mock_fix,
         ):

@@ -39,12 +39,22 @@ When the user invokes this command:
        # Clone fresh
        mkdir -p "$HOME/.agent-brain"
        gh repo clone HomericIntelligence/ProjectMnemosyne "$MNEMOSYNE_DIR"
+       # Fresh clone → install pre-commit hooks (one-time per clone) so any later /learn
+       # in this clone has working hooks.
+       ( cd "$MNEMOSYNE_DIR" && pre-commit install --install-hooks )
      fi
 
      # Always update to latest main before searching
      git -C "$MNEMOSYNE_DIR" fetch origin
      git -C "$MNEMOSYNE_DIR" checkout main
      git -C "$MNEMOSYNE_DIR" pull --ff-only origin main
+
+     # Already checked out → verify pre-commit is installed and working; (re)install if not.
+     if [ ! -f "$MNEMOSYNE_DIR/.git/hooks/pre-commit" ]; then
+       ( cd "$MNEMOSYNE_DIR" && pre-commit install --install-hooks )
+     fi
+     ( cd "$MNEMOSYNE_DIR" && pre-commit validate-config >/dev/null 2>&1 ) \
+       || echo "WARNING: pre-commit config invalid — run 'pre-commit install --install-hooks' in $MNEMOSYNE_DIR"
    fi
    ```
 
@@ -109,7 +119,23 @@ If the user wants more detail, read the full skill `.md` file and its `.history`
 for the most relevant matches.
 
 > **Note**: If the user's goal involves **creating or fixing skills**, remind them to run
-> `/learn` which captures session learnings and creates or amends a skill file.
+> `/learn` which captures session learnings and creates or amends a skill file. Before they
+> do, run the **open-PR check** for any skill you matched above and warn if one is already
+> being amended — this catches duplication at the advise stage, before any work starts:
+>
+> ```bash
+> # For each matched skill <name>, surface open PRs already amending it:
+> gh pr list --repo HomericIntelligence/ProjectMnemosyne --state open \
+>   --search "<name> in:title" --json number,headRefName,title
+> gh pr list --repo HomericIntelligence/ProjectMnemosyne --state open \
+>   --json number,headRefName,files \
+>   --jq '.[] | select(.files[].path == "skills/<name>.md") | {number, headRefName}'
+> ```
+>
+> If an open PR already amends the skill, tell the user to **stack on that PR's branch**
+> rather than open a new one (see `/learn` Step 2 amend-lock rule). Forking a fresh
+> `origin/main` branch for an already-in-flight skill is what produced the duplicate,
+> mutually-conflicting PR pileup.
 
 ## Output Format
 

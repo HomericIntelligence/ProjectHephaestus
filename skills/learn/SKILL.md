@@ -207,8 +207,16 @@ Agent(description="Create skill C", prompt="...skill C content...")
 
    Before writing the "Verified Workflow" section, answer these questions honestly:
    - Was the workflow actually executed end-to-end? (Not just pre-commit hooks — the actual tests/code)
-   - Did CI pass with these changes? If not, the section MUST be titled "Proposed Workflow" not "Verified Workflow"
+   - Did CI pass with these changes? If not, convey that **inside** the section (see below) — do
+     NOT rename the header.
    - Were the results observed in CI, or only locally? If only locally, state: "Verified locally only — CI validation pending"
+
+   **CRITICAL — the section header MUST stay `## Verified Workflow` regardless of verification
+   level.** `validate_plugins.py` requires the literal string `## Verified Workflow` (it does a
+   plain substring check for it); renaming it to `## Proposed Workflow` causes a hard
+   `validate` failure: `Missing required section: ## Verified Workflow`. For an unverified or
+   `verified-precommit` skill, keep the header and add a status note as the first line of the
+   section instead (see Step 6).
 
    **Verification levels** (must be stated in the skill):
    - `verified-ci`: Tests pass in CI (highest confidence)
@@ -255,8 +263,7 @@ Agent(description="Create skill C", prompt="...skill C content...")
        # Clone fresh
        mkdir -p "$HOME/.agent-brain"
        gh repo clone HomericIntelligence/ProjectMnemosyne "$MNEMOSYNE_DIR"
-       # Fresh clone → install pre-commit hooks (one-time per clone)
-       ( cd "$MNEMOSYNE_DIR" && pre-commit install --install-hooks )
+       ( cd "$MNEMOSYNE_DIR" && ensure_precommit_installed )  # see helper below
      fi
 
      # Always update to latest main before starting
@@ -264,14 +271,30 @@ Agent(description="Create skill C", prompt="...skill C content...")
      git -C "$MNEMOSYNE_DIR" checkout main
      git -C "$MNEMOSYNE_DIR" pull --ff-only origin main
 
-     # Already checked out → verify pre-commit is installed and working; (re)install if not.
-     if [ ! -f "$MNEMOSYNE_DIR/.git/hooks/pre-commit" ]; then
-       ( cd "$MNEMOSYNE_DIR" && pre-commit install --install-hooks )
-     fi
-     # Sanity-check the hooks resolve (catches a stale/broken pre-commit cache early).
-     ( cd "$MNEMOSYNE_DIR" && pre-commit validate-config >/dev/null 2>&1 ) \
-       || echo "WARNING: pre-commit config invalid — run 'pre-commit install --install-hooks' in $MNEMOSYNE_DIR"
+     # Verify pre-commit is genuinely installed; (re)install if not.
+     ( cd "$MNEMOSYNE_DIR" && ensure_precommit_installed )
    fi
+   ```
+
+   **Robust pre-commit check (`ensure_precommit_installed`).** Do NOT test
+   `[ -f "$DIR/.git/hooks/pre-commit" ]`: it is wrong two ways — (1) in a **worktree**, `.git`
+   is a *file* (a `gitdir:` pointer), not a directory, so the path never exists even when hooks
+   are installed; (2) a stray `core.hooksPath` (e.g. pointing back at the default `.git/hooks`)
+   can make the file exist while `pre-commit install` was never run. Ask the resolved hook for
+   the pre-commit signature instead (define this helper before the setup block above):
+
+   ```bash
+   ensure_precommit_installed() {
+     # Resolve the hooks dir git actually uses (honors core.hooksPath and worktrees)
+     local hooks_dir; hooks_dir="$(git rev-parse --git-path hooks)"
+     # The pre-commit-managed hook contains a recognizable marker line.
+     if ! grep -qs 'pre-commit' "$hooks_dir/pre-commit"; then
+       pre-commit install --install-hooks
+     fi
+     # Final sanity check: config parses and a hook actually fires.
+     pre-commit validate-config >/dev/null 2>&1 \
+       || echo "WARNING: pre-commit config invalid — run 'pre-commit install --install-hooks' here"
+   }
 
    # Create a worktree for branch isolation (never checkout branches in the base repo)
    WORKTREE_DIR="/tmp/mnemosyne-skill-<name>"
@@ -357,7 +380,7 @@ Agent(description="Create skill C", prompt="...skill C content...")
    - `category`: one of 9 valid categories (no "refactoring" — use "architecture")
    - All required fields in frontmatter: name, description, category, date, version, verification
    - All required markdown sections: Overview, When to Use, Verified Workflow, Failed Attempts, Results & Parameters
-   - **If verification is `unverified` or `verified-precommit`**: rename the section to "Proposed Workflow" instead of "Verified Workflow" and add a warning: "> **Warning:** This workflow has not been validated end-to-end. Treat as a hypothesis until CI confirms."
+   - **If verification is `unverified` or `verified-precommit`**: **keep the `## Verified Workflow` header** (the validator requires that literal string — renaming to "Proposed Workflow" causes `Missing required section: ## Verified Workflow`). Instead, make the **first line of the section** a warning blockquote: "> **Warning:** This workflow has not been validated end-to-end. Treat as a hypothesis until CI confirms." Optionally add a `> _(Proposed — not yet verified)_` subtitle under the header.
 
    **File 2: `skills/<name>.notes.md`** (optional):
    - Raw session details, code snippets, debugging logs
@@ -403,8 +426,10 @@ Agent(description="Create skill C", prompt="...skill C content...")
               "## Failed Attempts" "## Results & Parameters"; do
      grep -qF "$sec" "skills/<name>.md" || echo "MISSING SECTION: $sec"
    done
-   #    (For an unverified/verified-precommit skill, "## Verified Workflow" is renamed
-   #    "## Proposed Workflow" — accept either: grep -qE '## (Verified|Proposed) Workflow'.)
+   #    The header is ALWAYS literally "## Verified Workflow" — even for unverified skills the
+   #    validator requires that exact string, so never rename it to "## Proposed Workflow"
+   #    (that itself triggers "Missing required section: ## Verified Workflow"). Convey
+   #    unverified status with a warning blockquote inside the section (Step 6), not the header.
    #    Any "MISSING SECTION" line = the validate gate WILL fail. Add the section before
    #    committing. This is the exact defect behind PRs that ADD a skill missing 4 sections.
 
@@ -596,6 +621,7 @@ Existing skill found?
 | markdownlint `MD056/table-column-count` "Too many cells" | An unescaped literal `\|` inside a table cell (regex, shell pipe, `a\|b`) is parsed as a column separator | Escape inline pipes as `\|`, or balance the row so its cell count matches the header. **Not caught by `validate_plugins.py`** — only the CI `markdownlint` gate; run markdownlint locally first |
 | markdownlint `MD012/no-multiple-blanks` | Two or more consecutive blank lines (often left between generated sections) | Collapse to a single blank line. Run markdownlint locally — it flags **all** rules (MD012, MD040, …), not just MD056 |
 | `validate` "Missing required section: ## X" on **your own new file** | `/learn` generated the skill without all 5 required sections | Generate from the full Step 6 template; run the Step 7 required-section self-check (grep for all 5 `##` headers) before committing |
+| `validate` "Missing required section: ## Verified Workflow" despite the section looking present | The header was renamed to `## Proposed Workflow` for an unverified skill — but `validate_plugins.py` substring-matches the literal `## Verified Workflow` | Always keep the `## Verified Workflow` header; put the "not yet verified" warning as a blockquote inside the section, never in the header |
 | `validate`/`markdownlint` red on a file you didn't touch | A pre-existing broken file on `main` (the validator/linter scans the whole `skills/` dir) | Not your bug — surface it to the user as a separate fix PR; do not claim `verified-ci` while the gate is red |
 
 ### Issue: PR already exists

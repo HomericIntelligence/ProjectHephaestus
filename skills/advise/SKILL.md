@@ -39,9 +39,7 @@ When the user invokes this command:
        # Clone fresh
        mkdir -p "$HOME/.agent-brain"
        gh repo clone HomericIntelligence/ProjectMnemosyne "$MNEMOSYNE_DIR"
-       # Fresh clone → install pre-commit hooks (one-time per clone) so any later /learn
-       # in this clone has working hooks.
-       ( cd "$MNEMOSYNE_DIR" && pre-commit install --install-hooks )
+       ( cd "$MNEMOSYNE_DIR" && ensure_precommit_installed )  # so any later /learn has hooks
      fi
 
      # Always update to latest main before searching
@@ -49,13 +47,18 @@ When the user invokes this command:
      git -C "$MNEMOSYNE_DIR" checkout main
      git -C "$MNEMOSYNE_DIR" pull --ff-only origin main
 
-     # Already checked out → verify pre-commit is installed and working; (re)install if not.
-     if [ ! -f "$MNEMOSYNE_DIR/.git/hooks/pre-commit" ]; then
-       ( cd "$MNEMOSYNE_DIR" && pre-commit install --install-hooks )
-     fi
-     ( cd "$MNEMOSYNE_DIR" && pre-commit validate-config >/dev/null 2>&1 ) \
-       || echo "WARNING: pre-commit config invalid — run 'pre-commit install --install-hooks' in $MNEMOSYNE_DIR"
+     # Verify pre-commit is genuinely installed; (re)install if not.
+     ( cd "$MNEMOSYNE_DIR" && ensure_precommit_installed )
    fi
+
+   # ensure_precommit_installed: do NOT test [ -f .git/hooks/pre-commit ] — in a worktree .git
+   # is a file, and a stray core.hooksPath can fake the path. Ask the resolved hook instead:
+   ensure_precommit_installed() {
+     local hooks_dir; hooks_dir="$(git rev-parse --git-path hooks)"
+     grep -qs 'pre-commit' "$hooks_dir/pre-commit" || pre-commit install --install-hooks
+     pre-commit validate-config >/dev/null 2>&1 \
+       || echo "WARNING: pre-commit config invalid — run 'pre-commit install --install-hooks' here"
+   }
    ```
 
 2. **Parse the user's goal** from $ARGUMENTS

@@ -13,10 +13,12 @@ class _MissingReviewer:
 
 
 def test_protocol_satisfied_by_stub() -> None:
+    """A class with run() must satisfy ReviewerProtocol via runtime_checkable."""
     assert isinstance(_ConcreteReviewer(), ReviewerProtocol)
 
 
 def test_protocol_violated_by_stub() -> None:
+    """A class without run() must not satisfy ReviewerProtocol."""
     assert not isinstance(_MissingReviewer(), ReviewerProtocol)
 
 
@@ -28,18 +30,21 @@ def test_pr_reviewer_satisfies_protocol() -> None:
 
 
 def test_address_reviewer_satisfies_protocol() -> None:
+    """AddressReviewer implements run() and must satisfy ReviewerProtocol."""
     from hephaestus.automation.address_review import AddressReviewer
 
     assert issubclass(AddressReviewer, ReviewerProtocol)
 
 
 def test_audit_reviewer_satisfies_protocol() -> None:
+    """AuditReviewer implements run() and must satisfy ReviewerProtocol."""
     from hephaestus.automation.audit_reviewer import AuditReviewer
 
     assert issubclass(AuditReviewer, ReviewerProtocol)
 
 
 def test_plan_reviewer_satisfies_protocol() -> None:
+    """PlanReviewer implements run() and must satisfy ReviewerProtocol."""
     from hephaestus.automation.plan_reviewer import PlanReviewer
 
     assert issubclass(PlanReviewer, ReviewerProtocol)

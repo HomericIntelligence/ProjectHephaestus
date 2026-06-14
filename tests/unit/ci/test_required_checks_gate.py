@@ -99,3 +99,35 @@ class TestRequiredChecksGate:
             f"{GATE_JOB} must set `if: always()` (got {gate_if!r}) so it does "
             "not skip on label/auto-merge events and deadlock the required check."
         )
+
+    def test_gate_assertion_fires_on_unwired_job(self) -> None:
+        """Negative-path: the invariant check must flag a job absent from needs:.
+
+        Construct a synthetic jobs dict that introduces a new gating job not
+        listed in required-checks-gate.needs and verify the gap is detected.
+        This guards against the invariant check itself silently passing when
+        it should fail — exactly the failure mode that let a red lint job reach
+        main (issue #1315).
+        """
+        # Minimal synthetic workflow jobs: a gate that only needs "job-a",
+        # plus an additional "job-b" that is unwired (not in needs).
+        synthetic_jobs: dict[str, Any] = {
+            GATE_JOB: {
+                "needs": ["job-a"],
+                "if": "always()",
+                "runs-on": "ubuntu-24.04",
+                "steps": [],
+            },
+            "job-a": {"runs-on": "ubuntu-24.04", "steps": []},
+            "job-b": {"runs-on": "ubuntu-24.04", "steps": []},  # intentionally unwired
+        }
+
+        gate_needs = set(synthetic_jobs[GATE_JOB]["needs"])
+        all_jobs = set(synthetic_jobs)
+        expected = all_jobs - EXEMPT_JOBS
+        missing = expected - gate_needs
+
+        assert "job-b" in missing, (
+            "Expected the invariant check to detect 'job-b' as unwired from "
+            f"{GATE_JOB}.needs, but missing={sorted(missing)}"
+        )

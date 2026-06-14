@@ -82,12 +82,12 @@ def mock_options() -> ReviewerOptions:
 @pytest.fixture
 def base_deps(tmp_path: Path) -> dict:
     """Return constructor injection kwargs for PRReviewer / AddressReviewer."""
-    return dict(
-        get_repo_root=lambda: tmp_path,
-        worktree_manager_factory=MagicMock(return_value=MagicMock()),
-        status_tracker_factory=MagicMock(return_value=MagicMock()),
-        log_manager_factory=MagicMock(return_value=MagicMock()),
-    )
+    return {
+        "get_repo_root": lambda: tmp_path,
+        "worktree_manager_factory": MagicMock(return_value=MagicMock()),
+        "status_tracker_factory": MagicMock(return_value=MagicMock()),
+        "log_manager_factory": MagicMock(return_value=MagicMock()),
+    }
 
 
 @pytest.fixture

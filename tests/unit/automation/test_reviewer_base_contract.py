@@ -16,33 +16,36 @@ def _make_options(max_workers: int = 2) -> object:
 
 
 def _make_deps(tmp_path: Path) -> dict:
-    return dict(
-        get_repo_root=lambda: tmp_path,
-        worktree_manager_factory=MagicMock(return_value=MagicMock()),
-        status_tracker_factory=MagicMock(return_value=MagicMock()),
-        log_manager_factory=MagicMock(return_value=MagicMock()),
-    )
+    return {
+        "get_repo_root": lambda: tmp_path,
+        "worktree_manager_factory": MagicMock(return_value=MagicMock()),
+        "status_tracker_factory": MagicMock(return_value=MagicMock()),
+        "log_manager_factory": MagicMock(return_value=MagicMock()),
+    }
 
 
 class ConcreteReviewer(_reviewer_base.BaseReviewer):
-    pass
+    """Minimal concrete subclass for testing BaseReviewer's injection contract."""
 
 
 def test_injection_wires_repo_root(tmp_path: Path) -> None:
+    """Constructor injection must wire repo_root from the get_repo_root callable."""
     deps = _make_deps(tmp_path)
     r = ConcreteReviewer(_make_options(), **deps)
     assert r.repo_root == tmp_path
 
 
 def test_injection_calls_factories(tmp_path: Path) -> None:
+    """Constructor must call each factory exactly once, passing max_workers to status."""
     deps = _make_deps(tmp_path)
-    r = ConcreteReviewer(_make_options(max_workers=3), **deps)
+    ConcreteReviewer(_make_options(max_workers=3), **deps)
     deps["worktree_manager_factory"].assert_called_once_with()
     deps["status_tracker_factory"].assert_called_once_with(3)
     deps["log_manager_factory"].assert_called_once_with()
 
 
 def test_injected_instances_attached(tmp_path: Path) -> None:
+    """Factory return values must be attached to the reviewer instance."""
     deps = _make_deps(tmp_path)
     r = ConcreteReviewer(_make_options(), **deps)
     assert r.worktree_manager is deps["worktree_manager_factory"].return_value
@@ -56,5 +59,6 @@ def test_subclass_modules_no_longer_need_reexports() -> None:
 
 
 def test_no_importlib_in_base() -> None:
+    """BaseReviewer source must not contain any importlib usage."""
     src = inspect.getsource(_reviewer_base.BaseReviewer)
     assert "importlib" not in src

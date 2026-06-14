@@ -11,7 +11,7 @@ import json
 import logging
 import subprocess
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from hephaestus.automation._review_utils import find_pr_for_issue
 from hephaestus.automation.git_utils import get_repo_info, get_repo_root
@@ -62,6 +62,11 @@ class PRDiscovery:
         self._viewer_login: str = ""
         self.repo_root = get_repo_root()
 
+        # Callable slots wired by CIDriver after construction (Any to allow assignment).
+        # Type: Callable[[int], bool] and Callable[[], list[dict[str, Any]]] respectively.
+        self._enable_auto_merge_fn: Any = self._unwired_enable_auto_merge
+        self._list_open_prs_remaining_fn: Any = self._unwired_list_open_prs_remaining
+
     # ------------------------------------------------------------------
     # Open-PR unarmed-arm pass
     # ------------------------------------------------------------------
@@ -108,7 +113,7 @@ class PRDiscovery:
             len(armed_now),
             sorted(armed_now),
         )
-        return self._list_open_prs_remaining_fn()
+        return cast(list[dict[str, Any]], self._list_open_prs_remaining_fn())
 
     # ------------------------------------------------------------------
     # Viewer-login resolution
@@ -464,13 +469,11 @@ class PRDiscovery:
             return False
 
     # ------------------------------------------------------------------
-    # Slots wired by CIDriver after construction (to avoid circular deps)
+    # Unwired defaults (raise until CIDriver wires the callable slots)
     # ------------------------------------------------------------------
 
-    def _enable_auto_merge_fn(self, pr_number: int, *, is_bot_pr: bool = False) -> bool:
-        """Raise until CIDriver wires this slot after construction."""
+    def _unwired_enable_auto_merge(self, pr_number: int, *, is_bot_pr: bool = False) -> bool:
         raise NotImplementedError("_enable_auto_merge_fn not wired")
 
-    def _list_open_prs_remaining_fn(self) -> list[dict[str, Any]]:
-        """Raise until CIDriver wires this slot after construction."""
+    def _unwired_list_open_prs_remaining(self) -> list[dict[str, Any]]:
         raise NotImplementedError("_list_open_prs_remaining_fn not wired")

@@ -46,38 +46,16 @@ from hephaestus.automation._review_utils import add_max_workers_arg
 from hephaestus.automation.claude_timeouts import gh_cli_timeout
 from hephaestus.automation.loop_repo_manager import (
     _clone_missing_repos as _clone_missing_repos,
-)
-from hephaestus.automation.loop_repo_manager import (
     _count_failing_prs as _count_failing_prs,
-)
-from hephaestus.automation.loop_repo_manager import (
     _count_open_issues as _count_open_issues,
-)
-from hephaestus.automation.loop_repo_manager import (
     _detect_cwd_repo as _detect_cwd_repo,
-)
-from hephaestus.automation.loop_repo_manager import (
     _detect_remote_base_ref as _detect_remote_base_ref,
-)
-from hephaestus.automation.loop_repo_manager import (
     _ensure_clone as _ensure_clone,
-)
-from hephaestus.automation.loop_repo_manager import (
     _gh_list_repos as _gh_list_repos,
-)
-from hephaestus.automation.loop_repo_manager import (
     _list_open_issue_numbers as _list_open_issue_numbers,
-)
-from hephaestus.automation.loop_repo_manager import (
     _local_ahead_count as _local_ahead_count,
-)
-from hephaestus.automation.loop_repo_manager import (
     _rebase_main as _rebase_main,
-)
-from hephaestus.automation.loop_repo_manager import (
     _resolve_repo_dir as _resolve_repo_dir,
-)
-from hephaestus.automation.loop_repo_manager import (
     _sort_repos_by_open_count as _sort_repos_by_open_count,
 )
 from hephaestus.cli.utils import (

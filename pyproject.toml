@@ -184,6 +184,9 @@ ignore = [
     "RUF003", # Intentional Unicode in comments
 ]
 
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
 [tool.ruff.lint.mccabe]
 max-complexity = 12
 

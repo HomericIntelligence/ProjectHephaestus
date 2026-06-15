@@ -14,26 +14,12 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from hephaestus.automation._review_utils import find_pr_for_issue
+from hephaestus.automation.ci_predicates import _pr_is_failing as _pr_is_failing_local
 from hephaestus.automation.git_utils import get_repo_info, get_repo_root
 from hephaestus.automation.github_api import GitHubUnavailableError, _gh_call
 from hephaestus.automation.models import CIDriverOptions
 
 logger = logging.getLogger(__name__)
-
-# Shared with ci_driver.FAILING_CHECK_CONCLUSIONS — must stay in sync.
-# Kept here as a local constant to avoid a circular import (ci_driver
-# imports PRDiscovery; PRDiscovery must not import ci_driver).
-_FAILING_CHECK_CONCLUSIONS: frozenset[str] = frozenset({"FAILURE", "CANCELLED", "TIMED_OUT"})
-
-
-def _pr_is_failing_local(pr: dict[str, Any]) -> bool:
-    """Return True iff this open PR row is one the driver should pick up."""
-    if pr.get("isDraft"):
-        return False
-    if pr.get("mergeStateStatus") == "BLOCKED":
-        return True
-    rollup = pr.get("statusCheckRollup") or []
-    return any(c.get("conclusion") in _FAILING_CHECK_CONCLUSIONS for c in rollup)
 
 
 class PRDiscovery:

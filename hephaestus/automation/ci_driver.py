@@ -30,6 +30,7 @@ from ._review_utils import add_max_workers_arg, find_pr_for_issue
 from .arming_state import ArmingStateStore
 from .ci_check_inspector import CICheckInspector
 from .ci_fix_orchestrator import CIFixOrchestrator
+from .ci_predicates import FAILING_CHECK_CONCLUSIONS, _pr_is_failing
 from .claude_timeouts import (
     ci_poll_max_wait,
 )
@@ -51,29 +52,13 @@ from .worktree_manager import WorktreeManager
 
 logger = logging.getLogger(__name__)
 
-# Conclusion values that indicate a PR's check rollup is failing in a way
-# drive-green can act on. SUCCESS / SKIPPED / NEUTRAL / PENDING are
-# explicitly excluded. Shared with loop_runner._count_failing_prs so the
-# SKIP gate and the actual work list never drift (#819).
-FAILING_CHECK_CONCLUSIONS: frozenset[str] = frozenset({"FAILURE", "CANCELLED", "TIMED_OUT"})
-
-
-def _pr_is_failing(pr: dict[str, Any]) -> bool:
-    """Return True iff this PR row is one drive-green should pick up.
-
-    A PR is "failing" when it is open, non-draft, and either
-    mergeStateStatus is BLOCKED or any statusCheckRollup entry's
-    conclusion is in FAILING_CHECK_CONCLUSIONS. BLOCKED captures the
-    branch-protection/required-review-not-met case; the conclusion check
-    captures every CI red. PENDING is intentionally excluded — the driver
-    waits for terminal state elsewhere.
-    """
-    if pr.get("isDraft"):
-        return False
-    if pr.get("mergeStateStatus") == "BLOCKED":
-        return True
-    rollup = pr.get("statusCheckRollup") or []
-    return any(c.get("conclusion") in FAILING_CHECK_CONCLUSIONS for c in rollup)
+# Re-exported for backward compatibility with callers that import these names
+# from ci_driver (e.g. loop_runner).
+__all__ = [
+    "FAILING_CHECK_CONCLUSIONS",
+    "CIDriver",
+    "_pr_is_failing",
+]
 
 
 class CIDriver:
@@ -119,7 +104,6 @@ class CIDriver:
             shared_pr_issues_getter=lambda: self.shared_pr_issues,
         )
 
-        self._pr_discovery._shared_pr_issues_setter = _spi_setter
         self._pr_discovery._viewer_login = self._viewer_login
         self._pr_discovery._enable_auto_merge_fn = lambda pr_number, is_bot_pr=False: (
             self._enable_auto_merge(pr_number, is_bot_pr)
@@ -136,6 +120,8 @@ class CIDriver:
             learn_record_terminal=self._learn_record_terminal,
             shared_pr_issues_getter=lambda pr_number: self.shared_pr_issues.get(pr_number, []),
         )
+        self._post_merge._state_dir = self.state_dir
+        self._post_merge._gh_pr_state_fn = self._gh_pr_state
 
         self._ci_check = CICheckInspector(
             options=options,
@@ -180,7 +166,7 @@ class CIDriver:
         """Propagate state_dir changes to collaborators so tests can override it."""
         super().__setattr__(name, value)
         if name == "state_dir":
-            for attr in ("_ci_fix", "_ci_check"):
+            for attr in ("_ci_fix", "_ci_check", "_post_merge"):
                 collab = self.__dict__.get(attr)
                 if collab is not None:
                     if attr == "_ci_fix":
@@ -931,8 +917,8 @@ class CIDriver:
         return self._ci_check._wait_for_pr_terminal(issue_number, pr_number)
 
     def _sweep_orphaned_arming_records(self) -> None:
-        """Delegate to CICheckInspector collaborator (#1289)."""
-        self._ci_check._sweep_orphaned_arming_records()
+        """Delegate to PostMergeProcessor collaborator (#1289)."""
+        self._post_merge._sweep_orphaned_arming_records()
 
     def _check_arming_on_drive_start(
         self, issue_number: int, pr_number: int

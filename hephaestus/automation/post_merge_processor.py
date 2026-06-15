@@ -31,30 +31,6 @@ from .session_naming import AGENT_CI_DRIVER
 
 logger = logging.getLogger(__name__)
 
-# Shared constant: keep in sync with ci_driver.FAILING_CHECK_CONCLUSIONS.
-FAILING_CHECK_CONCLUSIONS: frozenset[str] = frozenset({"FAILURE", "CANCELLED", "TIMED_OUT"})
-
-
-def _pr_is_failing(pr: dict[str, Any]) -> bool:
-    """Return True iff this PR row is one drive-green should pick up.
-
-    A PR is "failing" when it is open, non-draft, and either
-    mergeStateStatus is BLOCKED or any statusCheckRollup entry's
-    conclusion is in FAILING_CHECK_CONCLUSIONS. BLOCKED captures the
-    branch-protection/required-review-not-met case; the conclusion check
-    captures every CI red. PENDING is intentionally excluded — the driver
-    waits for terminal state elsewhere.
-
-    Kept here (and mirrored in :mod:`ci_driver`) so ``loop_runner`` and
-    ``ci_driver`` can import it without a circular dependency.
-    """
-    if pr.get("isDraft"):
-        return False
-    if pr.get("mergeStateStatus") == "BLOCKED":
-        return True
-    rollup = pr.get("statusCheckRollup") or []
-    return any(c.get("conclusion") in FAILING_CHECK_CONCLUSIONS for c in rollup)
-
 
 class PostMergeProcessor:
     """Handles auto-merge arming, drive-green arming records, and /learn.
@@ -94,6 +70,10 @@ class PostMergeProcessor:
         self._clear_arming_state = clear_arming_state
         self._learn_record_terminal = learn_record_terminal
         self._shared_pr_issues_getter = shared_pr_issues_getter
+
+        # Wired by CIDriver after construction.
+        self._state_dir: Path | None = None
+        self._gh_pr_state_fn: Any = None  # Callable[[int], dict | None]
 
         # Mutable evidence slot — populated by _run_drive_green_learnings.
         self._last_drive_green_learn_evidence: dict[str, Any] = mnemosyne_update_evidence("")
@@ -363,3 +343,80 @@ class PostMergeProcessor:
             cwd=cwd,
             model=implementer_model(),
         )
+
+    # ------------------------------------------------------------------
+    # Arming-record sweep
+    # ------------------------------------------------------------------
+
+    def _sweep_orphaned_arming_records(self) -> None:
+        """Drop CLOSED records and capture missed ``/learn`` for MERGED orphans (#848).
+
+        The per-issue ``_check_arming_on_drive_start`` only fires when the
+        issue is in the current run's input list. If a PR was replaced via
+        the fresh-branch-reopen workflow (the replacement PR merged out of
+        band of the bot, the original was closed), the arming record points
+        at the closed PR and the issue itself is closed — the next run's
+        ``gh issue list --state open`` won't include it, so the record
+        leaks forever and ``/learn`` is silently lost.
+
+        Sweep every ``drive-green-armed-*.json`` at startup: drop records
+        whose PR is CLOSED-not-merged, fire ``/learn`` once for records
+        whose PR is MERGED (then mark explicit succeeded/failed learn status),
+        leave OPEN records alone for the normal per-issue path to handle.
+        """
+        state_dir = self._state_dir
+        if state_dir is None:
+            logger.info("Arming sweep skipped: state_dir not wired")
+            return
+        try:
+            records = sorted(state_dir.glob("drive-green-armed-*.json"))
+        except OSError as exc:
+            logger.info("Arming sweep skipped: state_dir scan failed (%s)", exc)
+            return
+        if not records:
+            return
+        logger.info("Sweeping %s arming record(s) for orphan resolution", len(records))
+        for path in records:
+            stem = path.stem  # drive-green-armed-<issue>
+            try:
+                issue_number = int(stem.rsplit("-", 1)[-1])
+            except ValueError:
+                logger.info("Arming sweep: ignoring malformed filename %s", path.name)
+                continue
+            record = self._load_arming_state(issue_number)
+            if record is None:
+                continue
+            if self._learn_record_terminal(record):
+                continue
+            pr_number = record.get("pr_number")
+            if not isinstance(pr_number, int):
+                logger.info(
+                    "Arming sweep: dropping record %s with non-integer pr_number",
+                    path.name,
+                )
+                self._clear_arming_state(issue_number)
+                continue
+            gh_state = self._gh_pr_state_fn(pr_number)
+            if gh_state is None:
+                continue
+            state = (gh_state.get("state") or "").upper()
+            if state == "MERGED":
+                logger.info(
+                    "Arming sweep: issue #%s / PR #%s MERGED; firing /learn",
+                    issue_number,
+                    pr_number,
+                )
+                learn_succeeded = self._run_drive_green_learnings(issue_number, pr_number)
+                self._run_drive_green_compact(issue_number, pr_number)
+                self._mark_drive_green_learn_result(
+                    issue_number,
+                    record,
+                    succeeded=learn_succeeded,
+                )
+            elif state == "CLOSED":
+                logger.info(
+                    "Arming sweep: issue #%s / PR #%s CLOSED-not-merged; dropping record",
+                    issue_number,
+                    pr_number,
+                )
+                self._clear_arming_state(issue_number)

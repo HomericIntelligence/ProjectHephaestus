@@ -2173,9 +2173,9 @@ class TestArmingSweep:
     ) -> None:
         self._write_record(driver, issue=841, pr_number=843)
         with (
-            patch.object(driver._ci_check, "_gh_pr_state", return_value={"state": "MERGED"}),
+            patch.object(driver._post_merge, "_gh_pr_state_fn", return_value={"state": "MERGED"}),
             patch.object(
-                driver._ci_check, "_run_drive_green_learnings_fn", return_value=True
+                driver._post_merge, "_run_drive_green_learnings", return_value=True
             ) as mock_learn,
         ):
             driver._sweep_orphaned_arming_records()
@@ -2190,8 +2190,8 @@ class TestArmingSweep:
     def test_closed_not_merged_orphan_dropped(self, driver: CIDriver, tmp_path: Path) -> None:
         path = self._write_record(driver, issue=841, pr_number=843)
         with (
-            patch.object(driver._ci_check, "_gh_pr_state", return_value={"state": "CLOSED"}),
-            patch.object(driver._ci_check, "_run_drive_green_learnings_fn") as mock_learn,
+            patch.object(driver._post_merge, "_gh_pr_state_fn", return_value={"state": "CLOSED"}),
+            patch.object(driver._post_merge, "_run_drive_green_learnings") as mock_learn,
         ):
             driver._sweep_orphaned_arming_records()
         mock_learn.assert_not_called()
@@ -2200,8 +2200,8 @@ class TestArmingSweep:
     def test_open_record_left_alone(self, driver: CIDriver, tmp_path: Path) -> None:
         path = self._write_record(driver, issue=841, pr_number=843)
         with (
-            patch.object(driver._ci_check, "_gh_pr_state", return_value={"state": "OPEN"}),
-            patch.object(driver._ci_check, "_run_drive_green_learnings_fn") as mock_learn,
+            patch.object(driver._post_merge, "_gh_pr_state_fn", return_value={"state": "OPEN"}),
+            patch.object(driver._post_merge, "_run_drive_green_learnings") as mock_learn,
         ):
             driver._sweep_orphaned_arming_records()
         mock_learn.assert_not_called()
@@ -2218,8 +2218,8 @@ class TestArmingSweep:
             learn_succeeded_at="2026-05-31T00:00:00Z",
         )
         with (
-            patch.object(driver._ci_check, "_gh_pr_state") as mock_state,
-            patch.object(driver._ci_check, "_run_drive_green_learnings_fn") as mock_learn,
+            patch.object(driver._post_merge, "_gh_pr_state_fn") as mock_state,
+            patch.object(driver._post_merge, "_run_drive_green_learnings") as mock_learn,
         ):
             driver._sweep_orphaned_arming_records()
         mock_state.assert_not_called()
@@ -2236,8 +2236,8 @@ class TestArmingSweep:
             learn_succeeded_at=None,
         )
         with (
-            patch.object(driver._ci_check, "_gh_pr_state") as mock_state,
-            patch.object(driver._ci_check, "_run_drive_green_learnings_fn") as mock_learn,
+            patch.object(driver._post_merge, "_gh_pr_state_fn") as mock_state,
+            patch.object(driver._post_merge, "_run_drive_green_learnings") as mock_learn,
         ):
             driver._sweep_orphaned_arming_records()
         mock_state.assert_not_called()
@@ -2249,8 +2249,8 @@ class TestArmingSweep:
     def test_unknown_gh_state_left_alone(self, driver: CIDriver, tmp_path: Path) -> None:
         path = self._write_record(driver, issue=841, pr_number=843)
         with (
-            patch.object(driver._ci_check, "_gh_pr_state", return_value=None),
-            patch.object(driver._ci_check, "_run_drive_green_learnings_fn") as mock_learn,
+            patch.object(driver._post_merge, "_gh_pr_state_fn", return_value=None),
+            patch.object(driver._post_merge, "_run_drive_green_learnings") as mock_learn,
         ):
             driver._sweep_orphaned_arming_records()
         mock_learn.assert_not_called()
@@ -2262,10 +2262,10 @@ class TestArmingSweep:
         """Unexpected exceptions leave the record unclaimed and retryable."""
         self._write_record(driver, issue=841, pr_number=843)
         with (
-            patch.object(driver._ci_check, "_gh_pr_state", return_value={"state": "MERGED"}),
+            patch.object(driver._post_merge, "_gh_pr_state_fn", return_value={"state": "MERGED"}),
             patch.object(
-                driver._ci_check,
-                "_run_drive_green_learnings_fn",
+                driver._post_merge,
+                "_run_drive_green_learnings",
                 side_effect=RuntimeError("boom"),
             ),
         ):
@@ -2285,9 +2285,9 @@ class TestArmingSweep:
         """A best-effort /learn failure is terminal but not recorded as captured."""
         self._write_record(driver, issue=841, pr_number=843)
         with (
-            patch.object(driver._ci_check, "_gh_pr_state", return_value={"state": "MERGED"}),
+            patch.object(driver._post_merge, "_gh_pr_state_fn", return_value={"state": "MERGED"}),
             patch.object(
-                driver._ci_check, "_run_drive_green_learnings_fn", return_value=False
+                driver._post_merge, "_run_drive_green_learnings", return_value=False
             ) as mock_learn,
         ):
             driver._sweep_orphaned_arming_records()

@@ -31,7 +31,10 @@ class TestDetectCwdRepo:
     def test_returns_none_tuple_when_not_in_git_repo(self) -> None:
         import subprocess
 
-        with patch("subprocess.run", side_effect=subprocess.CalledProcessError(128, "git")):
+        with patch(
+            "hephaestus.automation.loop_repo_manager.subprocess.run",
+            side_effect=subprocess.CalledProcessError(128, "git"),
+        ):
             result = _detect_cwd_repo()
         assert result == (None, None)
 
@@ -44,7 +47,7 @@ class TestDetectCwdRepo:
                 m.stdout = "https://github.com/MyOrg/MyRepo.git\n"
             return m
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run", side_effect=fake_run):
             org, repo = _detect_cwd_repo()
         assert org == "MyOrg"
         assert repo == "MyRepo"
@@ -58,7 +61,7 @@ class TestDetectCwdRepo:
                 m.stdout = "git@github.com:MyOrg/ProjectFoo.git\n"
             return m
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run", side_effect=fake_run):
             org, repo = _detect_cwd_repo()
         assert org == "MyOrg"
         assert repo == "ProjectFoo"
@@ -72,7 +75,7 @@ class TestDetectCwdRepo:
                 m.stdout = "https://gitlab.com/org/repo.git\n"
             return m
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run", side_effect=fake_run):
             org, repo = _detect_cwd_repo()
         assert org is None
         assert repo == "SomeRepo"
@@ -87,7 +90,7 @@ class TestDetectCwdRepo:
                 return m
             raise subprocess.CalledProcessError(128, cmd)
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run", side_effect=fake_run):
             org, repo = _detect_cwd_repo()
         assert org is None
         assert repo == "SomeRepo"
@@ -119,7 +122,7 @@ class TestDetectRemoteBaseRef:
                 m.stdout = ""
             return m
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run", side_effect=fake_run):
             ref = _detect_remote_base_ref("MyRepo", tmp_path)
         assert ref == "origin/main"
 
@@ -140,7 +143,7 @@ class TestDetectRemoteBaseRef:
                 m.stdout = ""
             return m
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run", side_effect=fake_run):
             ref = _detect_remote_base_ref("MyRepo", tmp_path)
         assert ref == "origin/main"
 
@@ -151,7 +154,7 @@ class TestDetectRemoteBaseRef:
             m.stdout = ""
             return m
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run", side_effect=fake_run):
             ref = _detect_remote_base_ref("MyRepo", tmp_path)
         assert ref == "origin/main"
 
@@ -164,14 +167,17 @@ class TestLocalAheadCount:
         m.returncode = 0
         m.stdout = "3\n"
 
-        with patch("subprocess.run", return_value=m):
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run", return_value=m):
             count = _local_ahead_count("MyRepo", tmp_path, "origin/main")
         assert count == 3
 
     def test_returns_zero_on_timeout(self, tmp_path: Path) -> None:
         import subprocess
 
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("git", 30)):
+        with patch(
+            "hephaestus.automation.loop_repo_manager.subprocess.run",
+            side_effect=subprocess.TimeoutExpired("git", 30),
+        ):
             count = _local_ahead_count("MyRepo", tmp_path, "origin/main")
         assert count == 0
 
@@ -180,7 +186,7 @@ class TestLocalAheadCount:
         m.returncode = 128
         m.stdout = ""
 
-        with patch("subprocess.run", return_value=m):
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run", return_value=m):
             count = _local_ahead_count("MyRepo", tmp_path, "origin/main")
         assert count == 0
 
@@ -189,7 +195,7 @@ class TestLocalAheadCount:
         m.returncode = 0
         m.stdout = ""
 
-        with patch("subprocess.run", return_value=m):
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run", return_value=m):
             count = _local_ahead_count("MyRepo", tmp_path, "origin/main")
         assert count == 0
 
@@ -201,7 +207,7 @@ class TestEnsureClone:
         git_dir = tmp_path / ".git"
         git_dir.mkdir()
 
-        with patch("subprocess.run") as mock_run:
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run") as mock_run:
             _ensure_clone("MyOrg", "MyRepo", tmp_path)
         mock_run.assert_not_called()
 

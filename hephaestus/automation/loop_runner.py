@@ -592,7 +592,7 @@ def _phase_order_warnings(cfg: LoopConfig) -> list[str]:
 
 # ---------------------------------------------------------------------------
 # Repo discovery — re-exported from loop_repo_manager (refs #1360 / #1179)
-# All 12 functions below are imported at module level above with explicit
+# All 12 functions are imported at module level above with explicit
 # ``as`` aliases, keeping ``patch.object(loop_runner, "_fn")`` working.
 # ---------------------------------------------------------------------------
 

@@ -95,6 +95,120 @@ class TestDetectCwdRepo:
         assert repo == "SomeRepo"
 
 
+class TestGhListRepos:
+    """Tests for _gh_list_repos."""
+
+    def test_filters_archived_and_forks(self) -> None:
+        import json
+
+        repos = [
+            {"name": "active", "isArchived": False, "isFork": False},
+            {"name": "archived", "isArchived": True, "isFork": False},
+            {"name": "forked", "isArchived": False, "isFork": True},
+        ]
+        with patch("hephaestus.automation.loop_repo_manager.gh_call") as gh:
+            gh.return_value = MagicMock(stdout=json.dumps(repos), stderr="")
+            result = loop_repo_manager._gh_list_repos("MyOrg")
+        assert result == ["active"]
+
+    def test_nonzero_rc_raises_systemexit(self) -> None:
+        import subprocess
+
+        with patch("hephaestus.automation.loop_repo_manager.gh_call") as gh:
+            gh.side_effect = subprocess.CalledProcessError(
+                returncode=1, cmd=["gh"], stderr="auth error"
+            )
+            with pytest.raises(SystemExit, match="failed"):
+                loop_repo_manager._gh_list_repos("MyOrg")
+
+    def test_invalid_json_raises_systemexit(self) -> None:
+        with patch("hephaestus.automation.loop_repo_manager.gh_call") as gh:
+            gh.return_value = MagicMock(stdout="not-json", stderr="")
+            with pytest.raises(SystemExit, match="invalid JSON"):
+                loop_repo_manager._gh_list_repos("MyOrg")
+
+    def test_timeout_raises_systemexit(self) -> None:
+        import subprocess
+
+        with patch("hephaestus.automation.loop_repo_manager.gh_call") as gh:
+            gh.side_effect = subprocess.TimeoutExpired(["gh"], timeout=30)
+            with pytest.raises(SystemExit, match="timed out"):
+                loop_repo_manager._gh_list_repos("MyOrg")
+
+
+class TestListOpenIssueNumbers:
+    """Tests for _list_open_issue_numbers."""
+
+    def test_sorted_ascending(self) -> None:
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0, stdout="42\n7\n100\n", stderr="")
+            result = loop_repo_manager._list_open_issue_numbers("Org", "Repo")
+        assert result == [7, 42, 100]
+
+    def test_timeout_returns_empty(self) -> None:
+        import subprocess
+
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run") as run:
+            run.side_effect = subprocess.TimeoutExpired(["gh"], timeout=30)
+            result = loop_repo_manager._list_open_issue_numbers("Org", "Repo")
+        assert result == []
+
+    def test_nonzero_rc_returns_empty(self) -> None:
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
+            result = loop_repo_manager._list_open_issue_numbers("Org", "Repo")
+        assert result == []
+
+    def test_empty_output_returns_empty(self) -> None:
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = loop_repo_manager._list_open_issue_numbers("Org", "Repo")
+        assert result == []
+
+    def test_ignores_non_digit_lines(self) -> None:
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0, stdout="5\nbad\n10\n", stderr="")
+            result = loop_repo_manager._list_open_issue_numbers("Org", "Repo")
+        assert result == [5, 10]
+
+
+class TestCountFailingPrs:
+    """Tests for _count_failing_prs."""
+
+    def test_counts_only_failing(self) -> None:
+        import json
+
+        pulls = [
+            {"number": 1, "isDraft": False, "statusCheckRollup": [], "mergeStateStatus": "CLEAN"},
+            {"number": 2, "isDraft": False, "statusCheckRollup": [], "mergeStateStatus": "CLEAN"},
+        ]
+        with (
+            patch("hephaestus.automation.loop_repo_manager.subprocess.run") as run,
+            patch("hephaestus.automation.loop_repo_manager._pr_is_failing") as failing,
+        ):
+            run.return_value = MagicMock(returncode=0, stdout=json.dumps(pulls), stderr="")
+            failing.side_effect = [True, False]
+            result = loop_repo_manager._count_failing_prs("Org", "Repo")
+        assert result == 1
+
+    def test_timeout_returns_zero(self) -> None:
+        import subprocess
+
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run") as run:
+            run.side_effect = subprocess.TimeoutExpired(["gh"], timeout=30)
+            assert loop_repo_manager._count_failing_prs("Org", "Repo") == 0
+
+    def test_parse_error_returns_zero(self) -> None:
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0, stdout="bad-json", stderr="")
+            assert loop_repo_manager._count_failing_prs("Org", "Repo") == 0
+
+    def test_nonzero_rc_returns_zero(self) -> None:
+        with patch("hephaestus.automation.loop_repo_manager.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
+            assert loop_repo_manager._count_failing_prs("Org", "Repo") == 0
+
+
 class TestResolveRepoDir:
     """Tests for _resolve_repo_dir."""
 

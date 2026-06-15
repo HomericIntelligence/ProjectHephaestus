@@ -272,17 +272,17 @@ def test_codex_ci_fix_session_falls_back_to_fresh_on_resume_failure(
     ]
 
     with (
-        patch("hephaestus.automation.ci_driver.resume_codex_session", side_effect=resume_error),
+        patch("hephaestus.automation.ci_fix_orchestrator.resume_codex_session", side_effect=resume_error),
         patch(
-            "hephaestus.automation.ci_driver.run_codex_session",
+            "hephaestus.automation.ci_fix_orchestrator.run_codex_session",
             return_value=fresh_result,
         ) as mock_fresh,
         patch(
             "hephaestus.automation.ci_driver.push_current_branch_with_lease_on_divergence"
         ) as mock_push,
-        patch("hephaestus.automation.ci_driver.sync_worktree_to_remote_branch") as mock_sync,
+        patch("hephaestus.automation.ci_fix_orchestrator.sync_worktree_to_remote_branch") as mock_sync,
         patch.object(driver, "_ci_fix_head_is_pushable", return_value=True),
-        patch("hephaestus.automation.ci_driver.run", side_effect=pre_post_sequence),
+        patch("hephaestus.automation.ci_fix_orchestrator.run", side_effect=pre_post_sequence),
     ):
         result = driver._run_ci_fix_session(
             issue_number=123,
@@ -323,19 +323,19 @@ def test_codex_ci_fix_session_skips_push_when_head_did_not_advance(
 
     with (
         patch(
-            "hephaestus.automation.ci_driver.run_codex_session",
+            "hephaestus.automation.ci_fix_orchestrator.run_codex_session",
             return_value=fresh_result,
         ),
         patch(
-            "hephaestus.automation.ci_driver.push_current_branch_with_lease_on_divergence"
+            "hephaestus.automation.ci_fix_orchestrator.push_current_branch_with_lease_on_divergence"
         ) as mock_push,
-        patch("hephaestus.automation.ci_driver.sync_worktree_to_remote_branch"),
+        patch("hephaestus.automation.ci_fix_orchestrator.sync_worktree_to_remote_branch"),
         patch(
-            "hephaestus.automation.ci_driver.run",
+            "hephaestus.automation.ci_fix_orchestrator.run",
             side_effect=[unchanged_sha, unchanged_sha, clean_status],
         ),
         patch(
-            "hephaestus.automation.ci_driver.gh_pr_list_unresolved_threads",
+            "hephaestus.automation.ci_fix_orchestrator.gh_pr_list_unresolved_threads",
             return_value=[],
         ),
         patch(
@@ -365,7 +365,7 @@ def test_ci_fix_head_not_pushable_with_unmerged_index(
 ) -> None:
     """A semantic conflict resolution is not pushable until the index is merged."""
     with patch(
-        "hephaestus.automation.ci_driver.run",
+        "hephaestus.automation.ci_fix_orchestrator.run",
         return_value=MagicMock(
             stdout="hephaestus/automation/loop_runner.py\n",
             stderr="",
@@ -385,7 +385,7 @@ def test_ci_fix_head_not_pushable_when_head_is_base_only(
         MagicMock(stdout="?? uv.lock\n", stderr="", returncode=0),  # generated untracked file
         MagicMock(stdout="0\n", stderr="", returncode=0),  # no commits ahead of origin/main
     ]
-    with patch("hephaestus.automation.ci_driver.run", side_effect=responses):
+    with patch("hephaestus.automation.ci_fix_orchestrator.run", side_effect=responses):
         assert driver._ci_fix_head_is_pushable(tmp_path, 993) is False
 
 
@@ -399,7 +399,7 @@ def test_ci_fix_head_pushable_with_clean_committed_pr_head(
         MagicMock(stdout="?? uv.lock\n", stderr="", returncode=0),
         MagicMock(stdout="1\n", stderr="", returncode=0),
     ]
-    with patch("hephaestus.automation.ci_driver.run", side_effect=responses):
+    with patch("hephaestus.automation.ci_fix_orchestrator.run", side_effect=responses):
         assert driver._ci_fix_head_is_pushable(tmp_path, 993) is True
 
 
@@ -409,10 +409,10 @@ def test_codex_ci_advise_uses_codex_prompt_builder(driver: CIDriver) -> None:
 
     with (
         patch(
-            "hephaestus.automation.ci_driver.gh_issue_json",
+            "hephaestus.automation.ci_fix_orchestrator.gh_issue_json",
             return_value={"title": "Test Issue", "body": "Issue body"},
         ),
-        patch("hephaestus.automation.ci_driver.run_advise", return_value="findings") as run,
+        patch("hephaestus.automation.ci_fix_orchestrator.run_advise", return_value="findings") as run,
     ):
         result = driver._run_advise(123)
 
@@ -496,8 +496,8 @@ class TestOpenPrsRemaining:
         driver.options.include_all_authors = True
         result_mock = MagicMock(stdout="[]")
         with (
-            patch("hephaestus.automation.ci_driver.get_repo_info", return_value=("o", "r")),
-            patch("hephaestus.automation.ci_driver._gh_call", return_value=result_mock),
+            patch("hephaestus.automation.pr_discovery.get_repo_info", return_value=("o", "r")),
+            patch("hephaestus.automation.pr_discovery._gh_call", return_value=result_mock),
         ):
             remaining = driver._list_open_prs_remaining()
         assert remaining == []
@@ -527,8 +527,8 @@ class TestOpenPrsRemaining:
         ]
         result_mock = MagicMock(stdout=json.dumps(rest_pulls))
         with (
-            patch("hephaestus.automation.ci_driver.get_repo_info", return_value=("o", "r")),
-            patch("hephaestus.automation.ci_driver._gh_call", return_value=result_mock),
+            patch("hephaestus.automation.pr_discovery.get_repo_info", return_value=("o", "r")),
+            patch("hephaestus.automation.pr_discovery._gh_call", return_value=result_mock),
             # #1328: merge-state is fetched per-PR via a separate gh pr view.
             patch.object(driver, "_pr_merge_state", side_effect=[("CLEAN", "MERGEABLE"), ("", "")]),
         ):
@@ -561,7 +561,7 @@ class TestOpenPrsRemaining:
         result_mock = MagicMock(
             stdout=json.dumps({"mergeStateStatus": "dirty", "mergeable": "conflicting"})
         )
-        with patch("hephaestus.automation.ci_driver._gh_call", return_value=result_mock) as mock_gh:
+        with patch("hephaestus.automation.pr_discovery._gh_call", return_value=result_mock) as mock_gh:
             merge_state, mergeable = driver._pr_merge_state(42)
         assert (merge_state, mergeable) == ("DIRTY", "CONFLICTING")
         cmd = mock_gh.call_args[0][0]
@@ -570,14 +570,14 @@ class TestOpenPrsRemaining:
 
     def test_pr_merge_state_unknown_marker_skips_query(self, driver: CIDriver) -> None:
         """#1328: the -1 unknown sentinel must not trigger a gh call."""
-        with patch("hephaestus.automation.ci_driver._gh_call") as mock_gh:
+        with patch("hephaestus.automation.pr_discovery._gh_call") as mock_gh:
             assert driver._pr_merge_state(-1) == ("", "")
         mock_gh.assert_not_called()
 
     def test_pr_merge_state_gh_failure_returns_unknown(self, driver: CIDriver) -> None:
         """#1328: a failed merge-state query degrades to unknown, never CONFLICTING."""
         with patch(
-            "hephaestus.automation.ci_driver._gh_call",
+            "hephaestus.automation.pr_discovery._gh_call",
             side_effect=subprocess.CalledProcessError(1, "gh"),
         ):
             assert driver._pr_merge_state(7) == ("", "")
@@ -590,9 +590,9 @@ class TestOpenPrsRemaining:
         # #821: this test verifies gh-failure handling, not author scope.
         driver.options.include_all_authors = True
         with (
-            patch("hephaestus.automation.ci_driver.get_repo_info", return_value=("o", "r")),
+            patch("hephaestus.automation.pr_discovery.get_repo_info", return_value=("o", "r")),
             patch(
-                "hephaestus.automation.ci_driver._gh_call",
+                "hephaestus.automation.pr_discovery._gh_call",
                 side_effect=subprocess.CalledProcessError(1, "gh", stderr="rate limited"),
             ),
         ):
@@ -609,9 +609,9 @@ class TestOpenPrsRemaining:
         driver.options.include_all_authors = True
         result_mock = MagicMock(stdout="[]")
         with (
-            patch("hephaestus.automation.ci_driver.get_repo_info", return_value=("o", "r")),
+            patch("hephaestus.automation.pr_discovery.get_repo_info", return_value=("o", "r")),
             patch(
-                "hephaestus.automation.ci_driver._gh_call",
+                "hephaestus.automation.pr_discovery._gh_call",
                 return_value=result_mock,
             ) as mock_gh,
         ):
@@ -1001,7 +1001,7 @@ class TestDriveGreenLearnings:
                 return_value={"state": "OPEN", "headRefOid": "abc1234"},
             ),
             patch(
-                "hephaestus.automation.ci_driver.invoke_claude_with_session",
+                "hephaestus.automation.post_merge_processor.invoke_claude_with_session",
                 return_value=("ok", "sid"),
             ) as mock_invoke,
             # Don't block on the post-arm wait loop; we only assert the
@@ -1350,10 +1350,10 @@ class TestDriveGreenLearnings:
         with (
             patch.object(driver, "_get_worktree_path", return_value=tmp_path),
             patch(
-                "hephaestus.automation.ci_driver.run_codex_session",
+                "hephaestus.automation.post_merge_processor.run_codex_session",
                 return_value=mock_codex_result,
             ) as mock_codex,
-            patch("hephaestus.automation.ci_driver.invoke_claude_with_session") as mock_invoke,
+            patch("hephaestus.automation.post_merge_processor.invoke_claude_with_session") as mock_invoke,
         ):
             result = driver._run_drive_green_learnings(123, 456)
 
@@ -1616,7 +1616,7 @@ class TestReviewThreadInjection:
     ) -> None:
         """No unresolved threads → no block injected (avoid prompt noise)."""
         with patch(
-            "hephaestus.automation.ci_driver.gh_pr_list_unresolved_threads", return_value=[]
+            "hephaestus.automation.ci_fix_orchestrator.gh_pr_list_unresolved_threads", return_value=[]
         ):
             result = driver._format_review_threads_block(pr_number=999)
         assert result == ""
@@ -1642,7 +1642,7 @@ class TestReviewThreadInjection:
     def test_graphql_failure_is_swallowed(self, driver: CIDriver, tmp_path: Path) -> None:
         """A gh failure must not block the drive — empty string + info log only."""
         with patch(
-            "hephaestus.automation.ci_driver.gh_pr_list_unresolved_threads",
+            "hephaestus.automation.ci_fix_orchestrator.gh_pr_list_unresolved_threads",
             side_effect=RuntimeError("graphql down"),
         ):
             assert driver._format_review_threads_block(pr_number=7) == ""
@@ -1760,13 +1760,13 @@ class TestNoCommitRetry:
                 "hephaestus.automation.ci_driver.gh_pr_checks",
                 return_value=[_make_check("lint", conclusion="success")],
             ),
-            patch("hephaestus.automation.ci_driver.invoke_claude_with_session") as mock_invoke,
+            patch("hephaestus.automation.ci_fix_orchestrator.invoke_claude_with_session") as mock_invoke,
             patch(
-                "hephaestus.automation.ci_driver.gh_pr_list_unresolved_threads",
+                "hephaestus.automation.ci_fix_orchestrator.gh_pr_list_unresolved_threads",
                 return_value=[],
             ),
             patch(
-                "hephaestus.automation.ci_driver.run",
+                "hephaestus.automation.ci_fix_orchestrator.run",
                 return_value=MagicMock(stdout="?? uv.lock\n", stderr="", returncode=0),
             ),
         ):
@@ -1799,14 +1799,14 @@ class TestNoCommitRetry:
                 return_value=[_make_check("lint", conclusion="success")],
             ),
             patch(
-                "hephaestus.automation.ci_driver.gh_pr_list_unresolved_threads",
+                "hephaestus.automation.ci_fix_orchestrator.gh_pr_list_unresolved_threads",
                 return_value=[],
             ),
             patch(
-                "hephaestus.automation.ci_driver.invoke_claude_with_session",
+                "hephaestus.automation.ci_fix_orchestrator.invoke_claude_with_session",
                 return_value=("done", "sess"),
             ) as mock_invoke,
-            patch("hephaestus.automation.ci_driver.run", side_effect=[status, post_sha]),
+            patch("hephaestus.automation.ci_fix_orchestrator.run", side_effect=[status, post_sha]),
         ):
             result = driver._retry_no_commit_once(
                 issue_number=993,
@@ -1837,14 +1837,14 @@ class TestNoCommitRetry:
                 return_value=[_make_check("lint", conclusion="failure")],
             ),
             patch(
-                "hephaestus.automation.ci_driver.gh_pr_list_unresolved_threads",
+                "hephaestus.automation.ci_fix_orchestrator.gh_pr_list_unresolved_threads",
                 return_value=[],
             ),
             patch(
-                "hephaestus.automation.ci_driver.invoke_claude_with_session",
+                "hephaestus.automation.ci_fix_orchestrator.invoke_claude_with_session",
                 return_value=("done", "sess"),
             ) as mock_invoke,
-            patch("hephaestus.automation.ci_driver.run", side_effect=[clean_status, post_sha]),
+            patch("hephaestus.automation.ci_fix_orchestrator.run", side_effect=[clean_status, post_sha]),
         ):
             result = driver._retry_no_commit_once(
                 issue_number=1,
@@ -1874,15 +1874,15 @@ class TestNoCommitRetry:
                 return_value=[_make_check("lint", conclusion="failure")],
             ),
             patch(
-                "hephaestus.automation.ci_driver.gh_pr_list_unresolved_threads",
+                "hephaestus.automation.ci_fix_orchestrator.gh_pr_list_unresolved_threads",
                 return_value=[],
             ),
             patch(
-                "hephaestus.automation.ci_driver.invoke_claude_with_session",
+                "hephaestus.automation.ci_fix_orchestrator.invoke_claude_with_session",
                 return_value=("nope", "sess"),
             ) as mock_invoke,
             patch(
-                "hephaestus.automation.ci_driver.run",
+                "hephaestus.automation.ci_fix_orchestrator.run",
                 side_effect=[clean_status, unchanged, clean_status, unchanged],
             ),
         ):
@@ -1916,11 +1916,11 @@ class TestNoCommitRetry:
                 return_value=[_make_check("lint", conclusion="failure")],
             ),
             patch(
-                "hephaestus.automation.ci_driver.gh_pr_list_unresolved_threads",
+                "hephaestus.automation.ci_fix_orchestrator.gh_pr_list_unresolved_threads",
                 return_value=[],
             ),
             patch(
-                "hephaestus.automation.ci_driver.invoke_claude_with_session",
+                "hephaestus.automation.ci_fix_orchestrator.invoke_claude_with_session",
                 side_effect=subprocess.CalledProcessError(1, ["claude"], stderr="boom"),
             ),
         ):
@@ -1948,15 +1948,15 @@ class TestNoCommitRetry:
                 return_value=[_make_check("lint", conclusion="failure")],
             ),
             patch(
-                "hephaestus.automation.ci_driver.gh_pr_list_unresolved_threads",
+                "hephaestus.automation.ci_fix_orchestrator.gh_pr_list_unresolved_threads",
                 return_value=[],
             ),
             patch(
-                "hephaestus.automation.ci_driver.resume_codex_session",
+                "hephaestus.automation.ci_fix_orchestrator.resume_codex_session",
                 return_value=AgentRunResult(stdout="ok", stderr="", session_id="s"),
             ) as mock_resume,
-            patch("hephaestus.automation.ci_driver.run_codex_session") as mock_fresh,
-            patch("hephaestus.automation.ci_driver.run", side_effect=[clean_status, post_sha]),
+            patch("hephaestus.automation.ci_fix_orchestrator.run_codex_session") as mock_fresh,
+            patch("hephaestus.automation.ci_fix_orchestrator.run", side_effect=[clean_status, post_sha]),
         ):
             result = driver._retry_no_commit_once(
                 issue_number=1,
@@ -1984,11 +1984,11 @@ class TestBotPrDiscovery:
         driver.options.include_all_authors = True
         with (
             patch(
-                "hephaestus.automation.ci_driver.get_repo_info",
+                "hephaestus.automation.pr_discovery.get_repo_info",
                 return_value=("o", "r"),
             ),
             patch(
-                "hephaestus.automation.ci_driver._gh_call",
+                "hephaestus.automation.pr_discovery._gh_call",
                 return_value=MagicMock(stdout="[]"),
             ),
         ):
@@ -2004,11 +2004,11 @@ class TestBotPrDiscovery:
         ]
         with (
             patch(
-                "hephaestus.automation.ci_driver.get_repo_info",
+                "hephaestus.automation.pr_discovery.get_repo_info",
                 return_value=("o", "r"),
             ),
             patch(
-                "hephaestus.automation.ci_driver._gh_call",
+                "hephaestus.automation.pr_discovery._gh_call",
                 return_value=MagicMock(stdout=json.dumps(raw)),
             ),
         ):
@@ -2021,11 +2021,11 @@ class TestBotPrDiscovery:
         driver.options.include_all_authors = True
         with (
             patch(
-                "hephaestus.automation.ci_driver.get_repo_info",
+                "hephaestus.automation.pr_discovery.get_repo_info",
                 return_value=("o", "r"),
             ),
             patch(
-                "hephaestus.automation.ci_driver._gh_call",
+                "hephaestus.automation.pr_discovery._gh_call",
                 side_effect=subprocess.CalledProcessError(1, ["gh"], stderr="boom"),
             ),
         ):
@@ -2035,11 +2035,11 @@ class TestBotPrDiscovery:
         """Discovery returns empty dict when gh api times out (docstring contract)."""
         with (
             patch(
-                "hephaestus.automation.ci_driver.get_repo_info",
+                "hephaestus.automation.pr_discovery.get_repo_info",
                 return_value=("o", "r"),
             ),
             patch(
-                "hephaestus.automation.ci_driver._gh_call",
+                "hephaestus.automation.pr_discovery._gh_call",
                 side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=30),
             ),
         ):
@@ -2049,11 +2049,11 @@ class TestBotPrDiscovery:
         """Discovery returns empty dict when the gh binary is missing/unexecutable."""
         with (
             patch(
-                "hephaestus.automation.ci_driver.get_repo_info",
+                "hephaestus.automation.pr_discovery.get_repo_info",
                 return_value=("o", "r"),
             ),
             patch(
-                "hephaestus.automation.ci_driver._gh_call",
+                "hephaestus.automation.pr_discovery._gh_call",
                 side_effect=FileNotFoundError(2, "No such file or directory", "gh"),
             ),
         ):
@@ -3130,7 +3130,7 @@ class TestRunDriveGreenCompact:
         self, driver: CIDriver, tmp_path: Path
     ) -> None:
         """Verify /compact runs exactly once and respects learn_captured_at gate."""
-        with patch("hephaestus.automation.ci_driver.compact_session") as mock_compact:
+        with patch("hephaestus.automation.post_merge_processor.compact_session") as mock_compact:
             mock_compact.return_value = True
 
             # First pass: should call compact_session
@@ -3145,7 +3145,7 @@ class TestRunDriveGreenCompact:
         self, driver: CIDriver, tmp_path: Path
     ) -> None:
         """Verify compact failure is non-fatal (returns False but doesn't raise)."""
-        with patch("hephaestus.automation.ci_driver.compact_session") as mock_compact:
+        with patch("hephaestus.automation.post_merge_processor.compact_session") as mock_compact:
             mock_compact.return_value = False
 
             # Should return False but not raise
@@ -3156,14 +3156,14 @@ class TestRunDriveGreenCompact:
         """Verify compact is skipped for codex (no persisted session)."""
         driver.options.agent = "codex"
 
-        with patch("hephaestus.automation.ci_driver.compact_session") as mock_compact:
+        with patch("hephaestus.automation.post_merge_processor.compact_session") as mock_compact:
             driver._run_drive_green_compact(842, 100)
             mock_compact.assert_not_called()
 
     def test_drive_green_compact_uses_worktree_path(self, driver: CIDriver, tmp_path: Path) -> None:
         """Verify compact_session is called with the worktree path."""
         with patch.object(driver, "_get_worktree_path", return_value=tmp_path):
-            with patch("hephaestus.automation.ci_driver.compact_session") as mock_compact:
+            with patch("hephaestus.automation.post_merge_processor.compact_session") as mock_compact:
                 mock_compact.return_value = True
 
                 driver._run_drive_green_compact(842, 100)
@@ -3177,7 +3177,7 @@ class TestRunDriveGreenCompact:
     ) -> None:
         """Verify compact_session uses repo_root when worktree is not available."""
         with patch.object(driver, "_get_worktree_path", side_effect=RuntimeError("No worktree")):
-            with patch("hephaestus.automation.ci_driver.compact_session") as mock_compact:
+            with patch("hephaestus.automation.post_merge_processor.compact_session") as mock_compact:
                 mock_compact.return_value = True
 
                 driver._run_drive_green_compact(842, 100)
@@ -3256,7 +3256,7 @@ class TestInvokeAgentSession:
 
     def test_claude_success_returns_rc0(self, driver: CIDriver, tmp_path: Path) -> None:
         with patch(
-            "hephaestus.automation.ci_driver.invoke_claude_with_session",
+            "hephaestus.automation.ci_fix_orchestrator.invoke_claude_with_session",
             return_value=("output text", "sess-id"),
         ) as mock_invoke:
             result = driver._invoke_agent_session(
@@ -3272,7 +3272,7 @@ class TestInvokeAgentSession:
 
     def test_claude_error_returns_nonzero_rc(self, driver: CIDriver, tmp_path: Path) -> None:
         with patch(
-            "hephaestus.automation.ci_driver.invoke_claude_with_session",
+            "hephaestus.automation.ci_fix_orchestrator.invoke_claude_with_session",
             side_effect=subprocess.CalledProcessError(1, ["claude"], stderr="boom"),
         ):
             result = driver._invoke_agent_session(
@@ -3289,10 +3289,10 @@ class TestInvokeAgentSession:
         driver.options.agent = "codex"
         with (
             patch(
-                "hephaestus.automation.ci_driver.resume_codex_session",
+                "hephaestus.automation.ci_fix_orchestrator.resume_codex_session",
                 return_value=AgentRunResult(stdout="ok", stderr="", session_id="s"),
             ) as mock_resume,
-            patch("hephaestus.automation.ci_driver.run_codex_session") as mock_fresh,
+            patch("hephaestus.automation.ci_fix_orchestrator.run_codex_session") as mock_fresh,
         ):
             result = driver._invoke_agent_session(
                 prompt="fix it",
@@ -3311,11 +3311,11 @@ class TestInvokeAgentSession:
         driver.options.agent = "codex"
         with (
             patch(
-                "hephaestus.automation.ci_driver.resume_codex_session",
+                "hephaestus.automation.ci_fix_orchestrator.resume_codex_session",
                 side_effect=subprocess.CalledProcessError(1, ["codex"], stderr="resume-fail"),
             ),
             patch(
-                "hephaestus.automation.ci_driver.run_codex_session",
+                "hephaestus.automation.ci_fix_orchestrator.run_codex_session",
                 return_value=AgentRunResult(stdout="fresh ok", stderr="", session_id="s2"),
             ) as mock_fresh,
         ):
@@ -3336,11 +3336,11 @@ class TestInvokeAgentSession:
         driver.options.agent = "codex"
         with (
             patch(
-                "hephaestus.automation.ci_driver.resume_codex_session",
+                "hephaestus.automation.ci_fix_orchestrator.resume_codex_session",
                 side_effect=subprocess.CalledProcessError(1, ["codex"], stderr="resume-fail"),
             ),
             patch(
-                "hephaestus.automation.ci_driver.run_codex_session",
+                "hephaestus.automation.ci_fix_orchestrator.run_codex_session",
                 side_effect=subprocess.CalledProcessError(2, ["codex"], stderr="fresh-fail"),
             ),
         ):
@@ -3360,7 +3360,7 @@ class TestInvokeAgentSession:
         """No session_id + fresh codex fails → CompletedProcess(returncode!=0), no exception."""
         driver.options.agent = "codex"
         with patch(
-            "hephaestus.automation.ci_driver.run_codex_session",
+            "hephaestus.automation.ci_fix_orchestrator.run_codex_session",
             side_effect=subprocess.CalledProcessError(3, ["codex"], stderr="fail"),
         ):
             result = driver._invoke_agent_session(
@@ -3375,9 +3375,9 @@ class TestInvokeAgentSession:
     def test_codex_no_session_runs_fresh(self, driver: CIDriver, tmp_path: Path) -> None:
         driver.options.agent = "codex"
         with (
-            patch("hephaestus.automation.ci_driver.resume_codex_session") as mock_resume,
+            patch("hephaestus.automation.ci_fix_orchestrator.resume_codex_session") as mock_resume,
             patch(
-                "hephaestus.automation.ci_driver.run_codex_session",
+                "hephaestus.automation.ci_fix_orchestrator.run_codex_session",
                 return_value=AgentRunResult(stdout="done", stderr="", session_id="s3"),
             ) as mock_fresh,
         ):
@@ -3395,7 +3395,7 @@ class TestInvokeAgentSession:
     def test_timeout_propagates_to_caller(self, driver: CIDriver, tmp_path: Path) -> None:
         """TimeoutExpired escapes the helper so callers can log a distinct timeout message."""
         with patch(
-            "hephaestus.automation.ci_driver.invoke_claude_with_session",
+            "hephaestus.automation.ci_fix_orchestrator.invoke_claude_with_session",
             side_effect=subprocess.TimeoutExpired(cmd=["claude"], timeout=60),
         ):
             with pytest.raises(subprocess.TimeoutExpired):
@@ -3426,7 +3426,7 @@ class TestPushCiFix:
         no_untracked = MagicMock(stdout="", returncode=0)
         with (
             patch(
-                "hephaestus.automation.ci_driver.run",
+                "hephaestus.automation.ci_fix_orchestrator.run",
                 side_effect=[post_sha, clean_status, no_untracked, ahead_count],
             ),
             patch(
@@ -3455,16 +3455,16 @@ class TestPushCiFix:
                 return_value=[_make_check("lint", conclusion="failure")],
             ),
             patch(
-                "hephaestus.automation.ci_driver.gh_pr_list_unresolved_threads",
+                "hephaestus.automation.ci_fix_orchestrator.gh_pr_list_unresolved_threads",
                 return_value=[],
             ),
             # Agent fails → _retry_no_commit_once returns False immediately
             patch(
-                "hephaestus.automation.ci_driver.invoke_claude_with_session",
+                "hephaestus.automation.ci_fix_orchestrator.invoke_claude_with_session",
                 side_effect=subprocess.CalledProcessError(1, ["claude"], stderr="err"),
             ),
             patch(
-                "hephaestus.automation.ci_driver.run",
+                "hephaestus.automation.ci_fix_orchestrator.run",
                 side_effect=[unchanged, clean_status],
             ),
         ):
@@ -3483,7 +3483,7 @@ class TestPushCiFix:
         # Unmerged index entries → not pushable
         unmerged = MagicMock(stdout="UU conflict.py\n", stderr="", returncode=0)
         with patch(
-            "hephaestus.automation.ci_driver.run",
+            "hephaestus.automation.ci_fix_orchestrator.run",
             side_effect=[post_sha, unmerged],
         ):
             result = driver._push_ci_fix(

@@ -18,7 +18,12 @@ CALL_SITES = [
     ("plan_reviewer.py", {"Read", "Glob", "Grep"}, False),
     ("review_validator.py", {"Read", "Glob", "Grep"}, False),
     ("planner_claude.py", {"Read", "Glob", "Grep", "Bash"}, True),
-    ("ci_driver.py", {"Read", "Glob", "Grep", "Bash"}, True),
+    # After #1357 SRP decomposition, invoke_claude_with_session calls moved
+    # from ci_driver.py into ci_fix_orchestrator.py (fix sessions) and
+    # post_merge_processor.py (/learn). Scan the orchestrator which has all
+    # CI-fix call sites; the post-merge /learn sites are covered by the
+    # broader Write/Edit scope check there is separate.
+    ("ci_fix_orchestrator.py", {"Read", "Glob", "Grep", "Bash"}, True),
     ("implementer_phase_runner.py", {"Read", "Glob", "Grep", "Bash"}, True),
     ("comment_difficulty.py", {"Read", "Glob", "Grep"}, False),
 ]

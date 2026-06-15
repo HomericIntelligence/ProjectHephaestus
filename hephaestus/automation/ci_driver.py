@@ -18,17 +18,12 @@ import subprocess
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from hephaestus.agents.runtime import (
     add_agent_argument,
-    is_codex,
     resolve_agent,
-    resume_codex_session,
-    run_codex_session,
-    session_agent_matches,
 )
 from hephaestus.cli.utils import add_dry_run_arg, add_json_arg, emit_json_status
 
@@ -38,50 +33,36 @@ from .address_review import (
     resolve_addressed_threads,
     run_address_fix_session,
 )
-from .advise_runner import run_advise
 from .arming_state import ArmingStateStore
-from .claude_invoke import invoke_claude_with_session
-from .claude_models import advise_model, implementer_model
+
+# Collaborators extracted by #1357 (SRP decomposition)
+from .ci_check_inspector import CICheckInspector
+from .ci_fix_orchestrator import CIFixOrchestrator
 from .claude_timeouts import (
-    advise_claude_timeout,
-    ci_driver_claude_timeout,
     ci_poll_max_wait,
-    learn_claude_timeout,
 )
 from .git_utils import (
-    get_repo_info,
     get_repo_root,
-    get_repo_slug,
     issue_ref,
     pr_ref,
     push_current_branch_with_lease_on_divergence,
     rebase_worktree_onto,
-    run,
     sync_worktree_to_remote_branch,
 )
 from .github_api import (
-    GitHubUnavailableError,
     _gh_call,
-    gh_issue_json,
     gh_pr_checks,
     gh_pr_list_unresolved_threads,
     gh_pr_resolve_thread,
 )
-from .learn import build_learn_prompt, compact_session, mnemosyne_update_evidence
 from .models import CIDriverOptions, WorkerResult
+from .post_merge_processor import PostMergeProcessor
+from .pr_discovery import PRDiscovery
 from .pr_manager import pr_has_implementation_go_label
-from .prompts import get_advise_prompt_builder
-from .session_naming import AGENT_ADVISE, AGENT_CI_DRIVER
 from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
 logger = logging.getLogger(__name__)
-
-# Conclusion values that indicate a PR's check rollup is failing in a way
-# drive-green can act on. SUCCESS / SKIPPED / NEUTRAL / PENDING are
-# explicitly excluded. Shared with loop_runner._count_failing_prs so the
-# SKIP gate and the actual work list never drift (#819).
-FAILING_CHECK_CONCLUSIONS: frozenset[str] = frozenset({"FAILURE", "CANCELLED", "TIMED_OUT"})
 
 # Max address-review passes for a green-but-BLOCKED PR before leaving it armed
 # (#1348). The progress guard stops earlier whenever a pass resolves no new
@@ -89,6 +70,14 @@ FAILING_CHECK_CONCLUSIONS: frozenset[str] = frozenset({"FAILURE", "CANCELLED", "
 # but never fully clears the set, so an unsatisfiable thread can never spin
 # forever.
 _BLOCKED_ADDRESS_MAX_ATTEMPTS = 2
+
+# Conclusion values that indicate a PR's check rollup is failing in a way
+# drive-green can act on. SUCCESS / SKIPPED / NEUTRAL / PENDING are
+# explicitly excluded. Shared with loop_runner._count_failing_prs so the
+# SKIP gate and the actual work list never drift (#819). This is the
+# canonical single definition; collaborator modules import it from here
+# via deferred imports to avoid circular imports.
+FAILING_CHECK_CONCLUSIONS: frozenset[str] = frozenset({"FAILURE", "CANCELLED", "TIMED_OUT"})
 
 
 def _pr_is_failing(pr: dict[str, Any]) -> bool:
@@ -146,11 +135,53 @@ class CIDriver:
         # arming record (and therefore its own /learn capture once the PR
         # actually merges in a subsequent run). #840 +on top of #834.
         self.shared_pr_issues: dict[int, list[int]] = {}
-        # Viewer login cache (#821). Resolved lazily on first use of the
-        # author filter; empty string means "not yet resolved". When
-        # options.include_all_authors=True the filter is bypassed and this
-        # stays empty so a broken `gh auth` does not block --all runs.
-        self._viewer_login: str = ""
+        # SRP collaborators (extracted by #1357)
+        self._pr_discovery = PRDiscovery(
+            options_provider=lambda: self.options,
+            status_tracker_provider=lambda: self.status_tracker,
+            repo_root_provider=lambda: self.repo_root,
+            pr_merge_state_provider=lambda pr_number: self._pr_merge_state(pr_number),
+            resolve_viewer_login_provider=lambda: self._resolve_viewer_login(),
+        )
+        self._check_inspector = CICheckInspector(
+            get_pr_branch=lambda pr_number: self._get_pr_branch(pr_number),
+            options_provider=lambda: self.options,
+        )
+        self._fix_orchestrator = CIFixOrchestrator(
+            options_provider=lambda: self.options,
+            repo_root_provider=lambda: self.repo_root,
+            state_dir_provider=lambda: self.state_dir,
+            status_tracker_provider=lambda: self.status_tracker,
+            get_pr_branch=lambda pr_number: self._get_pr_branch(pr_number),
+            get_worktree_path=lambda i, p: self._get_worktree_path(i, p),
+            format_review_threads_block=lambda p: self._format_review_threads_block(p),
+            failing_required_check_names=lambda p: self._failing_required_check_names(p),
+            get_failing_ci_logs=lambda p: self._get_failing_ci_logs(p),
+        )
+        self._post_merge = PostMergeProcessor(
+            options_provider=lambda: self.options,
+            repo_root_provider=lambda: self.repo_root,
+            get_worktree_path=lambda i, p: self._get_worktree_path(i, p),
+            shared_pr_issues_provider=lambda: self.shared_pr_issues,
+            state_dir_provider=lambda: self.state_dir,
+        )
+
+    # ------------------------------------------------------------------
+    # Viewer-login proxy (#821, #1357)
+    # The viewer login is owned by PRDiscovery; expose it here so tests
+    # that set ``driver._viewer_login = "..."`` propagate into the discovery
+    # collaborator without requiring test changes.
+    # ------------------------------------------------------------------
+
+    @property
+    def _viewer_login(self) -> str:
+        """Proxy viewer login to PRDiscovery."""
+        return self._pr_discovery._viewer_login
+
+    @_viewer_login.setter
+    def _viewer_login(self, value: str) -> None:
+        """Proxy viewer login setter to PRDiscovery."""
+        self._pr_discovery._viewer_login = value
 
     def run(self) -> dict[int, WorkerResult]:  # noqa: C901  # orchestration: thread pool + finally + preserve report across exception paths
         """Run the CI driver on all configured issues.
@@ -300,140 +331,12 @@ class CIDriver:
         return results
 
     def _list_open_prs_remaining(self) -> list[dict[str, Any]]:
-        """Return the list of open PRs left on the repo after the drive (#838).
-
-        A repo is only truly "driven" when there are zero open PRs left. The
-        per-issue ``_drive_issue`` loop's notion of success — every issue's
-        PR moved to green and/or got auto-merge enabled — does NOT imply the
-        repo is clean: PRs that have not yet merged (auto-merge waiting on
-        CI), PRs from issues outside the input set, and PRs opened by
-        humans/other-automation all leave open work behind.
-
-        Uses ``gh api --paginate`` so the result is the FULL set of open PRs,
-        not a capped prefix. A repo with hundreds of dependabot PRs would
-        otherwise pass the done-check after looking at only 100 of them.
-
-        Returns:
-            One dict per open PR with keys ``number``, ``title``,
-            ``headRefName``, ``autoMergeRequest`` (None or the auto-merge
-            metadata blob), and ``mergeStateStatus`` / ``mergeable`` (the
-            per-PR merge-state, fetched separately because the REST list
-            endpoint does not populate ``mergeable`` reliably — see #1328).
-            Empty list iff the repo is clean.
-
-        """
-        try:
-            owner, repo = get_repo_info(self.repo_root)
-        except RuntimeError as exc:
-            logger.error("Could not resolve repo owner/name to list open PRs: %s", exc)
-            # Unknown ownership ⇒ treat as not-done so operators investigate.
-            return [{"number": -1, "title": "(unknown: cannot resolve repo)"}]
-
-        # ``gh api --paginate`` walks ``Link: rel="next"`` headers and emits
-        # a single concatenated JSON array across all pages. ``per_page=100``
-        # is GitHub's max page size; we issue the minimum number of calls.
-        # We use ``gh api`` directly (not ``gh pr list``) because the latter
-        # caps at ``--limit`` even with paginate semantics; gh's REST proxy
-        # paginates without an upper bound.
-        try:
-            result = _gh_call(
-                [
-                    "api",
-                    "--paginate",
-                    f"/repos/{owner}/{repo}/pulls?state=open&per_page=100",
-                ],
-                check=False,
-            )
-            raw_pulls: list[dict[str, Any]] = json.loads(result.stdout or "[]")
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-            # If we cannot determine the open-PR count, the safest default is
-            # to assume the repo is NOT done — surface the unknown state as a
-            # failure so operators don't walk away on a false-green.
-            logger.error("Could not list open PRs to verify repo done-state: %s", exc)
-            return [{"number": -1, "title": "(unknown: gh api pulls failed)"}]
-
-        # The REST shape exposes ``head.ref`` and ``auto_merge`` (snake_case);
-        # normalise to the gh-CLI shape consumers downstream already use.
-        viewer = "" if self.options.include_all_authors else self._resolve_viewer_login()
-        normalised: list[dict[str, Any]] = []
-        for pr in raw_pulls:
-            user = pr.get("user") or {}
-            if viewer and user.get("login") != viewer:
-                if user.get("login") is None:
-                    logger.warning(
-                        "PR #%s has no user.login; skipping under author filter (#821)",
-                        pr.get("number"),
-                        extra={
-                            "missing_field": "user.login",
-                            "filter": "author",
-                            "pr_number": pr.get("number"),
-                        },
-                    )
-                continue  # #821: hide other-author PRs from the done-gate sweep
-            labels = pr.get("labels") or []
-            number = pr.get("number")
-            merge_state, mergeable = self._pr_merge_state(number)
-            normalised.append(
-                {
-                    "number": number,
-                    "title": pr.get("title", ""),
-                    "headRefName": (pr.get("head") or {}).get("ref", ""),
-                    "autoMergeRequest": pr.get("auto_merge"),
-                    "mergeStateStatus": merge_state,
-                    "mergeable": mergeable,
-                    "labels": [
-                        label.get("name", "") for label in labels if isinstance(label, dict)
-                    ],
-                    "isBot": user.get("type") == "Bot",
-                }
-            )
-        return normalised
+        """Delegate to PRDiscovery (extracted #1357)."""
+        return self._pr_discovery._list_open_prs_remaining()
 
     def _pr_merge_state(self, pr_number: Any) -> tuple[str, str]:
-        """Return ``(mergeStateStatus, mergeable)`` for a single PR (#1328).
-
-        The REST ``/pulls`` list endpoint does NOT populate ``mergeable`` /
-        ``mergeable_state`` reliably (GitHub computes the merge-state lazily and
-        omits it from list responses), so the done-gate cannot tell a
-        permanently-CONFLICTING armed PR apart from one that is genuinely still
-        merging. A per-PR ``gh pr view`` forces GitHub to compute the merge
-        state, matching how the rest of this module queries merge-state
-        (``_attempt_mechanical_rebase`` / ``_gh_pr_state``).
-
-        Args:
-            pr_number: PR number to query.
-
-        Returns:
-            ``(mergeStateStatus, mergeable)`` upper-cased. Empty strings when the
-            number is the unknown-marker sentinel or the query fails — an unknown
-            merge-state must never be misread as CONFLICTING.
-
-        """
-        if not isinstance(pr_number, int) or pr_number < 0:
-            return "", ""
-        try:
-            result = _gh_call(
-                [
-                    "pr",
-                    "view",
-                    str(pr_number),
-                    "--json",
-                    "mergeStateStatus,mergeable",
-                ],
-                check=False,
-            )
-            state = dict(json.loads(result.stdout or "{}"))
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-            logger.warning(
-                "Could not fetch PR #%s merge-state for done-gate; treating as unknown: %s",
-                pr_number,
-                exc,
-            )
-            return "", ""
-        return (
-            str(state.get("mergeStateStatus") or "").upper(),
-            str(state.get("mergeable") or "").upper(),
-        )
+        """Delegate to PRDiscovery (extracted #1357)."""
+        return self._pr_discovery._pr_merge_state(pr_number)
 
     def _arm_all_unarmed_open_prs(self, open_prs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Arm auto-merge on every implementation-GO un-armed open PR (#882).
@@ -473,201 +376,20 @@ class CIDriver:
         return self._list_open_prs_remaining()
 
     def _resolve_viewer_login(self) -> str:
-        """Return the authenticated `gh api user` login. Fail CLOSED on error.
-
-        Lazy + cached: only called when the author filter is active. Raises
-        ``RuntimeError`` with operator guidance on any failure so a broken
-        `gh` auth never silently widens scope to all PRs (#821 POLA).
-        """
-        if self._viewer_login:
-            return self._viewer_login
-        try:
-            result = _gh_call(["api", "user", "-q", ".login"], check=True)
-        except (
-            subprocess.CalledProcessError,
-            FileNotFoundError,
-            GitHubUnavailableError,
-        ) as exc:
-            raise RuntimeError(
-                "Could not resolve viewer login via `gh api user`: "
-                f"{exc}. Re-authenticate with `gh auth login`, or pass "
-                "--all to opt out of the @me filter (#821)."
-            ) from exc
-        login = (result.stdout or "").strip()
-        if not login:
-            raise RuntimeError(
-                "Could not resolve viewer login via `gh api user`: "
-                "empty response. Re-authenticate with `gh auth login`, "
-                "or pass --all to opt out of the @me filter (#821)."
-            )
-        self._viewer_login = login
-        return login
+        """Delegate to PRDiscovery (extracted #1357)."""
+        return self._pr_discovery._resolve_viewer_login()
 
     def _discover_bot_prs(self) -> dict[int, int]:
-        """Enumerate every open ``is_bot=true`` PR on the repo (#848).
-
-        Bot PRs (Dependabot, github-actions, etc.) carry NO ``Closes #N``
-        link to an issue, so the issue-driven discovery path can never see
-        them — they are architecturally invisible. Without this enumeration
-        a repo can sit with dozens of stranded Dependabot PRs forever while
-        the ecosystem script cheerfully reports "driven" because every
-        listed issue had no matching PR.
-
-        Returns a mapping where each bot PR's number is used both as the
-        synthetic issue key AND the PR number. Downstream code is taught
-        (``_is_bot_pr_mode``) to detect the equality and skip issue-data
-        fetches that would 404 on a synthetic key.
-
-        Returns:
-            Mapping of ``pr_number -> pr_number`` for every open bot PR.
-            Empty dict if the ``gh api`` pulls lookup fails or returns
-            nothing — bot discovery must never abort the drive on a list
-            failure.
-
-        Raises:
-            RuntimeError: When the default @me author filter is active
-                (``--all`` not set) and viewer-login resolution fails. This
-                fail-CLOSED abort is intentional per #821 (POLA): a broken
-                ``gh auth`` must never silently widen scope to every author's
-                PRs. Pass ``--all`` to opt out of the filter and bypass the
-                resolver entirely.
-
-        """
-        try:
-            owner, repo = get_repo_info(self.repo_root)
-        except RuntimeError as exc:
-            logger.info("Bot-PR discovery skipped: could not resolve owner/name (%s)", exc)
-            return {}
-
-        try:
-            result = _gh_call(
-                [
-                    "api",
-                    "--paginate",
-                    f"/repos/{owner}/{repo}/pulls?state=open&per_page=100",
-                ],
-                check=False,
-            )
-            raw_pulls: list[dict[str, Any]] = json.loads(result.stdout or "[]")
-        except (
-            subprocess.CalledProcessError,
-            subprocess.TimeoutExpired,
-            OSError,
-            json.JSONDecodeError,
-        ) as exc:
-            logger.info("Bot-PR discovery skipped: gh api failed (%s)", exc)
-            return {}
-
-        viewer = "" if self.options.include_all_authors else self._resolve_viewer_login()
-        bot_prs: dict[int, int] = {}
-        for pr in raw_pulls:
-            user = pr.get("user") or {}
-            if user.get("type") != "Bot":
-                continue
-            if viewer and user.get("login") != viewer:
-                if user.get("login") is None:
-                    logger.warning(
-                        "PR #%s has no user.login; skipping under author filter (#821)",
-                        pr.get("number"),
-                        extra={
-                            "missing_field": "user.login",
-                            "filter": "author",
-                            "pr_number": pr.get("number"),
-                        },
-                    )
-                continue  # #821: not viewer-owned and --all not set
-            number = pr.get("number")
-            if isinstance(number, int):
-                bot_prs[number] = number
-
-        if bot_prs:
-            logger.info(
-                "Discovered %s open bot-authored PR(s): %s",
-                len(bot_prs),
-                sorted(bot_prs),
-            )
-        return bot_prs
+        """Delegate to PRDiscovery (extracted #1357)."""
+        return self._pr_discovery._discover_bot_prs()
 
     def _discover_failing_prs(self) -> dict[int, int]:
-        """Enumerate open non-draft PRs whose checks failed or merge is BLOCKED.
-
-        Symmetrical to ``_discover_bot_prs``: the issue→PR direction (Closes #N)
-        misses every PR with no Closes line and every PR linked to a closed
-        issue (issue body §1, §2). One CLI call, PR-keyed, synthetic-issue
-        invariant (pr_number == issue_number) so downstream ``_is_bot_pr_mode``
-        short-circuits ``gh issue view`` identically to the bot path.
-
-        Bounded by gh's --limit 1000 (its documented hard upper). A repo with
-        more than 1000 failing open PRs is pathological — we log a WARNING
-        so operators see the truncation rather than silently dropping work.
-
-        Returns:
-            Mapping pr_number -> pr_number for every failing open PR.
-            Empty dict on any lookup failure — discovery must never abort
-            the drive.
-
-        """
-        try:
-            owner, repo = get_repo_info(self.repo_root)
-        except RuntimeError as exc:
-            logger.info("Failing-PR discovery skipped: could not resolve owner/name (%s)", exc)
-            return {}
-        try:
-            result = _gh_call(
-                [
-                    "pr",
-                    "list",
-                    "--repo",
-                    f"{owner}/{repo}",
-                    "--state",
-                    "open",
-                    "--limit",
-                    "1000",
-                    "--json",
-                    "number,isDraft,statusCheckRollup,mergeStateStatus",
-                ],
-            )
-            pulls: list[dict[str, Any]] = json.loads(result.stdout or "[]")
-        except (
-            subprocess.CalledProcessError,
-            subprocess.TimeoutExpired,
-            OSError,
-            json.JSONDecodeError,
-        ) as exc:
-            logger.info("Failing-PR discovery skipped: gh pr list failed (%s)", exc)
-            return {}
-        if len(pulls) >= 1000:
-            logger.warning(
-                "Failing-PR discovery hit gh's 1000-PR cap on %s/%s — "
-                "additional failing PRs may exist and are not visible to this run.",
-                owner,
-                repo,
-            )
-        failing: dict[int, int] = {}
-        for pr in pulls:
-            number = pr.get("number")
-            if not isinstance(number, int):
-                continue
-            if _pr_is_failing(pr):
-                failing[number] = number
-        if failing:
-            logger.info(
-                "Discovered %s open failing PR(s): %s",
-                len(failing),
-                sorted(failing),
-            )
-        return failing
+        """Delegate to PRDiscovery (extracted #1357)."""
+        return self._pr_discovery._discover_failing_prs()
 
     def _is_bot_pr_mode(self, issue_number: int, pr_number: int) -> bool:
-        """Return True iff this work item is a synthetic-issue bot PR (#848).
-
-        The bot-PR enumeration uses the PR number as a stand-in for an
-        issue number because Dependabot PRs have no associated issue.
-        Anywhere we would normally call ``gh issue view <issue_number>``
-        we must instead short-circuit; this helper centralises the check
-        so a single rule (issue == pr) keeps both ends honest.
-        """
-        return issue_number == pr_number
+        """Delegate to PRDiscovery (extracted #1357)."""
+        return self._pr_discovery._is_bot_pr_mode(issue_number, pr_number)
 
     def _discover_prs(self, issue_numbers: list[int]) -> dict[int, int]:  # noqa: C901  # orchestration: multi-PR dedup with fallback discovery across issue/PR mappings
         """Pre-discover open PRs for all issues, deduped by PR.
@@ -1123,48 +845,8 @@ class CIDriver:
             return False
 
     def _run_advise(self, issue_number: int) -> str:
-        """Pull prior learnings from ProjectMnemosyne before the CI fix loop.
-
-        Stage 3's advise-first step. Runs under ``AGENT_ADVISE`` (its own cheap,
-        read-only session), gated by ``enable_advise``; the findings are
-        prepended to the CI fix-session prompt. Delegates the Mnemosyne setup +
-        prompt build to the shared :mod:`advise_runner`; any failure degrades to
-        a skip marker so the drive never aborts over missing advice.
-        """
-        issue_data = gh_issue_json(issue_number)
-        issue_title = issue_data.get("title", f"Issue #{issue_number}")
-        issue_body = issue_data.get("body", "")
-
-        def _invoke(prompt: str) -> str:
-            if is_codex(self.options.agent):
-                result = run_codex_session(
-                    prompt,
-                    cwd=self.repo_root,
-                    timeout=advise_claude_timeout(),
-                    sandbox="read-only",
-                )
-                return (result.stdout or "").strip()
-            repo_slug = get_repo_slug(self.repo_root)
-            stdout, _ = invoke_claude_with_session(
-                repo=repo_slug,
-                issue=issue_number,
-                agent=AGENT_ADVISE,
-                prompt=prompt,
-                model=advise_model(),
-                cwd=self.repo_root,
-                timeout=advise_claude_timeout(),
-                output_format="text",
-                allowed_tools="Read,Glob,Grep,Bash",
-            )
-            return (stdout or "").strip()
-
-        return run_advise(
-            issue_number=issue_number,
-            issue_title=issue_title,
-            issue_body=issue_body,
-            invoke=_invoke,
-            build_prompt=get_advise_prompt_builder(self.options.agent),
-        )
+        """Delegate to CIFixOrchestrator (extracted #1357)."""
+        return self._fix_orchestrator._run_advise(issue_number)
 
     def _recheck_and_arm_after_fix(
         self, issue_number: int, pr_number: int, acquired_slot: int, *, resolve_dirty: bool = True
@@ -1492,15 +1174,11 @@ class CIDriver:
             WorkerResult on success or dry-run, None if all iterations failed.
 
         """
-        # Advise-first (#30): pull prior learnings once before the fix loop, so
-        # we only spend an advise call on PRs that actually need fixing. Fed
-        # into every fix-session prompt below. Skipped for bot-PR work items
-        # (#848): the issue number is synthetic (equals the PR number) so
-        # ``gh issue view`` would 404; there is also no human-authored issue
-        # body that would meaningfully steer the advise prompt.
         advise_findings = ""
         if self.options.enable_advise and not self._is_bot_pr_mode(issue_number, pr_number):
-            self.status_tracker.update_slot(acquired_slot, f"{issue_ref(issue_number)}: advising")
+            self.status_tracker.update_slot(
+                acquired_slot, f"{issue_ref(issue_number)}: advising"
+            )
             advise_findings = self._run_advise(issue_number)
 
         for iteration in range(self.options.max_fix_iterations):
@@ -1513,9 +1191,6 @@ class CIDriver:
                 ci_logs = f"{extra_context}\n\n{ci_logs}".strip()
             session_id = self._load_impl_session_id(issue_number)
             worktree_path = self._get_worktree_path(issue_number, pr_number)
-            # Resolve the PR's actual head-branch name once per iteration. The
-            # CI fix push must target THIS remote ref even if Claude switches
-            # branches locally during the session (#832).
             pr_head_branch = self._get_pr_branch(pr_number)
 
             if self.options.dry_run:
@@ -1546,8 +1221,6 @@ class CIDriver:
                     issue_number,
                     iteration + 1,
                 )
-                # Acknowledge automated review comments the fix addressed by
-                # replying + resolving the bot threads (human threads untouched).
                 self._reply_and_resolve_bot_threads(pr_number)
                 return WorkerResult(issue_number=issue_number, success=True, pr_number=pr_number)
 
@@ -1652,8 +1325,7 @@ class CIDriver:
 
         Scopes the ``gh run list`` query to the PR's head branch so we only
         see runs that belong to this PR rather than the most-recent repo-wide
-        runs (the previous repo-wide query could return runs for other PRs
-        and even other branches, making the logs useless for fixing *this* PR).
+        runs.
 
         Args:
             pr_number: GitHub PR number.
@@ -1715,25 +1387,25 @@ class CIDriver:
     # ------------------------------------------------------------------
 
     def _arming_state_path(self, issue_number: int) -> Path:
-        return self._arming_store.path(issue_number)
+        """Delegate to PostMergeProcessor (extracted #1357)."""
+        return self._post_merge._arming_state_path(issue_number)
 
     def _load_arming_state(self, issue_number: int) -> dict[str, Any] | None:
-        """Return the parsed arming record for ``issue_number`` or ``None``."""
-        return self._arming_store.load(issue_number)
+        """Delegate to PostMergeProcessor (extracted #1357)."""
+        return self._post_merge._load_arming_state(issue_number)
 
     def _save_arming_state(self, issue_number: int, record: dict[str, Any]) -> None:
-        """Persist the arming record. Best-effort; logs and swallows IO errors."""
-        self._arming_store.save(issue_number, record)
+        """Delegate to PostMergeProcessor (extracted #1357)."""
+        self._post_merge._save_arming_state(issue_number, record)
 
     def _clear_arming_state(self, issue_number: int) -> None:
-        self._arming_store.clear(issue_number)
+        """Delegate to PostMergeProcessor (extracted #1357)."""
+        self._post_merge._clear_arming_state(issue_number)
 
     @staticmethod
     def _learn_record_terminal(record: dict[str, Any]) -> bool:
-        """Return whether a drive-green /learn record should not be retried."""
-        if record.get("learn_captured_at") or record.get("learn_succeeded_at"):
-            return True
-        return str(record.get("learn_status") or "").lower() in {"succeeded", "failed"}
+        """Delegate to PostMergeProcessor (extracted #1357)."""
+        return PostMergeProcessor._learn_record_terminal(record)
 
     def _mark_drive_green_learn_result(
         self,
@@ -1742,73 +1414,12 @@ class CIDriver:
         *,
         succeeded: bool,
     ) -> None:
-        """Persist an explicit attempted/succeeded/failed learn result.
-
-        ``learn_captured_at`` is retained as the success timestamp for older
-        readers, but failure now records ``learn_status=failed`` without
-        claiming Mnemosyne was updated.
-        """
-        timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        record["learn_attempted_at"] = timestamp
-        if succeeded:
-            record["learn_status"] = "succeeded"
-            record["learn_succeeded_at"] = timestamp
-            record["learn_captured_at"] = timestamp
-            record.update(
-                getattr(self, "_last_drive_green_learn_evidence", mnemosyne_update_evidence(""))
-            )
-        else:
-            record["learn_status"] = "failed"
-            record["learn_succeeded_at"] = None
-            record["learn_captured_at"] = None
-            record.update(
-                {
-                    "mnemosyne_update_status": "failed",
-                    "mnemosyne_update_urls": [],
-                    "mnemosyne_update_pr_numbers": [],
-                }
-            )
-        self._save_arming_state(issue_number, record)
+        """Delegate to PostMergeProcessor (extracted #1357)."""
+        self._post_merge._mark_drive_green_learn_result(issue_number, record, succeeded=succeeded)
 
     def _arm_drive_green(self, pr_number: int, pr_head_branch: str, pr_head_sha: str) -> None:
-        """Record arming for every issue that resolved to ``pr_number``.
-
-        Called on the auto-merge-armed success path in the same run. For a
-        shared-PR group (#834), this writes one arming record per sibling
-        issue so each one gets its own ``/learn`` capture once the PR merges
-        in a subsequent run. The canonical issue and all deferred siblings
-        share the same ``pr_number`` and ``pr_head_branch`` — they differ
-        only in the issue id encoded in the filename.
-        """
-        siblings = self.shared_pr_issues.get(pr_number, [])
-        if not siblings:
-            # Defensive: the PR map should always know the issue, but if not
-            # we still want SOMETHING to fire /learn on the next run.
-            return
-        armed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        for issue_num in siblings:
-            existing = self._load_arming_state(issue_num) or {}
-            if self._learn_record_terminal(existing):
-                # Already attempted terminally — don't overwrite learn evidence.
-                continue
-            record = {
-                "pr_number": pr_number,
-                "pr_head_branch": pr_head_branch,
-                "head_sha_at_arming": pr_head_sha,
-                "armed_at": armed_at,
-                "learn_attempted_at": None,
-                "learn_captured_at": None,
-                "learn_status": None,
-                "learn_succeeded_at": None,
-            }
-            self._save_arming_state(issue_num, record)
-            logger.info(
-                "Issue #%s: armed for /learn on merge of PR #%s (head=%s @ %s)",
-                issue_num,
-                pr_number,
-                pr_head_branch,
-                pr_head_sha[:8] if pr_head_sha else "?",
-            )
+        """Delegate to PostMergeProcessor (extracted #1357)."""
+        self._post_merge._arm_drive_green(pr_number, pr_head_branch, pr_head_sha)
 
     def _gh_pr_state(self, pr_number: int) -> dict[str, Any] | None:
         """Return ``{state, headRefOid, mergedAt, mergeStateStatus}`` or ``None``.
@@ -2158,53 +1769,11 @@ class CIDriver:
         return WorkerResult(issue_number=issue_number, success=True, pr_number=pr_number)
 
     def _load_impl_session_id(self, issue_number: int) -> str | None:
-        """Load the agent session ID from the implementer's saved state.
-
-        Args:
-            issue_number: GitHub issue number.
-
-        Returns:
-            Session ID string, or None if not found.
-
-        """
-        # The implementer persists its state to ``issue-<n>.json`` (see
-        # ImplementationStateManager.save), NOT ``state-<n>.json``. Reading the
-        # wrong name always missed, so this lookup silently never resumed the
-        # implementer's session — masked for Claude (deterministic-UUID resume)
-        # but breaking Codex session continuity on the CI-fix path.
-        state_file = self.state_dir / f"issue-{issue_number}.json"
-        if not state_file.exists():
-            logger.debug("No implementer state file for issue #%s", issue_number)
-            return None
-
-        try:
-            data = json.loads(state_file.read_text())
-            session_id: str | None = data.get("session_id")
-            session_agent: str | None = data.get("session_agent")
-            if session_id and not session_agent_matches(session_agent, self.options.agent):
-                logger.info(
-                    "Skipping impl session for issue #%s: session belongs to %s, "
-                    "selected agent is %s",
-                    issue_number,
-                    session_agent or "claude",
-                    self.options.agent,
-                )
-                return None
-            if session_id:
-                logger.debug("Loaded session_id for issue #%s: %s...", issue_number, session_id[:8])
-            return session_id
-        except Exception as e:
-            logger.warning("Could not load session_id for issue #%s: %s", issue_number, e)
-            return None
+        """Delegate to CIFixOrchestrator (extracted #1357)."""
+        return self._fix_orchestrator._load_impl_session_id(issue_number)
 
     def _list_unresolved_threads_safe(self, pr_number: int) -> list[dict[str, Any]]:
-        """Fetch unresolved review threads, swallowing lookup failures.
-
-        Shared by the prompt-context formatter and the post-fix bot-thread
-        reply/resolve step so both run off a single fetch contract. Network/JSON
-        errors are downgraded to an info log and yield an empty list — neither
-        caller is ever gated on review-thread availability (#846).
-        """
+        """Fetch unresolved review threads, swallowing lookup failures (#846)."""
         try:
             return gh_pr_list_unresolved_threads(pr_number, dry_run=self.options.dry_run)
         except Exception as exc:
@@ -2252,27 +1821,11 @@ class CIDriver:
 
     @staticmethod
     def _is_bot_author(login: str) -> bool:
-        """Return True for automated review authors (GitHub App / bot accounts).
-
-        GitHub App authors carry a ``[bot]`` suffix on their login
-        (``github-actions[bot]``, ``coderabbitai[bot]``, ``dependabot[bot]``).
-        Human review threads are never auto-resolved — only the bot's own reply
-        thread is closed after the CI fix addresses it.
-        """
-        return login.endswith("[bot]")
+        """Delegate to CIFixOrchestrator (extracted #1357)."""
+        return CIFixOrchestrator._is_bot_author(login)
 
     def _reply_and_resolve_bot_threads(self, pr_number: int) -> int:
-        """Resolve automated review threads after a successful CI fix.
-
-        ci_driver surfaces unresolved threads to the fix prompt but cannot rely
-        on GitHub auto-resolving a bot thread when its line moves. After a fix
-        lands, resolve each BOT-authored unresolved thread without adding
-        another reply comment, so automated review comments are closed rather
-        than left dangling. Human threads are left untouched. Best-effort: a
-        failure on one thread is logged and skipped (never blocks the fix).
-
-        Returns the number of threads resolved.
-        """
+        """Resolve automated review threads after a successful CI fix (#846)."""
         if self.options.dry_run:
             return 0
         threads = self._list_unresolved_threads_safe(pr_number)
@@ -2328,46 +1881,12 @@ class CIDriver:
         ]
 
     def _tracked_worktree_changes(self, worktree_path: Path, issue_number: int) -> list[str]:
-        """Return tracked dirty status lines for a post-agent worktree.
-
-        Untracked tool output such as a local ``uv.lock`` is intentionally
-        ignored. A no-commit turn that left tracked files modified is still
-        actionable even when the remote has no red required checks, as happens
-        for merge-conflict/behind-branch repairs where the agent fixed files but
-        forgot the signed commit.
-        """
-        status = self._git_stdout_for_push_guard(
-            worktree_path,
-            issue_number,
-            ["git", "status", "--porcelain"],
-            "failed to inspect worktree status for no-commit retry",
-        )
-        if status is None:
-            return []
-        return [line for line in status.splitlines() if line.strip() and not line.startswith("?? ")]
+        """Delegate to CIFixOrchestrator (extracted #1357)."""
+        return self._fix_orchestrator._tracked_worktree_changes(worktree_path, issue_number)
 
     def _pending_required_check_names(self, pr_number: int) -> list[str]:
-        """Return names of required checks that are still in flight (not completed).
-
-        Used by the BLOCKED early-exit guard in ``_wait_for_pr_terminal`` to
-        distinguish branch-protection blocks (all checks green but conversations
-        unresolved) from pending-CI blocks (checks still running).  Returns an
-        empty list on lookup failure — the caller then conservatively assumes no
-        checks are pending and exits the poll.
-        """
-        try:
-            checks = gh_pr_checks(pr_number, dry_run=self.options.dry_run)
-        except Exception as exc:
-            logger.info(
-                "PR #%s: failed to fetch CI checks for BLOCKED pending guard (%s)",
-                pr_number,
-                exc,
-            )
-            return []
-        if not checks:
-            return []
-        required = [c for c in checks if c.get("required")] or checks
-        return [c.get("name", "") for c in required if c.get("status") != "completed"]
+        """Delegate to CICheckInspector (extracted #1357)."""
+        return self._check_inspector._pending_required_check_names(pr_number)
 
     def _force_engagement_prompt(
         self,
@@ -2380,66 +1899,15 @@ class CIDriver:
         review_threads_block: str,
         dirty_tracked_changes: list[str] | None = None,
     ) -> str:
-        """Build the retry prompt when the agent returned without committing (#846).
-
-        The retry must engage the agent enough to either (a) produce a real
-        fix or (b) explicitly say why CI cannot pass / merge. The prompt names
-        the failing checks and/or dirty tracked files verbatim, re-emphasises
-        the existing PR/branch invariant, and re-emphasises signed commits — a
-        no-commit retry is a contract violation that the agent has to address
-        head-on.
-        """
-        failing_block = "\n".join(f"- {n}" for n in failing_check_names) or "- (unknown)"
-        dirty_lines = dirty_tracked_changes or []
-        dirty_block = "\n".join(f"- {line}" for line in dirty_lines)
-        if dirty_block:
-            dirty_block = (
-                "\n\nThe local worktree also contains uncommitted tracked changes "
-                "from the previous turn. Review this existing diff first and either "
-                f"commit it after verification or amend it before committing:\n\n{dirty_block}\n"
-            )
-        remote_block = (
-            "The required CI checks below are STILL failing on the remote"
-            if failing_check_names
-            else "The remote checks may be green, but the PR still needs a committed "
-            "repair before the driver can push"
-        )
-        return (
-            f"{review_threads_block}"
-            f"## Force-Engagement Retry — Previous Turn Produced No Commit\n\n"
-            f"You just returned from a CI-fix session for PR {pr_ref(pr_number)} "
-            f"(issue {issue_ref(issue_number)}) WITHOUT producing a new commit on "
-            f"branch `{pr_head_branch}`. {remote_block}:\n\n"
-            f"{failing_block}\n\n"
-            f"{dirty_block}"
-            f"Returning no commit when required checks are still red is itself a "
-            f"bug; returning no commit after editing tracked files is also a bug. "
-            f"Fix the code so the failing checks pass and the PR can merge. If no "
-            f"code fix is possible, DO NOT commit a 'blocker' file: a new "
-            f"Markdown/docs file will itself fail the repo's lint gates (e.g. "
-            f"markdownlint) and turn one blocker into two. Instead leave the tree "
-            f"unchanged and report the blocker via the `BLOCKED:` line below — do "
-            f"NOT commit any file to document it.\n\n"
-            f"Working directory: {worktree_path}\n"
-            f"Current branch (DO NOT change, DO NOT create a new branch): "
-            f"{pr_head_branch}\n\n"
-            f"Required behaviour:\n"
-            f"1. Re-read the failing check logs for the names listed above.\n"
-            f"2. Make the minimal change that addresses each failure.\n"
-            f"3. Run `pixi run python -m pytest tests/ -v` and "
-            f"`pre-commit run --all-files` locally to verify before committing. "
-            f"This MUST include any markdown/lint hooks — every file you add or "
-            f"edit has to pass the repo's own linters, with no rule disabled.\n"
-            f"4. **Every commit MUST be cryptographically signed (`git commit -S`).** "
-            f"NEVER use `--no-verify`. The repository's CI gate rejects unsigned "
-            f"commits and any commit that bypassed pre-commit hooks.\n"
-            f"5. Do NOT run `git checkout -b`, `git switch -c`, or any command "
-            f"that creates or switches branches — the fix has to land on "
-            f"`{pr_head_branch}`.\n"
-            f"6. Do NOT add a new top-level `CI_BLOCKER.md` or similar doc file to "
-            f"record the blocker — use the `BLOCKED:` line instead.\n\n"
-            f"If after the steps above you still cannot produce a commit, reply "
-            f"with a single line `BLOCKED: <one-sentence reason>` and stop."
+        """Delegate to CIFixOrchestrator (extracted #1357)."""
+        return self._fix_orchestrator._force_engagement_prompt(
+            issue_number=issue_number,
+            pr_number=pr_number,
+            worktree_path=worktree_path,
+            pr_head_branch=pr_head_branch,
+            failing_check_names=failing_check_names,
+            review_threads_block=review_threads_block,
+            dirty_tracked_changes=dirty_tracked_changes,
         )
 
     def _record_repeated_no_commit(
@@ -2450,36 +1918,13 @@ class CIDriver:
         pr_head_branch: str,
         failing_check_names: list[str],
     ) -> None:
-        """Persist a marker for the next ecosystem run (#846).
-
-        Writes ``state_dir / "repeated-no-commit-<pr>.json"`` so a future
-        run (and the human reading the logs) can see which PRs got stuck
-        in the no-commit loop. We deliberately do NOT delete the arming
-        record here — the PR is still open and may yet land via another
-        actor; the marker file is purely a forensics aid.
-        """
-        marker = self.state_dir / f"repeated-no-commit-{pr_number}.json"
-        try:
-            marker.write_text(
-                json.dumps(
-                    {
-                        "issue_number": issue_number,
-                        "pr_number": pr_number,
-                        "pr_head_branch": pr_head_branch,
-                        "failing_required_checks": failing_check_names,
-                        "recorded_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                    indent=2,
-                )
-                + "\n"
-            )
-        except OSError as exc:
-            logger.warning(
-                "Issue #%s: failed to write repeated-no-commit marker for PR #%s: %s",
-                issue_number,
-                pr_number,
-                exc,
-            )
+        """Delegate to CIFixOrchestrator (extracted #1357)."""
+        self._fix_orchestrator._record_repeated_no_commit(
+            issue_number=issue_number,
+            pr_number=pr_number,
+            pr_head_branch=pr_head_branch,
+            failing_check_names=failing_check_names,
+        )
 
     def _invoke_agent_session(
         self,
@@ -2490,94 +1935,14 @@ class CIDriver:
         issue_number: int,
         pr_number: int,
     ) -> subprocess.CompletedProcess[str]:
-        """Dispatch a prompt to the configured agent (codex or claude).
-
-        Returns a CompletedProcess whose returncode signals success or failure:
-        - returncode == 0: agent ran successfully (stdout has output)
-        - returncode != 0: agent failed (stderr has details)
-
-        For codex, returncode is synthetic — AgentRunResult has no returncode
-        field; success is "no CalledProcessError" (hephaestus/agents/runtime.py).
-        For claude, returncode comes from the subprocess exit code.
-
-        CalledProcessError is absorbed from all codex paths into a non-zero
-        CompletedProcess. TimeoutExpired propagates to the caller so it can
-        log a distinct timeout message.
-        """
-        if is_codex(self.options.agent):
-            if session_id:
-                try:
-                    result = resume_codex_session(
-                        session_id,
-                        prompt,
-                        cwd=worktree_path,
-                        timeout=ci_driver_claude_timeout(),
-                    )
-                except subprocess.CalledProcessError as exc:
-                    logger.warning(
-                        "Issue #%s: Codex resume session %r failed for PR #%s; "
-                        "falling back to fresh session: %s",
-                        issue_number,
-                        session_id,
-                        pr_number,
-                        (exc.stderr or exc.stdout or "")[:300],
-                    )
-                    try:
-                        result = run_codex_session(
-                            prompt,
-                            cwd=worktree_path,
-                            timeout=ci_driver_claude_timeout(),
-                            sandbox="workspace-write",
-                        )
-                    except subprocess.CalledProcessError as fresh_exc:
-                        return subprocess.CompletedProcess(
-                            args=fresh_exc.cmd,
-                            returncode=fresh_exc.returncode,
-                            stdout=fresh_exc.stdout or "",
-                            stderr=fresh_exc.stderr or "",
-                        )
-            else:
-                try:
-                    result = run_codex_session(
-                        prompt,
-                        cwd=worktree_path,
-                        timeout=ci_driver_claude_timeout(),
-                        sandbox="workspace-write",
-                    )
-                except subprocess.CalledProcessError as exc:
-                    return subprocess.CompletedProcess(
-                        args=exc.cmd,
-                        returncode=exc.returncode,
-                        stdout=exc.stdout or "",
-                        stderr=exc.stderr or "",
-                    )
-            return subprocess.CompletedProcess(
-                args=[], returncode=0, stdout=result.stdout, stderr=result.stderr or ""
-            )
-
-        repo_slug = get_repo_slug(self.repo_root)
-        try:
-            stdout, _ = invoke_claude_with_session(
-                repo=repo_slug,
-                issue=issue_number,
-                agent=AGENT_CI_DRIVER,
-                prompt=prompt,
-                model=implementer_model(),
-                cwd=worktree_path,
-                timeout=ci_driver_claude_timeout(),
-                output_format="json",
-                allowed_tools="Read,Write,Edit,Glob,Grep,Bash",
-                extra_args=["--dangerously-skip-permissions"],
-                input_via_stdin=True,
-            )
-            return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
-        except subprocess.CalledProcessError as exc:
-            return subprocess.CompletedProcess(
-                args=exc.cmd,
-                returncode=exc.returncode,
-                stdout=exc.stdout or "",
-                stderr=exc.stderr or "",
-            )
+        """Delegate to CIFixOrchestrator (extracted #1357)."""
+        return self._fix_orchestrator._invoke_agent_session(
+            prompt=prompt,
+            session_id=session_id,
+            worktree_path=worktree_path,
+            issue_number=issue_number,
+            pr_number=pr_number,
+        )
 
     def _push_ci_fix(
         self,
@@ -2753,43 +2118,8 @@ class CIDriver:
         pre_agent_sha: str,
         issue_number: int,
     ) -> bool:
-        """Return True iff HEAD has moved past ``pre_agent_sha`` after the agent ran.
-
-        Called between the agent session and the push to detect the
-        no-commit-made case (#836). When ``pre_agent_sha`` still matches HEAD
-        the agent did not commit anything, so a force-with-lease push of
-        HEAD:<branch> would be a silent 0-exit no-op and the driver would
-        falsely log "pushed CI fixes". We instead log a warning and return
-        False so the iteration counts as failed.
-
-        Args:
-            worktree_path: Worktree to inspect.
-            pre_agent_sha: HEAD SHA captured right after the pre-agent sync.
-            issue_number: For log context.
-
-        Returns:
-            True if HEAD moved (something to push); False if it did not (or
-            if reading HEAD failed — we treat that as "don't push" too).
-
-        """
-        try:
-            post_agent_sha = run(["git", "rev-parse", "HEAD"], cwd=worktree_path).stdout.strip()
-        except subprocess.CalledProcessError as exc:
-            logger.error(
-                "Issue #%s: failed to read HEAD after CI fix session: %s",
-                issue_number,
-                (exc.stderr or exc.stdout or "")[:300],
-            )
-            return False
-        if post_agent_sha == pre_agent_sha:
-            logger.warning(
-                "Issue #%s: agent session produced no new commit (HEAD unchanged "
-                "at %s); skipping push and treating iteration as failed",
-                issue_number,
-                pre_agent_sha[:8],
-            )
-            return False
-        return True
+        """Delegate to CIFixOrchestrator (extracted #1357)."""
+        return self._fix_orchestrator._head_advanced(worktree_path, pre_agent_sha, issue_number)
 
     def _git_stdout_for_push_guard(
         self,
@@ -2798,26 +2128,10 @@ class CIDriver:
         argv: list[str],
         failure_message: str,
     ) -> str | None:
-        """Run a git inspection command for the CI pre-push guard."""
-        try:
-            result = run(argv, cwd=worktree_path, capture_output=True, check=False)
-        except subprocess.CalledProcessError as exc:
-            logger.error(
-                "Issue #%s: %s: %s",
-                issue_number,
-                failure_message,
-                (exc.stderr or exc.stdout or "")[:300],
-            )
-            return None
-        if result.returncode != 0:
-            logger.error(
-                "Issue #%s: %s: %s",
-                issue_number,
-                failure_message,
-                (result.stderr or result.stdout or "")[:300],
-            )
-            return None
-        return result.stdout or ""
+        """Delegate to CIFixOrchestrator (extracted #1357)."""
+        return self._fix_orchestrator._git_stdout_for_push_guard(
+            worktree_path, issue_number, argv, failure_message
+        )
 
     def _ci_fix_head_is_pushable(
         self,
@@ -2826,106 +2140,18 @@ class CIDriver:
         *,
         base_ref: str = "origin/main",
     ) -> bool:
-        """Return True when the post-agent worktree is safe to push.
-
-        ``_head_advanced`` only proves HEAD changed. A conflict-resolution agent
-        can still leave the index unmerged, leave tracked files uncommitted, or
-        accidentally detach at the base branch itself. None of those states may
-        be pushed to the PR head.
-        """
-        unmerged = self._git_stdout_for_push_guard(
-            worktree_path,
-            issue_number,
-            ["git", "diff", "--name-only", "--diff-filter=U"],
-            "failed to inspect merge state before push",
+        """Delegate to CIFixOrchestrator (extracted #1357)."""
+        return self._fix_orchestrator._ci_fix_head_is_pushable(
+            worktree_path, issue_number, base_ref=base_ref
         )
-        if unmerged is None:
-            return False
-        unmerged_paths = [line for line in unmerged.splitlines() if line.strip()]
-        if unmerged_paths:
-            logger.error(
-                "Issue #%s: refusing to push CI fix with unresolved merge paths: %s",
-                issue_number,
-                ", ".join(unmerged_paths[:10]),
-            )
-            return False
-
-        status = self._git_stdout_for_push_guard(
-            worktree_path,
-            issue_number,
-            ["git", "status", "--porcelain"],
-            "failed to inspect worktree status before push",
-        )
-        if status is None:
-            return False
-        tracked_dirty = [
-            line for line in status.splitlines() if line.strip() and not line.startswith("?? ")
-        ]
-        if tracked_dirty:
-            logger.error(
-                "Issue #%s: refusing to push CI fix with uncommitted tracked changes: %s",
-                issue_number,
-                ", ".join(tracked_dirty[:10]),
-            )
-            return False
-
-        ahead = self._git_stdout_for_push_guard(
-            worktree_path,
-            issue_number,
-            ["git", "rev-list", "--count", f"{base_ref}..HEAD"],
-            f"failed to inspect HEAD ahead of {base_ref} before push",
-        )
-        if ahead is None:
-            return False
-        try:
-            ahead_count = int(ahead.strip() or "0")
-        except ValueError:
-            logger.error(
-                "Issue #%s: refusing to push CI fix with invalid ahead count: %r",
-                issue_number,
-                ahead,
-            )
-            return False
-        if ahead_count <= 0:
-            logger.error(
-                "Issue #%s: refusing to push CI fix because HEAD has no commits ahead of %s",
-                issue_number,
-                base_ref,
-            )
-            return False
-        return True
 
     def _sync_worktree_and_snapshot_sha(
         self, issue_number: int, worktree_path: Path, pr_head_branch: str
     ) -> str | None:
-        """Sync worktree to remote PR head and snapshot HEAD SHA.
-
-        Returns the pre-agent SHA string, or ``None`` on any subprocess failure
-        (caller should return ``False`` immediately).
-
-        Syncing before the agent prevents the agent from committing on a stale
-        base and failing the force-with-lease push (#832). Snapshotting the SHA
-        lets the push helper detect sessions that return without committing (#836).
-        """
-        try:
-            sync_worktree_to_remote_branch(worktree_path, pr_head_branch)
-        except subprocess.CalledProcessError as exc:
-            logger.error(
-                "Issue #%s: failed to sync worktree to origin/%s before CI fix: %s",
-                issue_number,
-                pr_head_branch,
-                (exc.stderr or exc.stdout or "")[:300],
-            )
-            return None
-        try:
-            return run(["git", "rev-parse", "HEAD"], cwd=worktree_path).stdout.strip()
-        except subprocess.CalledProcessError as exc:
-            logger.error(
-                "Issue #%s: failed to snapshot HEAD before CI fix session: %s",
-                issue_number,
-                (exc.stderr or exc.stdout or "")[:300],
-            )
-            return None
+        """Delegate to CIFixOrchestrator (extracted #1357)."""
+        return self._fix_orchestrator._sync_worktree_and_snapshot_sha(
+            issue_number, worktree_path, pr_head_branch
+        )
 
     def _build_ci_fix_prompt(
         self,
@@ -2936,27 +2162,9 @@ class CIDriver:
         pr_head_branch: str,
         advise_findings: str,
     ) -> str:
-        """Build the CI-fix agent prompt string."""
-        advise_block = ""
-        findings = advise_findings.strip()
-        if findings and not findings.startswith("<!-- advise step skipped"):
-            advise_block = f"## Prior Learnings from Team Knowledge Base\n\n{findings}\n\n---\n\n"
-        review_threads_block = self._format_review_threads_block(pr_number)
-        return (
-            f"{advise_block}{review_threads_block}"
-            f"Fix the CI failures for PR {pr_ref(pr_number)} (issue {issue_ref(issue_number)}).\n\n"
-            f"Working directory: {worktree_path}\n"
-            f"Current branch (DO NOT change): {pr_head_branch}\n\n"
-            f"CI failure logs:\n{ci_logs}\n\n"
-            "Fix the code to make the CI checks pass. After fixing:\n"
-            "1. Run: pixi run python -m pytest tests/ -v\n"
-            "2. Run: pre-commit run --all-files\n"
-            "3. Commit changes (do NOT push) on the current branch — DO NOT run "
-            "`git checkout -b`, `git switch -c`, or any other command that creates "
-            "or switches to a different branch\n"
-            "4. Every commit MUST be cryptographically signed (`git commit -S`); "
-            "NEVER use `--no-verify`.\n\n"
-            f"Commit message: fix: Address CI failures for PR {pr_ref(pr_number)}\n"
+        """Delegate to CIFixOrchestrator (extracted #1357)."""
+        return self._fix_orchestrator._build_ci_fix_prompt(
+            issue_number, pr_number, worktree_path, ci_logs, pr_head_branch, advise_findings
         )
 
     def _run_ci_fix_session(
@@ -3114,122 +2322,23 @@ class CIDriver:
             )
             return False
 
+    @property
+    def _last_drive_green_learn_evidence(self) -> Any:
+        """Proxy learn-evidence to PostMergeProcessor (tests access via driver)."""
+        return self._post_merge._last_drive_green_learn_evidence
+
+    @_last_drive_green_learn_evidence.setter
+    def _last_drive_green_learn_evidence(self, value: Any) -> None:
+        """Proxy learn-evidence setter to PostMergeProcessor."""
+        self._post_merge._last_drive_green_learn_evidence = value
+
     def _run_drive_green_learnings(self, issue_number: int, pr_number: int) -> bool:
-        """Capture drive-green learnings under AGENT_CI_DRIVER (Session 3).
-
-        Runs after a PR reaches green and auto-merge is enabled, mirroring the
-        implementer's post-PR ``/learn`` step but scoped to *this* drive: what
-        made CI fail and how it was fixed. Resumes Session 3 (the
-        ``AGENT_CI_DRIVER`` session the fix session created) so the learnings
-        compound on the same transcript that did the work.
-
-        This is best-effort. Any failure is logged at WARNING and swallowed so
-        a flaky learnings step never flips a successful drive to failure.
-
-        Args:
-            issue_number: GitHub issue number.
-            pr_number: GitHub PR number.
-
-        Returns:
-            True if the learnings session completed, False otherwise.
-
-        """
-        prompt = build_learn_prompt(
-            f"You just drove PR {pr_ref(pr_number)} (issue {issue_ref(issue_number)}) "
-            "to green CI. Capture concise learnings about what made CI fail and how "
-            "you fixed it, scoped to this issue/PR."
-        )
-        self._last_drive_green_learn_evidence = mnemosyne_update_evidence("")
-        try:
-            repo_slug = get_repo_slug(self.repo_root)
-            # Best-effort: try to resume in the original worktree (so the
-            # AGENT_CI_DRIVER transcript is found by ``session_jsonl_path``).
-            # In the post-merge code path (#840) the PR's head branch may be
-            # gone from the remote, so ``_get_worktree_path`` could fail. In
-            # that case fall back to ``repo_root`` cwd — the prompt is
-            # self-contained, and a fresh ``--session-id`` create still
-            # captures the lesson.
-            try:
-                cwd = self._get_worktree_path(issue_number, pr_number)
-            except Exception as wt_err:
-                logger.info(
-                    "Issue #%s: no worktree available for /learn (%s); "
-                    "falling back to repo root for a fresh session",
-                    issue_number,
-                    wt_err,
-                )
-                cwd = self.repo_root
-            if is_codex(self.options.agent):
-                codex_result = run_codex_session(
-                    prompt,
-                    cwd=cwd,
-                    timeout=learn_claude_timeout(),
-                    sandbox="workspace-write",
-                )
-                self._last_drive_green_learn_evidence = mnemosyne_update_evidence(
-                    codex_result.stdout or ""
-                )
-                logger.info("Issue #%s: drive-green learnings captured with Codex", issue_number)
-                return True
-            stdout, _ = invoke_claude_with_session(
-                repo=repo_slug,
-                issue=issue_number,
-                agent=AGENT_CI_DRIVER,
-                prompt=prompt,
-                # /learn inherits the parent phase's model. drive-green resumes
-                # the implementer's session, and ``claude --resume`` is locked to
-                # the model that created it, so we must use implementer_model().
-                model=implementer_model(),
-                cwd=cwd,
-                timeout=learn_claude_timeout(),
-                output_format="text",
-                allowed_tools="Read,Write,Edit,Glob,Grep,Bash",
-                extra_args=["--dangerously-skip-permissions"],
-                input_via_stdin=True,
-            )
-            self._last_drive_green_learn_evidence = mnemosyne_update_evidence(stdout or "")
-            logger.info("Issue #%s: drive-green learnings captured", issue_number)
-            return True
-        except Exception as e:  # broad: external claude process; non-blocking
-            logger.warning(
-                "Issue #%s: drive-green learnings failed (non-fatal): %s",
-                issue_number,
-                e,
-            )
-            return False
+        """Delegate to PostMergeProcessor (extracted #1357)."""
+        return self._post_merge._run_drive_green_learnings(issue_number, pr_number)
 
     def _run_drive_green_compact(self, issue_number: int, pr_number: int) -> bool:
-        """Compact the AGENT_CI_DRIVER session transcript after /learn (#842).
-
-        Mirrors the cwd-derivation of ``_run_drive_green_learnings``: try the
-        worktree first so the deterministic JSONL probe in ``session_jsonl_path``
-        finds the transcript, fall back to ``repo_root`` when the branch is
-        already gone post-merge. Non-fatal.
-        """
-        if is_codex(self.options.agent):
-            logger.info(
-                "Issue #%s: skipping /compact (codex has no persisted "
-                "drive-green session to resume)",
-                issue_number,
-            )
-            return False
-        try:
-            cwd = self._get_worktree_path(issue_number, pr_number)
-        except Exception as wt_err:
-            logger.info(
-                "Issue #%s: no worktree available for /compact (%s); using repo root",
-                issue_number,
-                wt_err,
-            )
-            cwd = self.repo_root
-        repo_slug = get_repo_slug(self.repo_root)
-        return compact_session(
-            repo=repo_slug,
-            issue=issue_number,
-            agent=AGENT_CI_DRIVER,
-            cwd=cwd,
-            model=implementer_model(),
-        )
+        """Delegate to PostMergeProcessor (extracted #1357)."""
+        return self._post_merge._run_drive_green_compact(issue_number, pr_number)
 
     def _parse_json_block(self, text: str) -> dict[str, Any]:
         """Extract and parse the first JSON block from a text string.

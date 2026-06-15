@@ -1127,7 +1127,7 @@ class TestSubprocessTimeouts:
     def test_rebase_main_git_ops_pass_metadata_timeout(self, tmp_path: Path) -> None:
         """The local git ops in _rebase_main carry METADATA_TIMEOUT."""
         with (
-            patch("hephaestus.automation.loop_runner.resilient_call") as mock_resilient,
+            patch("hephaestus.automation.loop_repo_manager.resilient_call") as mock_resilient,
             patch("hephaestus.automation.loop_runner.subprocess.run") as mock_run,
         ):
             mock_resilient.return_value = _completed()
@@ -1168,7 +1168,7 @@ class TestResilientCallAdoption:
     def test_ensure_clone_uses_resilient_call_with_network_timeout(self, tmp_path: Path) -> None:
         """``_ensure_clone`` delegates the clone to resilient_call."""
         dest = tmp_path / "Repo"
-        with patch("hephaestus.automation.loop_runner.resilient_call") as mock_resilient:
+        with patch("hephaestus.automation.loop_repo_manager.resilient_call") as mock_resilient:
             mock_resilient.return_value = _completed(returncode=0)
             _ensure_clone("Org", "Repo", dest)
         assert mock_resilient.call_count == 1
@@ -1180,7 +1180,7 @@ class TestResilientCallAdoption:
     def test_rebase_main_fetch_uses_resilient_call(self, tmp_path: Path) -> None:
         """``_rebase_main`` routes the network fetch through resilient_call."""
         with (
-            patch("hephaestus.automation.loop_runner.resilient_call") as mock_resilient,
+            patch("hephaestus.automation.loop_repo_manager.resilient_call") as mock_resilient,
             patch("hephaestus.automation.loop_runner.subprocess.run") as mock_run,
         ):
             mock_resilient.return_value = _completed()
@@ -1233,7 +1233,7 @@ class TestResilientCallAdoption:
         with (
             patch("hephaestus.automation.loop_runner.subprocess.run") as mock_run,
             patch(
-                "hephaestus.automation.loop_runner.resilient_call",
+                "hephaestus.automation.loop_repo_manager.resilient_call",
                 side_effect=_hang,
             ),
         ):
@@ -1255,7 +1255,7 @@ class TestResilientCallAdoption:
             return _completed()
 
         with (
-            patch("hephaestus.automation.loop_runner.resilient_call", return_value=_completed()),
+            patch("hephaestus.automation.loop_repo_manager.resilient_call", return_value=_completed()),
             patch("hephaestus.automation.loop_runner.subprocess.run", side_effect=fake_run),
         ):
             sha, fetch_ok = _rebase_main("Repo", tmp_path)
@@ -1291,7 +1291,7 @@ class TestResilientCallAdoption:
             return _completed()
 
         with (
-            patch("hephaestus.automation.loop_runner.resilient_call", return_value=_completed()),
+            patch("hephaestus.automation.loop_repo_manager.resilient_call", return_value=_completed()),
             patch("hephaestus.automation.loop_runner.subprocess.run", side_effect=fake_run),
         ):
             sha, fetch_ok = _rebase_main("Repo", tmp_path)
@@ -1323,11 +1323,11 @@ class TestResilientCallAdoption:
 
         with (
             patch(
-                "hephaestus.automation.loop_runner.resilient_call",
+                "hephaestus.automation.loop_repo_manager.resilient_call",
                 return_value=fetch_failure,
             ),
             patch("hephaestus.automation.loop_runner.subprocess.run") as mock_run,
-            caplog.at_level("WARNING", logger="hephaestus.automation.loop_runner"),
+            caplog.at_level("WARNING", logger="hephaestus.automation.loop_repo_manager"),
         ):
             mock_run.return_value = _completed(stdout="abc1234")
             sha, fetch_ok = _rebase_main("Repo", tmp_path)
@@ -1342,7 +1342,7 @@ class TestResilientCallAdoption:
         """A zero-rc fetch returns ``fetch_ok=True`` and the unmodified SHA."""
         with (
             patch(
-                "hephaestus.automation.loop_runner.resilient_call",
+                "hephaestus.automation.loop_repo_manager.resilient_call",
                 return_value=_completed(returncode=0),
             ),
             patch("hephaestus.automation.loop_runner.subprocess.run") as mock_run,

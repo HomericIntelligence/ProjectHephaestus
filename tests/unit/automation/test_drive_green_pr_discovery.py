@@ -123,7 +123,7 @@ class TestCountFailingPrs:
                 returncode=0,
                 stdout=json.dumps(mock_output),
             )
-            with patch("hephaestus.automation.loop_runner.LOG") as mock_logger:
+            with patch("hephaestus.automation.loop_repo_manager.LOG") as mock_logger:
                 result = _count_failing_prs("MyOrg", "MyRepo")
         assert result == 1000
         mock_logger.warning.assert_called()

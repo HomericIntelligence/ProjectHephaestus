@@ -12,6 +12,7 @@ Follows development principles:
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -191,7 +192,7 @@ def _finite_float(value: str) -> float:
         parsed = float(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"expected a finite number, got {value!r}") from exc
-    if parsed != parsed or parsed in {float("inf"), float("-inf")}:
+    if not math.isfinite(parsed):
         raise argparse.ArgumentTypeError(f"expected a finite number, got {value!r}")
     return parsed
 
@@ -212,6 +213,14 @@ def _positive_float(value: str) -> float:
     return parsed
 
 
+def _at_least_one_float(value: str) -> float:
+    """Parse a finite float greater than or equal to one."""
+    parsed = _finite_float(value)
+    if parsed < 1.0:
+        raise argparse.ArgumentTypeError(f"expected a number >= 1.0, got {value!r}")
+    return parsed
+
+
 def add_github_throttle_args(parser: argparse.ArgumentParser) -> None:
     """Add GitHub global-throttle configuration flags to a CLI parser."""
     group = parser.add_argument_group("GitHub throttle options")
@@ -227,7 +236,7 @@ def add_github_throttle_args(parser: argparse.ArgumentParser) -> None:
     )
     group.add_argument(
         "--gh-global-burst",
-        type=_positive_float,
+        type=_at_least_one_float,
         default=30.0,
         metavar="FLOAT",
         help="Global gh token-bucket burst size (default: 30.0).",

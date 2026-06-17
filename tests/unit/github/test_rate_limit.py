@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -532,6 +533,7 @@ class TestGlobalThrottle:
     """Tests for gh_global_throttle_acquire (cross-process token bucket)."""
 
     def test_no_op_when_rate_zero(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
         monkeypatch.setenv("TMPDIR", str(tmp_path))
         configure_gh_global_throttle(rate=0, burst=10)
         # Should return effectively immediately and never touch the state file.
@@ -542,6 +544,7 @@ class TestGlobalThrottle:
         assert not _global_throttle_state_path().exists()
 
     def test_first_call_succeeds_immediately_with_full_burst(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
         monkeypatch.setenv("TMPDIR", str(tmp_path))
         configure_gh_global_throttle(rate=1000, burst=10)
         before = time.monotonic()
@@ -549,19 +552,35 @@ class TestGlobalThrottle:
         elapsed = time.monotonic() - before
         assert elapsed < 0.1
         assert _global_throttle_state_path().exists()
+        assert oct(_global_throttle_state_path().parent.stat().st_mode & 0o777) == "0o700"
+        assert oct(_global_throttle_state_path().stat().st_mode & 0o777) == "0o600"
 
-    def test_state_path_is_tmpdir_subdirectory(self, monkeypatch, tmp_path) -> None:
-        monkeypatch.setenv("TMPDIR", str(tmp_path))
+    def test_state_path_ignores_xdg_runtime_dir(self, monkeypatch, tmp_path) -> None:
+        xdg = tmp_path / "xdg"
+        xdg.mkdir(mode=0o700)
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(xdg))
+        monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+        uid = getattr(os, "getuid", lambda: "user")()
         assert _global_throttle_state_path() == (
-            tmp_path / "hephaestus" / "gh-rate" / "hephaestus_gh_rate.json"
+            tmp_path / "tmp" / f"hephaestus-{uid}" / "gh-rate" / "hephaestus_gh_rate.json"
+        )
+
+    def test_state_path_falls_back_to_tmpdir_subdirectory(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "missing-xdg"))
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        uid = getattr(os, "getuid", lambda: "user")()
+        assert _global_throttle_state_path() == (
+            tmp_path / f"hephaestus-{uid}" / "gh-rate" / "hephaestus_gh_rate.json"
         )
 
     def test_state_path_ignores_non_tmpdir_temp_envs(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
         monkeypatch.delenv("TMPDIR", raising=False)
         monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
         monkeypatch.setenv("TMP", str(tmp_path / "tmp"))
+        uid = getattr(os, "getuid", lambda: "user")()
         assert _global_throttle_state_path() == (
-            Path("/tmp") / "hephaestus" / "gh-rate" / "hephaestus_gh_rate.json"
+            Path("/tmp") / f"hephaestus-{uid}" / "gh-rate" / "hephaestus_gh_rate.json"
         )
 
     def test_config_rejects_invalid_values(self) -> None:
@@ -569,6 +588,8 @@ class TestGlobalThrottle:
             configure_gh_global_throttle(rate=-1, burst=10)
         with pytest.raises(ValueError, match="burst"):
             configure_gh_global_throttle(rate=10, burst=0)
+        with pytest.raises(ValueError, match="burst"):
+            configure_gh_global_throttle(rate=10, burst=0.5)
 
     def test_rapid_calls_eventually_throttle(self, monkeypatch, tmp_path) -> None:
         """With burst=2 and rate=10/sec, the third call must request a sleep >= 0.1s.
@@ -596,6 +617,7 @@ class TestGlobalThrottle:
         """
         import unittest.mock
 
+        monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
         monkeypatch.setenv("TMPDIR", str(tmp_path))
         configure_gh_global_throttle(rate=10, burst=2)
 

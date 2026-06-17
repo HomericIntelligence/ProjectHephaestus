@@ -37,6 +37,7 @@ gh() {{
     esac
 }}
 export -f gh
+export HEPHAESTUS_GH=gh
 . {SNIPPET}
 choose_merge_flag {repo}
 """
@@ -66,6 +67,7 @@ gh() {{
     esac
 }}
 export -f gh
+export HEPHAESTUS_GH=gh
 . {SNIPPET}
 choose_merge_flag owner/repo
 """

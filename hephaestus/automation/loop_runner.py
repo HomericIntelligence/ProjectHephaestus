@@ -43,7 +43,6 @@ from pathlib import Path
 
 from hephaestus.agents.runtime import add_agent_argument, resolve_agent
 from hephaestus.automation._review_utils import add_max_workers_arg
-from hephaestus.automation.claude_timeouts import gh_cli_timeout
 from hephaestus.automation.loop_repo_manager import (
     _clone_missing_repos as _clone_missing_repos,
     _count_failing_prs as _count_failing_prs,
@@ -68,6 +67,7 @@ from hephaestus.cli.utils import (
 )
 from hephaestus.config.paths import DEFAULT_PROJECTS_DIR, resolve_projects_dir
 from hephaestus.constants import scripts_dir as _scripts_dir
+from hephaestus.github.client import gh_call
 
 LOG = logging.getLogger(__name__)
 
@@ -900,9 +900,8 @@ def _process_repo_inner(
 def _preflight_token_scopes(org: str, probe_repo: str) -> None:
     """Mirror the bash script's gh-token preflight."""
     try:
-        out = subprocess.run(
+        out = gh_call(
             [
-                "gh",
                 "api",
                 "-H",
                 "Accept: application/vnd.github+json",
@@ -910,23 +909,23 @@ def _preflight_token_scopes(org: str, probe_repo: str) -> None:
                 "--jq",
                 ".permissions",
             ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=gh_cli_timeout(),
         )
     except subprocess.TimeoutExpired as exc:
         raise SystemExit(
             f"ERROR: `gh` token preflight for {org}/{probe_repo} timed out after {exc.timeout}s."
         ) from exc
-    if out.returncode != 0:
+    except subprocess.CalledProcessError as exc:
         raise SystemExit(
             f"ERROR: `gh` cannot read {org}/{probe_repo} with the current token.\n"
-            f"  {out.stderr.strip()}\n"
+            f"  {(exc.stderr or '').strip()}\n"
             "  Required scopes: repo (classic) OR "
             "Issues+PRs+Contents Read & Write (fine-grained).\n"
             "  Check with: gh auth status"
-        )
+        ) from exc
+    except (RuntimeError, OSError) as exc:
+        raise SystemExit(
+            f"ERROR: `gh` token preflight for {org}/{probe_repo} failed: {exc}"
+        ) from exc
     if out.stdout.strip() in {"null", "{}"}:
         LOG.warning(
             "Token permissions on %s/%s are empty; PR/issue writes will fail.",
@@ -938,16 +937,8 @@ def _preflight_token_scopes(org: str, probe_repo: str) -> None:
 def _rate_limit_remaining() -> tuple[int, int] | None:
     """Return ``(remaining, reset_epoch)`` for the GraphQL budget, or None."""
     try:
-        out = subprocess.run(
-            ["gh", "api", "rate_limit"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=gh_cli_timeout(),
-        )
-    except subprocess.TimeoutExpired:
-        return None
-    if out.returncode != 0:
+        out = gh_call(["api", "rate_limit"])
+    except (subprocess.SubprocessError, RuntimeError, OSError):
         return None
     try:
         data = json.loads(out.stdout)

@@ -7,8 +7,12 @@
 # Warnings (exit 0): existing commits, open PRs, existing branches
 #
 # Usage:
-#   bash /path/to/scripts/shell/preflight_check.sh <issue-number>
-#   bash "$(dirname "${BASH_SOURCE[0]}")/preflight_check.sh" <issue-number>
+#   bash /path/to/scripts/shell/preflight_check.sh [OPTIONS] <issue-number>
+#   bash "$(dirname "${BASH_SOURCE[0]}")/preflight_check.sh" [OPTIONS] <issue-number>
+#
+# Options:
+#   --gh-global-rate FLOAT   Global gh token-bucket refill rate in calls/sec
+#   --gh-global-burst FLOAT  Global gh token-bucket burst size
 #
 # Exit codes:
 #   0 = all checks passed (or only warnings)
@@ -20,12 +24,71 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 set -uo pipefail
 
-ISSUE="${1:-}"
+GH_ARGS=()
+ISSUE=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --gh-global-rate|--gh-global-burst)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires a value" >&2
+                exit 2
+            fi
+            GH_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --gh-global-rate=*|--gh-global-burst=*)
+            GH_ARGS+=("${1%%=*}" "${1#*=}")
+            shift
+            ;;
+        -h|--help)
+            sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        -*)
+            echo "Error: unknown option $1" >&2
+            exit 2
+            ;;
+        *)
+            if [[ -n "$ISSUE" ]]; then
+                echo "Error: unexpected extra argument $1" >&2
+                exit 2
+            fi
+            ISSUE="$1"
+            shift
+            ;;
+    esac
+done
+
+hephaestus_gh() {
+    if [[ -n "${HEPHAESTUS_GH:-}" ]]; then
+        "$HEPHAESTUS_GH" "${GH_ARGS[@]}" "$@"
+    elif command -v hephaestus-gh >/dev/null 2>&1; then
+        hephaestus-gh "${GH_ARGS[@]}" "$@"
+    elif ((${#GH_ARGS[@]} == 0)) && command -v gh >/dev/null 2>&1; then
+        gh "$@"
+    else
+        echo "Error: hephaestus-gh not found on PATH; install ProjectHephaestus or set HEPHAESTUS_GH" >&2
+        return 127
+    fi
+}
 
 if [[ -z "$ISSUE" ]]; then
     echo "Error: issue number required"
-    echo "Usage: $0 <issue-number>"
+    echo "Usage: $0 [OPTIONS] <issue-number>"
     exit 1
+fi
+if ! [[ "$ISSUE" =~ ^[0-9]+$ ]]; then
+    echo "Error: issue number must be numeric" >&2
+    exit 2
+fi
+if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq not found on PATH" >&2
+    exit 2
+fi
+if ! hephaestus_gh --version >/dev/null 2>&1; then
+    echo "Error: GitHub CLI wrapper unavailable" >&2
+    exit 2
 fi
 
 RED='\033[0;31m'
@@ -45,7 +108,7 @@ echo "========================================"
 # ---------------------------------------------------------------------------
 # Check 1: Issue State (CRITICAL)
 # ---------------------------------------------------------------------------
-STATE_JSON=$(gh issue view "$ISSUE" --json state,title,closedAt 2>/dev/null) || {
+STATE_JSON=$(hephaestus_gh issue view "$ISSUE" --json state,title,closedAt 2>/dev/null) || {
     stop "Check 1: Cannot fetch issue #${ISSUE} - verify issue number"
     exit 1
 }
@@ -84,7 +147,7 @@ MERGED_PRS=""
 OPEN_PRS=""
 
 # Fetch repo owner/name for the GraphQL query
-REPO_FULL=$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null) || REPO_FULL=""
+REPO_FULL=$(hephaestus_gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null) || REPO_FULL=""
 
 _graphql_check3() {
     local repo="$1" issue="$2"
@@ -92,13 +155,14 @@ _graphql_check3() {
     # shellcheck disable=SC2016  # $q is a GraphQL variable, not a shell variable
     query='query($q:String!){search(query:$q,type:ISSUE,first:100){nodes{...on PullRequest{number,title,state,closingIssuesReferences(first:25){nodes{number}}}}}}'
     local result
-    result=$(gh api graphql -f "query=${query}" -f "q=repo:${repo} is:pr ${issue}" 2>/dev/null) || return 1
+    result=$(hephaestus_gh api graphql -f "query=${query}" -f "q=repo:${repo} is:pr ${issue}" 2>/dev/null) || return 1
     while IFS= read -r pr_entry; do
         pr_num=$(echo "$pr_entry" | jq -r '.number')
         pr_title=$(echo "$pr_entry" | jq -r '.title')
         pr_state=$(echo "$pr_entry" | jq -r '.state')
         [[ -z "$pr_num" || "$pr_num" == "null" ]] && continue
-        if echo "$pr_entry" | jq -e ".closingIssuesReferences.nodes[] | select(.number == ${issue})" >/dev/null 2>&1; then
+        if echo "$pr_entry" | jq -e --argjson issue "$issue" \
+            '.closingIssuesReferences.nodes[] | select(.number == $issue)' >/dev/null 2>&1; then
             if [[ "$pr_state" == "MERGED" ]]; then
                 merged+="${pr_num}: ${pr_title}"$'\n'
             elif [[ "$pr_state" == "OPEN" ]]; then
@@ -113,14 +177,14 @@ _graphql_check3() {
 _rest_check3() {
     local issue="$1"
     local candidate_json merged="" open=""
-    candidate_json=$(gh pr list --state all --json number,title,state --limit 100 2>/dev/null) || return 1
+    candidate_json=$(hephaestus_gh pr list --state all --json number,title,state --limit 100 2>/dev/null) || return 1
     while IFS= read -r pr_entry; do
         local pr_num pr_title pr_state closes
         pr_num=$(echo "$pr_entry" | jq -r '.number')
         pr_title=$(echo "$pr_entry" | jq -r '.title')
         pr_state=$(echo "$pr_entry" | jq -r '.state')
         [[ -z "$pr_num" || "$pr_num" == "null" ]] && continue
-        closes=$(gh pr view "$pr_num" --json closingIssuesReferences \
+        closes=$(hephaestus_gh pr view "$pr_num" --json closingIssuesReferences \
             --jq '.closingIssuesReferences[].number' 2>/dev/null)
         if echo "$closes" | grep -qx "$issue"; then
             if [[ "$pr_state" == "MERGED" ]]; then
@@ -184,7 +248,7 @@ fi
 # ---------------------------------------------------------------------------
 # Check 6: Context gathering (INFO - only reached if checks 1-5 pass)
 # ---------------------------------------------------------------------------
-COMMENT_COUNT=$(gh issue view "$ISSUE" --comments 2>/dev/null | grep -c "^--$" || echo "0")
+COMMENT_COUNT=$(hephaestus_gh issue view "$ISSUE" --comments 2>/dev/null | grep -c "^--$" || echo "0")
 info "Check 6: Issue context loaded (${COMMENT_COUNT} comment separator(s) found)"
 
 echo "========================================"

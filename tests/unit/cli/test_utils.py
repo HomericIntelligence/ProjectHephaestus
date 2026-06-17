@@ -199,6 +199,7 @@ class TestAddGithubThrottleArgs:
             ("--gh-global-rate", "-1"),
             ("--gh-global-rate", "nan"),
             ("--gh-global-burst", "0"),
+            ("--gh-global-burst", "0.5"),
             ("--gh-global-burst", "-1"),
         ],
     )

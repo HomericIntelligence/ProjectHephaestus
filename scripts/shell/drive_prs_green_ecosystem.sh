@@ -18,6 +18,8 @@
 #   ~/drive-prs-green-ecosystem.sh                     # real run, logs to ~/drive-prs-green-logs/<utc-ts>/
 #   ~/drive-prs-green-ecosystem.sh --log-dir DIR       # write logs under DIR/<utc-ts>/
 #   ~/drive-prs-green-ecosystem.sh --dry-run           # forward --dry-run to driver
+#   ~/drive-prs-green-ecosystem.sh --gh-global-rate 5  # tune shared gh throttle
+#   ~/drive-prs-green-ecosystem.sh --gh-global-burst 20
 #   ~/drive-prs-green-ecosystem.sh -- --max-workers 5  # everything after `--` goes to driver
 #
 # All non-script-flag args before `--` are forwarded to drive_prs_green.py as well.
@@ -39,6 +41,7 @@ set -uo pipefail   # no -e: keep iterating across per-repo failures
 LOG_ROOT_DEFAULT="$HOME/drive-prs-green-logs"
 LOG_ROOT="${DRIVE_GREEN_LOG_ROOT:-$LOG_ROOT_DEFAULT}"
 DRIVER_ARGS=()
+GH_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,11 +52,22 @@ while [[ $# -gt 0 ]]; do
     --log-dir=*)
       LOG_ROOT="${1#--log-dir=}"; shift
       ;;
+    --gh-global-rate|--gh-global-burst)
+      if [[ $# -lt 2 ]]; then echo "ERROR: $1 requires a value" >&2; exit 2; fi
+      GH_ARGS+=("$1" "$2"); shift 2
+      ;;
+    --gh-global-rate=*|--gh-global-burst=*)
+      GH_ARGS+=("${1%%=*}" "${1#*=}"); shift
+      ;;
     --)
       shift; DRIVER_ARGS+=("$@"); break
       ;;
     -h|--help)
-      sed -n '2,/^# *$/p' "$0" | sed 's/^# \{0,1\}//'
+      awk '
+        /^# Usage:/ {show=1}
+        show && /^# Log directory layout/ {exit}
+        show {sub(/^# ?/, ""); print}
+      ' "$0"
       exit 0
       ;;
     *)
@@ -78,13 +92,26 @@ SUMMARY_LOG="$RUN_DIR/_summary.log"
 SUMMARY_JSON="$RUN_DIR/_summary.json"
 META_JSON="$RUN_DIR/_run.meta.json"
 
+hephaestus_gh() {
+  if [[ -n "${HEPHAESTUS_GH:-}" ]]; then
+    "$HEPHAESTUS_GH" "${GH_ARGS[@]}" "$@"
+  elif command -v hephaestus-gh >/dev/null 2>&1; then
+    hephaestus-gh "${GH_ARGS[@]}" "$@"
+  elif ((${#GH_ARGS[@]} == 0)) && command -v gh >/dev/null 2>&1; then
+    gh "$@"
+  else
+    echo "ERROR: hephaestus-gh not found on PATH; install ProjectHephaestus or set HEPHAESTUS_GH" >&2
+    return 127
+  fi
+}
+
 # ── Sanity checks ────────────────────────────────────────────────────────────
 if [[ ! -f "$DRIVER" ]]; then
   echo "ERROR: driver script not found at $DRIVER" >&2
   exit 1
 fi
-if ! command -v gh >/dev/null 2>&1; then
-  echo "ERROR: gh CLI not found on PATH" >&2
+if ! hephaestus_gh --version >/dev/null 2>&1; then
+  echo "ERROR: GitHub CLI wrapper unavailable" >&2
   exit 1
 fi
 if ! command -v jq >/dev/null 2>&1; then
@@ -201,7 +228,7 @@ note "  driver_args=${DRIVER_ARGS[*]:-<none>}"
 
 note "▶ Enumerating non-fork, non-archived repos in $ORG ..."
 mapfile -t REPOS < <(
-  gh repo list "$ORG" --no-archived --limit 200 --json name,isFork \
+  hephaestus_gh repo list "$ORG" --no-archived --limit 200 --json name,isFork \
     --jq '.[] | select(.isFork == false) | .name'
 )
 if [[ ${#REPOS[@]} -eq 0 ]]; then
@@ -254,7 +281,7 @@ for REPO in "${REPOS[@]}"; do
   # ``/repos/.../issues`` returns BOTH issues and PRs; filter via the
   # ``pull_request`` field which only PRs carry.
   mapfile -t ISSUES < <(
-    gh api --paginate "/repos/$ORG/$REPO/issues?state=open&per_page=100" \
+    hephaestus_gh api --paginate "/repos/$ORG/$REPO/issues?state=open&per_page=100" \
       --jq '.[] | select(.pull_request | not) | .number' 2>>"$DISCOVERY_LOG"
   )
   printf '\nfound   : %d open issue(s): %s\n' "${#ISSUES[@]}" "${ISSUES[*]:-<none>}" >> "$DISCOVERY_LOG"
@@ -270,7 +297,7 @@ for REPO in "${REPOS[@]}"; do
   # zero open issues but non-zero open bot PRs is correctly classified as
   # "drive" rather than "skip — no issues" in the per-repo log.
   BOT_PR_COUNT=$(
-    gh api --paginate "/repos/$ORG/$REPO/pulls?state=open&per_page=100" \
+    hephaestus_gh api --paginate "/repos/$ORG/$REPO/pulls?state=open&per_page=100" \
       --jq '[.[] | select(.user.type == "Bot")] | length' 2>>"$DISCOVERY_LOG" || echo 0
   )
   BOT_PR_COUNT="${BOT_PR_COUNT:-0}"
@@ -304,11 +331,13 @@ for REPO in "${REPOS[@]}"; do
         "$DRIVER" \
         --issues "${ISSUES[@]}" \
         --no-ui \
+        "${GH_ARGS[@]}" \
         "${DRIVER_ARGS[@]}"
     else
       pixi run --manifest-path "$HEPHAESTUS_DIR/pixi.toml" python -u \
         "$DRIVER" \
         --no-ui \
+        "${GH_ARGS[@]}" \
         "${DRIVER_ARGS[@]}"
     fi
   ) >> "$REPO_LOG" 2>&1; then

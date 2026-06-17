@@ -46,8 +46,27 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/install_helpers.sh"
 # $dir expansion). Notably forbidden: '"', '`', whitespace, and any '$('.
 # shellcheck disable=SC2016  # Single quotes intentional; regex must be literal
 readonly ADD_TO_BASHRC_ALLOWED_RE='^(eval "\$\(/[A-Za-z0-9._/-]+ shellenv\)"|export PATH=\$PATH:[A-Za-z0-9._/$-]+)$'
-readonly HEPHAESTUS_TMP_ROOT="${TMPDIR:-/tmp}/hephaestus"
-readonly INSTALL_TMP_ROOT="$HEPHAESTUS_TMP_ROOT/install"
+HEPHAESTUS_TMP_ROOT="${TMPDIR:-/tmp}/hephaestus-$(id -u)"
+readonly HEPHAESTUS_TMP_ROOT
+
+make_secure_tmp_component() {
+    local component="$1"
+    local base="$HEPHAESTUS_TMP_ROOT"
+
+    if [[ -e "$base" && ( -L "$base" || ! -d "$base" || ! -O "$base" ) ]]; then
+        return 1
+    fi
+    mkdir -p "$base/$component" || return 1
+    if [[ -L "$base/$component" || ! -O "$base/$component" ]]; then
+        return 1
+    fi
+    chmod 700 "$base" "$base/$component" || return 1
+    printf '%s\n' "$base/$component"
+}
+
+make_secure_runtime_dir() {
+    make_secure_tmp_component "$1"
+}
 
 # Append a line to ~/.bashrc if not already present, then apply it to the
 # current shell.
@@ -95,8 +114,9 @@ should_check_control() { [[ "$ROLE" == "all" || "$ROLE" == "control" ]]; }
 
 make_install_tmpdir() {
     local prefix="$1"
-    mkdir -p "$INSTALL_TMP_ROOT"
-    mktemp -d "$INSTALL_TMP_ROOT/${prefix}.XXXXXX"
+    local tmp_root
+    tmp_root="$(make_secure_tmp_component install)" || return 1
+    mktemp -d "$tmp_root/${prefix}.XXXXXX"
 }
 
 # ─── Pinned upstream-tool versions (issue #744 — verified installs) ───────────
@@ -723,17 +743,15 @@ if should_check_worker; then
         if apt_install podman-compose; then check_pass "podman-compose installed"; fi
     fi
 
-    # Podman socket (required for some compose operations). Keep generated
-    # runtime paths under TMPDIR so non-interactive agents never depend on
-    # desktop-session runtime directories.
-    PODMAN_SOCKET_DIR="$HEPHAESTUS_TMP_ROOT/podman"
-    PODMAN_SOCK="$PODMAN_SOCKET_DIR/podman.sock"
-    if [[ -S "$PODMAN_SOCK" ]]; then
-        check_pass "podman socket active at $PODMAN_SOCK"
-    else
-        check_warn "podman socket not active — run: mkdir -p '$PODMAN_SOCKET_DIR' && podman system service --time=0 'unix://$PODMAN_SOCK'"
-        if $INSTALL; then
-            if mkdir -p "$PODMAN_SOCKET_DIR"; then
+    # Podman socket (required for some compose operations). User-specific
+    # runtime sockets live under a locked-down per-user TMPDIR subtree.
+    if PODMAN_SOCKET_DIR="$(make_secure_runtime_dir podman)"; then
+        PODMAN_SOCK="$PODMAN_SOCKET_DIR/podman.sock"
+        if [[ -S "$PODMAN_SOCK" ]]; then
+            check_pass "podman socket active at $PODMAN_SOCK"
+        else
+            check_warn "podman socket not active — run: podman system service --time=0 'unix://$PODMAN_SOCK'"
+            if $INSTALL; then
                 podman system service --time=0 "unix://$PODMAN_SOCK" >/dev/null 2>&1 &
                 sleep 1
                 if [[ -S "$PODMAN_SOCK" ]]; then
@@ -742,9 +760,11 @@ if should_check_worker; then
                     check_warn "podman socket — service did not create $PODMAN_SOCK"
                 fi
             else
-                check_warn "podman socket — could not create $PODMAN_SOCKET_DIR"
+                :
             fi
         fi
+    else
+        check_warn "podman socket — could not create a secure runtime directory"
     fi
 fi
 

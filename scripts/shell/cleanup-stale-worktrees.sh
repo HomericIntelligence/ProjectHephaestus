@@ -13,6 +13,8 @@
 #   --force           Auto-cleanup without prompting (non-interactive)
 #   --log-file PATH   Override default log file path
 #   --dry-run         Show what would be cleaned without making changes
+#   --gh-global-rate FLOAT   Global gh token-bucket refill rate in calls/sec
+#   --gh-global-burst FLOAT  Global gh token-bucket burst size
 #   --help            Show this help message
 #
 # Logs cleanup actions to ~/.cache/hephaestus/worktree-cleanup.log by default.
@@ -59,20 +61,53 @@ log_action() {
 FORCE=false
 DRY_RUN=false
 LOG_FILE="$DEFAULT_LOG_FILE"
+GH_ARGS=()
 
 usage() {
-    sed -n '/^# Usage:/,/^[^#]/{ /^#/{ s/^# \{0,1\}//; p }; /^[^#]/q }' "$0"
+    sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --force)    FORCE=true;        shift ;;
         --dry-run)  DRY_RUN=true;      shift ;;
-        --log-file) LOG_FILE="$2";     shift 2 ;;
+        --gh-global-rate|--gh-global-burst)
+            if [[ $# -lt 2 ]]; then
+                log_error "$1 requires a value"
+                exit 2
+            fi
+            GH_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --gh-global-rate=*|--gh-global-burst=*)
+            GH_ARGS+=("${1%%=*}" "${1#*=}")
+            shift
+            ;;
+        --log-file)
+            if [[ $# -lt 2 ]]; then
+                log_error "$1 requires a value"
+                exit 2
+            fi
+            LOG_FILE="$2"
+            shift 2
+            ;;
         --help|-h)  usage; exit 0 ;;
         *) log_error "Unknown option: $1"; usage; exit 1 ;;
-    esac
+esac
 done
+
+hephaestus_gh() {
+    if [[ -n "${HEPHAESTUS_GH:-}" ]]; then
+        "$HEPHAESTUS_GH" "${GH_ARGS[@]}" "$@"
+    elif command -v hephaestus-gh >/dev/null 2>&1; then
+        hephaestus-gh "${GH_ARGS[@]}" "$@"
+    elif ((${#GH_ARGS[@]} == 0)) && command -v gh >/dev/null 2>&1; then
+        gh "$@"
+    else
+        log_error "hephaestus-gh not found on PATH; install ProjectHephaestus or set HEPHAESTUS_GH"
+        return 127
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # Detect main branch dynamically
@@ -124,7 +159,7 @@ is_merged() {
 # ---------------------------------------------------------------------------
 issue_state() {
     local issue="$1"
-    gh issue view "$issue" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN"
+    hephaestus_gh issue view "$issue" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN"
 }
 
 # ---------------------------------------------------------------------------

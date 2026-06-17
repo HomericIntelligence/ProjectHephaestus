@@ -11,6 +11,33 @@
 #   0  printed flag to stdout
 #   1  gh api failed OR repo allows no methods (message on stderr)
 #   2  missing argument (message on stderr)
+hephaestus_gh() {
+    if [ -n "${HEPHAESTUS_GH:-}" ]; then
+        "$HEPHAESTUS_GH" "$@"
+    elif command -v hephaestus-gh >/dev/null 2>&1; then
+        hephaestus-gh "$@"
+    else
+        gh "$@"
+    fi
+}
+
+hephaestus_tmp_subdir() {
+    local component="$1"
+    local base
+    base="${TMPDIR:-/tmp}/hephaestus-$(id -u)"
+    if [[ -e "$base" && ( -L "$base" || ! -d "$base" || ! -O "$base" ) ]]; then
+        echo "choose_merge_flag: unsafe temp root: $base" >&2
+        return 1
+    fi
+    mkdir -p "$base/$component" || return 1
+    if [[ -L "$base/$component" || ! -O "$base/$component" ]]; then
+        echo "choose_merge_flag: unsafe temp directory: $base/$component" >&2
+        return 1
+    fi
+    chmod 700 "$base" "$base/$component" || return 1
+    printf '%s\n' "$base/$component"
+}
+
 choose_merge_flag() {
     local repo="$1"
     if [ -z "$repo" ]; then
@@ -18,12 +45,10 @@ choose_merge_flag() {
         return 2
     fi
     local raw flag _err_file _tmp_dir
-    _tmp_dir="${TMPDIR:-/tmp}/hephaestus/choose-merge-flag"
-    mkdir -p "$_tmp_dir"
-    _err_file=$(mktemp "$_tmp_dir/gh-api-XXXXXX.err")
-    # shellcheck disable=SC2064
-    trap "rm -f '$_err_file'" RETURN
-    if ! raw=$(gh api "repos/${repo}" 2>"$_err_file"); then
+    _tmp_dir="$(hephaestus_tmp_subdir choose-merge-flag)" || return 1
+    _err_file=$(mktemp "$_tmp_dir/gh-api-XXXXXX.err") || return 1
+    trap 'rm -f -- "$_err_file"' RETURN
+    if ! raw=$(hephaestus_gh api "repos/${repo}" 2>"$_err_file"); then
         echo "choose_merge_flag: gh api repos/${repo} failed: $(cat "$_err_file")" >&2
         echo "  (check: gh auth status; token needs 'repo' scope; repo exists)" >&2
         return 1

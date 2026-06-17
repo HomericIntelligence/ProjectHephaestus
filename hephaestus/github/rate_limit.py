@@ -26,6 +26,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import TextIO
 
 logger = logging.getLogger(__name__)
 
@@ -292,26 +293,81 @@ def configure_gh_global_throttle(rate: float, burst: float) -> None:
 
     Args:
         rate: Tokens per second. ``0`` disables the throttle.
-        burst: Maximum stored tokens. Must be positive.
+        burst: Maximum stored tokens. Must be at least ``1.0``.
 
     Raises:
         ValueError: If either value is non-finite, if rate is negative, or if
-            burst is not positive.
+            burst is less than ``1.0``.
 
     """
     if not math.isfinite(rate) or rate < 0:
         raise ValueError(f"rate must be a finite non-negative number, got {rate!r}")
-    if not math.isfinite(burst) or burst <= 0:
-        raise ValueError(f"burst must be a finite positive number, got {burst!r}")
+    if not math.isfinite(burst) or burst < 1.0:
+        raise ValueError(f"burst must be a finite number >= 1.0, got {burst!r}")
 
     global _global_throttle_rate, _global_throttle_burst
     _global_throttle_rate = float(rate)
     _global_throttle_burst = float(burst)
 
 
-def _global_throttle_state_path() -> Path:
+def _current_uid_fragment() -> str:
+    """Return a stable user identifier for fallback runtime paths."""
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:  # pragma: no cover - Windows path
+        return "user"
+    return str(getuid())
+
+
+def _owned_by_current_user(path: Path) -> bool:
+    """Return whether ``path`` is owned by the current user when POSIX uid exists."""
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:  # pragma: no cover - Windows path
+        return True
+    try:
+        return path.stat().st_uid == int(getuid())
+    except OSError:
+        return False
+
+
+def _runtime_base_dir() -> Path:
+    """Return the preferred secure root for user-specific runtime artifacts.
+
+    All transient state lives under ``TMPDIR`` so callers have one root to
+    control. A per-user component avoids sharing the same lock/state directory
+    across users when ``TMPDIR`` falls back to ``/tmp``.
+    """
     tmpdir = os.environ.get("TMPDIR") or "/tmp"  # nosec B108: explicit fallback root
-    return Path(tmpdir) / "hephaestus" / "gh-rate" / "hephaestus_gh_rate.json"
+    return Path(tmpdir) / f"hephaestus-{_current_uid_fragment()}"
+
+
+def _ensure_private_dir(path: Path) -> None:
+    """Create ``path`` as a current-user private directory, rejecting symlinks."""
+    if path.exists() and path.is_symlink():
+        raise RuntimeError(f"Refusing to use symlinked runtime directory: {path}")
+    path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    if path.is_symlink() or not path.is_dir():
+        raise RuntimeError(f"Refusing to use unsafe runtime directory: {path}")
+    if not _owned_by_current_user(path):
+        raise RuntimeError(f"Refusing to use runtime directory not owned by current user: {path}")
+    path.chmod(0o700)
+
+
+def _global_throttle_state_path() -> Path:
+    return _runtime_base_dir() / "gh-rate" / "hephaestus_gh_rate.json"
+
+
+def _open_secure_state_file(path: Path) -> TextIO:
+    """Open the throttle state file without following symlinks."""
+    _ensure_private_dir(path.parent.parent)
+    _ensure_private_dir(path.parent)
+    if path.exists() and path.is_symlink():
+        raise RuntimeError(f"Refusing to use symlinked throttle state file: {path}")
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    os.fchmod(fd, 0o600)
+    return os.fdopen(fd, "r+")
 
 
 def gh_global_throttle_acquire() -> None:
@@ -339,12 +395,11 @@ def gh_global_throttle_acquire() -> None:
         return
 
     state_path = _global_throttle_state_path()
-    state_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Loop because the bucket may be empty when we first acquire the lock;
     # we sleep for the time required to refill one token, then retry.
     while True:
-        with state_path.open("a+") as fh:
+        with _open_secure_state_file(state_path) as fh:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
             try:
                 fh.seek(0)

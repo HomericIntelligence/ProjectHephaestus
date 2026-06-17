@@ -46,12 +46,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/install_helpers.sh"
 # $dir expansion). Notably forbidden: '"', '`', whitespace, and any '$('.
 # shellcheck disable=SC2016  # Single quotes intentional; regex must be literal
 readonly ADD_TO_BASHRC_ALLOWED_RE='^(eval "\$\(/[A-Za-z0-9._/-]+ shellenv\)"|export PATH=\$PATH:[A-Za-z0-9._/$-]+)$'
-HEPHAESTUS_TMP_ROOT="${TMPDIR:-/tmp}/hephaestus-$(id -u)"
-readonly HEPHAESTUS_TMP_ROOT
+INSTALL_TMP_ROOT="${TMPDIR:-/tmp}/hephaestus-$(id -u)"
+readonly INSTALL_TMP_ROOT
 
 make_secure_tmp_component() {
     local component="$1"
-    local base="$HEPHAESTUS_TMP_ROOT"
+    local base="$INSTALL_TMP_ROOT"
 
     if [[ -e "$base" && ( -L "$base" || ! -d "$base" || ! -O "$base" ) ]]; then
         return 1

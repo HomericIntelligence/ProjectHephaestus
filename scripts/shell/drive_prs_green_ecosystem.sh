@@ -18,6 +18,9 @@
 #   ~/drive-prs-green-ecosystem.sh                     # real run, logs to ~/drive-prs-green-logs/<utc-ts>/
 #   ~/drive-prs-green-ecosystem.sh --log-dir DIR       # write logs under DIR/<utc-ts>/
 #   ~/drive-prs-green-ecosystem.sh --dry-run           # forward --dry-run to driver
+#   ~/drive-prs-green-ecosystem.sh --org HomericIntelligence
+#   ~/drive-prs-green-ecosystem.sh --project-root /path/to/ProjectHephaestus
+#   ~/drive-prs-green-ecosystem.sh --gh-bin hephaestus-gh
 #   ~/drive-prs-green-ecosystem.sh --gh-global-rate 5  # tune shared gh throttle
 #   ~/drive-prs-green-ecosystem.sh --gh-global-burst 20
 #   ~/drive-prs-green-ecosystem.sh -- --max-workers 5  # everything after `--` goes to driver
@@ -40,6 +43,10 @@ set -uo pipefail   # no -e: keep iterating across per-repo failures
 # ── Flag parsing ─────────────────────────────────────────────────────────────
 LOG_ROOT_DEFAULT="$HOME/drive-prs-green-logs"
 LOG_ROOT="${DRIVE_GREEN_LOG_ROOT:-$LOG_ROOT_DEFAULT}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ORG="HomericIntelligence"
+GH_BIN="hephaestus-gh"
 DRIVER_ARGS=()
 GH_ARGS=()
 
@@ -51,6 +58,27 @@ while [[ $# -gt 0 ]]; do
       ;;
     --log-dir=*)
       LOG_ROOT="${1#--log-dir=}"; shift
+      ;;
+    --org)
+      if [[ $# -lt 2 ]]; then echo "ERROR: --org requires a value" >&2; exit 2; fi
+      ORG="$2"; shift 2
+      ;;
+    --org=*)
+      ORG="${1#--org=}"; shift
+      ;;
+    --project-root)
+      if [[ $# -lt 2 ]]; then echo "ERROR: --project-root requires a path" >&2; exit 2; fi
+      PROJECT_ROOT="$2"; shift 2
+      ;;
+    --project-root=*)
+      PROJECT_ROOT="${1#--project-root=}"; shift
+      ;;
+    --gh-bin)
+      if [[ $# -lt 2 ]]; then echo "ERROR: --gh-bin requires a value" >&2; exit 2; fi
+      GH_BIN="$2"; shift 2
+      ;;
+    --gh-bin=*)
+      GH_BIN="${1#--gh-bin=}"; shift
       ;;
     --gh-global-rate|--gh-global-burst)
       if [[ $# -lt 2 ]]; then echo "ERROR: $1 requires a value" >&2; exit 2; fi
@@ -77,10 +105,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Environment ──────────────────────────────────────────────────────────────
-ORG="${HEPHAESTUS_ORG:-HomericIntelligence}"
-HEPHAESTUS_DIR="${HEPHAESTUS_DIR:-/home/mvillmow/Projects/ProjectHephaestus}"
 PROJECTS_ROOT="${PROJECTS_ROOT:-/home/mvillmow/Projects}"
-DRIVER="$HEPHAESTUS_DIR/scripts/drive_prs_green.py"
+DRIVER="$PROJECT_ROOT/scripts/drive_prs_green.py"
 SCRIPT_PATH="$(readlink -f "$0")"
 SCRIPT_VERSION="$(cd "$(dirname "$SCRIPT_PATH")" && md5sum "$(basename "$SCRIPT_PATH")" 2>/dev/null | cut -d' ' -f1 || echo unknown)"
 
@@ -93,16 +119,7 @@ SUMMARY_JSON="$RUN_DIR/_summary.json"
 META_JSON="$RUN_DIR/_run.meta.json"
 
 hephaestus_gh() {
-  if [[ -n "${HEPHAESTUS_GH:-}" ]]; then
-    "$HEPHAESTUS_GH" "${GH_ARGS[@]}" "$@"
-  elif command -v hephaestus-gh >/dev/null 2>&1; then
-    hephaestus-gh "${GH_ARGS[@]}" "$@"
-  elif ((${#GH_ARGS[@]} == 0)) && command -v gh >/dev/null 2>&1; then
-    gh "$@"
-  else
-    echo "ERROR: hephaestus-gh not found on PATH; install ProjectHephaestus or set HEPHAESTUS_GH" >&2
-    return 127
-  fi
+  "$GH_BIN" "${GH_ARGS[@]}" "$@"
 }
 
 # ── Sanity checks ────────────────────────────────────────────────────────────
@@ -111,7 +128,7 @@ if [[ ! -f "$DRIVER" ]]; then
   exit 1
 fi
 if ! hephaestus_gh --version >/dev/null 2>&1; then
-  echo "ERROR: GitHub CLI wrapper unavailable" >&2
+  echo "ERROR: GitHub CLI wrapper unavailable: $GH_BIN" >&2
   exit 1
 fi
 if ! command -v jq >/dev/null 2>&1; then
@@ -127,7 +144,7 @@ note()   { printf '[%s] %s\n' "$(ts_utc)" "$*" | tee -a "$SUMMARY_LOG"; }
 write_run_meta() {
   # Top-level metadata so an analysis agent has the full provenance.
   local hep_rev
-  hep_rev="$(git -C "$HEPHAESTUS_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  hep_rev="$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
   jq -n \
     --arg run_id "$RUN_ID" \
@@ -136,7 +153,7 @@ write_run_meta() {
     --arg user "${USER:-unknown}" \
     --arg org "$ORG" \
     --arg projects_root "$PROJECTS_ROOT" \
-    --arg hephaestus_dir "$HEPHAESTUS_DIR" \
+    --arg project_root "$PROJECT_ROOT" \
     --arg hephaestus_rev "$hep_rev" \
     --arg driver_path "$DRIVER" \
     --arg log_root "$LOG_ROOT" \
@@ -150,7 +167,7 @@ write_run_meta() {
       user: $user,
       org: $org,
       projects_root: $projects_root,
-      hephaestus_dir: $hephaestus_dir,
+      project_root: $project_root,
       hephaestus_rev: $hephaestus_rev,
       driver_path: $driver_path,
       log_root: $log_root,
@@ -223,7 +240,7 @@ banner() {
 write_run_meta
 note "▶ drive-prs-green-ecosystem run $RUN_ID"
 note "  log_dir=$RUN_DIR  meta=$META_JSON"
-note "  org=$ORG  projects_root=$PROJECTS_ROOT  hep_dir=$HEPHAESTUS_DIR"
+note "  org=$ORG  projects_root=$PROJECTS_ROOT  project_root=$PROJECT_ROOT"
 note "  driver_args=${DRIVER_ARGS[*]:-<none>}"
 
 note "▶ Enumerating non-fork, non-archived repos in $ORG ..."
@@ -327,14 +344,14 @@ for REPO in "${REPOS[@]}"; do
   if (
     cd "$REPO_DIR"
     if ((${#ISSUES[@]})); then
-      pixi run --manifest-path "$HEPHAESTUS_DIR/pixi.toml" python -u \
+      pixi run --manifest-path "$PROJECT_ROOT/pixi.toml" python -u \
         "$DRIVER" \
         --issues "${ISSUES[@]}" \
         --no-ui \
         "${GH_ARGS[@]}" \
         "${DRIVER_ARGS[@]}"
     else
-      pixi run --manifest-path "$HEPHAESTUS_DIR/pixi.toml" python -u \
+      pixi run --manifest-path "$PROJECT_ROOT/pixi.toml" python -u \
         "$DRIVER" \
         --no-ui \
         "${GH_ARGS[@]}" \

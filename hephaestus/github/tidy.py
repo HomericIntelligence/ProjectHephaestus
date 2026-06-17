@@ -272,22 +272,18 @@ git -C {worktree_path} push --force-with-lease --force-if-includes origin {branc
 
 ### 7. Re-arm auto-merge (if a PR exists)
 ```bash
-GH_BIN="${{HEPHAESTUS_GH:-}}"
-if [ -z "$GH_BIN" ]; then
-  if command -v hephaestus-gh >/dev/null 2>&1; then GH_BIN="hephaestus-gh"; else GH_BIN="gh"; fi
-fi
+GH_BIN="hephaestus-gh"
 PR=$("$GH_BIN" pr list --repo {repo_slug} --head {branch} --json number --jq '.[0].number // empty')
 if [ -n "$PR" ]; then
   HELPER=""
   for cand in \
-      "${{HEPHAESTUS_REPO_ROOT:-}}/scripts/choose_merge_flag.sh" \
       "$(git rev-parse --show-toplevel 2>/dev/null)/scripts/choose_merge_flag.sh" \
       "$HOME/Projects/ProjectHephaestus/scripts/choose_merge_flag.sh"; do
     if [ -r "$cand" ]; then HELPER="$cand"; break; fi
   done
   if [ -n "$HELPER" ]; then
     . "$HELPER"
-    MERGE_FLAG=$(choose_merge_flag {repo_slug}) || MERGE_FLAG="--squash"
+    MERGE_FLAG=$(choose_merge_flag --gh-bin "$GH_BIN" {repo_slug}) || MERGE_FLAG="--squash"
   else
     MERGE_FLAG="--squash"
   fi

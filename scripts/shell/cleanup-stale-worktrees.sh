@@ -13,6 +13,7 @@
 #   --force           Auto-cleanup without prompting (non-interactive)
 #   --log-file PATH   Override default log file path
 #   --dry-run         Show what would be cleaned without making changes
+#   --gh-bin PATH     GitHub CLI wrapper to run (default: hephaestus-gh)
 #   --gh-global-rate FLOAT   Global gh token-bucket refill rate in calls/sec
 #   --gh-global-burst FLOAT  Global gh token-bucket burst size
 #   --help            Show this help message
@@ -62,6 +63,7 @@ FORCE=false
 DRY_RUN=false
 LOG_FILE="$DEFAULT_LOG_FILE"
 GH_ARGS=()
+GH_BIN="hephaestus-gh"
 
 usage() {
     sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
@@ -71,6 +73,18 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --force)    FORCE=true;        shift ;;
         --dry-run)  DRY_RUN=true;      shift ;;
+        --gh-bin)
+            if [[ $# -lt 2 ]]; then
+                log_error "$1 requires a value"
+                exit 2
+            fi
+            GH_BIN="$2"
+            shift 2
+            ;;
+        --gh-bin=*)
+            GH_BIN="${1#*=}"
+            shift
+            ;;
         --gh-global-rate|--gh-global-burst)
             if [[ $# -lt 2 ]]; then
                 log_error "$1 requires a value"
@@ -97,16 +111,7 @@ esac
 done
 
 hephaestus_gh() {
-    if [[ -n "${HEPHAESTUS_GH:-}" ]]; then
-        "$HEPHAESTUS_GH" "${GH_ARGS[@]}" "$@"
-    elif command -v hephaestus-gh >/dev/null 2>&1; then
-        hephaestus-gh "${GH_ARGS[@]}" "$@"
-    elif ((${#GH_ARGS[@]} == 0)) && command -v gh >/dev/null 2>&1; then
-        gh "$@"
-    else
-        log_error "hephaestus-gh not found on PATH; install ProjectHephaestus or set HEPHAESTUS_GH"
-        return 127
-    fi
+    "$GH_BIN" "${GH_ARGS[@]}" "$@"
 }
 
 # ---------------------------------------------------------------------------

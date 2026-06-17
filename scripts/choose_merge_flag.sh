@@ -3,23 +3,14 @@
 #
 # Usage:
 #   . "<path>/scripts/choose_merge_flag.sh"
-#   MERGE_FLAG=$(choose_merge_flag HomericIntelligence/ProjectMnemosyne) || exit 1
+#   MERGE_FLAG=$(choose_merge_flag [--gh-bin hephaestus-gh] HomericIntelligence/ProjectMnemosyne) || exit 1
 #   gh pr merge "$PR" --auto "$MERGE_FLAG" --repo HomericIntelligence/ProjectMnemosyne
 #
 # Preference order: rebase (linear history) -> squash -> merge commit.
 # Exit codes:
 #   0  printed flag to stdout
 #   1  gh api failed OR repo allows no methods (message on stderr)
-#   2  missing argument (message on stderr)
-hephaestus_gh() {
-    if [ -n "${HEPHAESTUS_GH:-}" ]; then
-        "$HEPHAESTUS_GH" "$@"
-    elif command -v hephaestus-gh >/dev/null 2>&1; then
-        hephaestus-gh "$@"
-    else
-        gh "$@"
-    fi
-}
+#   2  invalid arguments (message on stderr)
 
 hephaestus_tmp_subdir() {
     local component="$1"
@@ -39,7 +30,36 @@ hephaestus_tmp_subdir() {
 }
 
 choose_merge_flag() {
-    local repo="$1"
+    local gh_bin="hephaestus-gh"
+    local repo=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --gh-bin)
+                if [[ $# -lt 2 ]]; then
+                    echo "choose_merge_flag: --gh-bin requires a value" >&2
+                    return 2
+                fi
+                gh_bin="$2"
+                shift 2
+                ;;
+            --gh-bin=*)
+                gh_bin="${1#*=}"
+                shift
+                ;;
+            -*)
+                echo "choose_merge_flag: unknown option $1" >&2
+                return 2
+                ;;
+            *)
+                if [[ -n "$repo" ]]; then
+                    echo "choose_merge_flag: unexpected extra argument $1" >&2
+                    return 2
+                fi
+                repo="$1"
+                shift
+                ;;
+        esac
+    done
     if [ -z "$repo" ]; then
         echo "choose_merge_flag: missing required argument <owner/repo>" >&2
         return 2
@@ -48,9 +68,9 @@ choose_merge_flag() {
     _tmp_dir="$(hephaestus_tmp_subdir choose-merge-flag)" || return 1
     _err_file=$(mktemp "$_tmp_dir/gh-api-XXXXXX.err") || return 1
     trap 'rm -f -- "$_err_file"' RETURN
-    if ! raw=$(hephaestus_gh api "repos/${repo}" 2>"$_err_file"); then
+    if ! raw=$("$gh_bin" api "repos/${repo}" 2>"$_err_file"); then
         echo "choose_merge_flag: gh api repos/${repo} failed: $(cat "$_err_file")" >&2
-        echo "  (check: gh auth status; token needs 'repo' scope; repo exists)" >&2
+        echo "  (check: $gh_bin auth status; token needs 'repo' scope; repo exists)" >&2
         return 1
     fi
     flag=$(printf '%s' "$raw" | jq -r '[

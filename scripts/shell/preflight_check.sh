@@ -11,6 +11,7 @@
 #   bash "$(dirname "${BASH_SOURCE[0]}")/preflight_check.sh" [OPTIONS] <issue-number>
 #
 # Options:
+#   --gh-bin PATH            GitHub CLI wrapper to run (default: hephaestus-gh)
 #   --gh-global-rate FLOAT   Global gh token-bucket refill rate in calls/sec
 #   --gh-global-burst FLOAT  Global gh token-bucket burst size
 #
@@ -25,10 +26,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 set -uo pipefail
 
 GH_ARGS=()
+GH_BIN="hephaestus-gh"
 ISSUE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --gh-bin)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --gh-bin requires a value" >&2
+                exit 2
+            fi
+            GH_BIN="$2"
+            shift 2
+            ;;
+        --gh-bin=*)
+            GH_BIN="${1#*=}"
+            shift
+            ;;
         --gh-global-rate|--gh-global-burst)
             if [[ $# -lt 2 ]]; then
                 echo "Error: $1 requires a value" >&2
@@ -61,16 +75,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 hephaestus_gh() {
-    if [[ -n "${HEPHAESTUS_GH:-}" ]]; then
-        "$HEPHAESTUS_GH" "${GH_ARGS[@]}" "$@"
-    elif command -v hephaestus-gh >/dev/null 2>&1; then
-        hephaestus-gh "${GH_ARGS[@]}" "$@"
-    elif ((${#GH_ARGS[@]} == 0)) && command -v gh >/dev/null 2>&1; then
-        gh "$@"
-    else
-        echo "Error: hephaestus-gh not found on PATH; install ProjectHephaestus or set HEPHAESTUS_GH" >&2
-        return 127
-    fi
+    "$GH_BIN" "${GH_ARGS[@]}" "$@"
 }
 
 if [[ -z "$ISSUE" ]]; then
@@ -87,7 +92,7 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 2
 fi
 if ! hephaestus_gh --version >/dev/null 2>&1; then
-    echo "Error: GitHub CLI wrapper unavailable" >&2
+    echo "Error: GitHub CLI wrapper unavailable: $GH_BIN" >&2
     exit 2
 fi
 

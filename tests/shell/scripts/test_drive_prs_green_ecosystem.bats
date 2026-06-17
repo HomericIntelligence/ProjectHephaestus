@@ -42,6 +42,20 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
+@test "drive_prs_green_ecosystem.sh: help documents explicit gh wrapper and context flags" {
+    run grep -F -- '--gh-bin hephaestus-gh' "$SCRIPT"
+    [ "$status" -eq 0 ]
+    run grep -F -- '--org HomericIntelligence' "$SCRIPT"
+    [ "$status" -eq 0 ]
+    run grep -F -- '--project-root /path/to/ProjectHephaestus' "$SCRIPT"
+    [ "$status" -eq 0 ]
+}
+
+@test "drive_prs_green_ecosystem.sh: does not read HEPHAESTUS env configuration" {
+    run grep -E 'HEPHAESTUS_(GH|ORG|DIR)' "$SCRIPT"
+    [ "$status" -ne 0 ]
+}
+
 @test "drive_prs_green_ecosystem.sh: --limit 200 is NOT used on issue enumeration" {
     # The audit of run 20260531T190615Z proved this cap was silently in
     # effect. Re-introduction would re-introduce the bug.

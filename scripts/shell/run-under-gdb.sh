@@ -71,7 +71,9 @@ fi
 
 # Write the gdb command script to a temp file. Multi-line gdb scripts passed
 # via repeated -ex flags are not portable across gdb versions; -x <file> is.
-GDB_SCRIPT=$(mktemp /tmp/run-under-gdb-XXXXXX.gdb)
+GDB_TMP_DIR="${TMPDIR:-/tmp}/hephaestus/run-under-gdb"
+mkdir -p "$GDB_TMP_DIR"
+GDB_SCRIPT=$(mktemp "$GDB_TMP_DIR/run-under-gdb-XXXXXX.gdb")
 EXIT_CODE_FILE="${CORE_DIR}/exit-${TS}.code"
 # shellcheck disable=SC2064
 trap "rm -f '$GDB_SCRIPT'" EXIT

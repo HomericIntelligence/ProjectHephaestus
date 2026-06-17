@@ -149,6 +149,13 @@ def test_parse_args_accepts_nitpick() -> None:
     assert loop_runner._parse_args([]).nitpick is False
 
 
+def test_parse_args_accepts_github_throttle_options() -> None:
+    """The loop runner accepts explicit child-phase GitHub throttle config."""
+    args = loop_runner._parse_args(["--gh-global-rate", "4.5", "--gh-global-burst", "11"])
+    assert args.gh_global_rate == 4.5
+    assert args.gh_global_burst == 11.0
+
+
 def test_build_phase_argv_implement_forwards_nitpick() -> None:
     """#1083: --nitpick threads into the implement phase argv when set."""
     with patch.object(loop_runner, "_resolve_phase_bin", return_value=("/x/impl", [])):
@@ -157,6 +164,16 @@ def test_build_phase_argv_implement_forwards_nitpick() -> None:
     assert on is not None and off is not None
     assert "--nitpick" in on
     assert "--nitpick" not in off
+
+
+def test_build_phase_argv_forwards_github_throttle_options() -> None:
+    """Child phases receive explicit throttle CLI values from the loop runner."""
+    cfg = LoopConfig(gh_global_rate=4.5, gh_global_burst=11)
+    with patch.object(loop_runner, "_resolve_phase_bin", return_value=("/x/phase", [])):
+        argv = loop_runner._build_phase_argv("plan", cfg, open_issues=[1])
+    assert argv is not None
+    assert argv[argv.index("--gh-global-rate") + 1] == "4.5"
+    assert argv[argv.index("--gh-global-burst") + 1] == "11"
 
 
 def test_parse_args_accepts_issue_scope() -> None:

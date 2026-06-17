@@ -16,12 +16,12 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import math
 import os
 import re
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -278,14 +278,40 @@ def gh_rate_limit_reset_epoch(resource: str = "graphql") -> int | None:
 
 _DEFAULT_GLOBAL_RATE = 10.0  # tokens per second
 _DEFAULT_BURST = 30.0  # max tokens stored
+_global_throttle_rate = _DEFAULT_GLOBAL_RATE
+_global_throttle_burst = _DEFAULT_BURST
+
+
+def configure_gh_global_throttle(rate: float, burst: float) -> None:
+    """Configure the process-local global ``gh`` throttle parameters.
+
+    CLI entrypoints call this before making GitHub requests. The state file is
+    still shared across processes; the rate/burst values are deliberately
+    process-local so operators configure them explicitly via CLI flags instead
+    of ambient environment variables.
+
+    Args:
+        rate: Tokens per second. ``0`` disables the throttle.
+        burst: Maximum stored tokens. Must be positive.
+
+    Raises:
+        ValueError: If either value is non-finite, if rate is negative, or if
+            burst is not positive.
+
+    """
+    if not math.isfinite(rate) or rate < 0:
+        raise ValueError(f"rate must be a finite non-negative number, got {rate!r}")
+    if not math.isfinite(burst) or burst <= 0:
+        raise ValueError(f"burst must be a finite positive number, got {burst!r}")
+
+    global _global_throttle_rate, _global_throttle_burst
+    _global_throttle_rate = float(rate)
+    _global_throttle_burst = float(burst)
 
 
 def _global_throttle_state_path() -> Path:
-    base = os.environ.get("HEPHAESTUS_RATE_DIR")
-    if not base:
-        runtime = os.environ.get("XDG_RUNTIME_DIR")
-        base = runtime if runtime else tempfile.gettempdir()
-    return Path(base) / "hephaestus_gh_rate.json"
+    tmpdir = os.environ.get("TMPDIR") or "/tmp"  # nosec B108: explicit fallback root
+    return Path(tmpdir) / "hephaestus" / "gh-rate" / "hephaestus_gh_rate.json"
 
 
 def gh_global_throttle_acquire() -> None:
@@ -293,19 +319,19 @@ def gh_global_throttle_acquire() -> None:
 
     The bucket is shared across all processes on this machine via a small
     JSON state file guarded by ``fcntl.flock``. Refill rate defaults to
-    ``10`` tokens/sec with a burst of ``30``; both can be overridden with
-    ``HEPHAESTUS_GH_GLOBAL_RATE`` (calls/sec) and ``HEPHAESTUS_GH_GLOBAL_BURST``.
-    Setting the rate to ``0`` disables the throttle entirely (useful for
-    tests and for callers that already hold a known budget).
+    ``10`` tokens/sec with a burst of ``30``; CLI entrypoints can override
+    both through :func:`configure_gh_global_throttle`. Setting the rate to
+    ``0`` disables the throttle entirely (useful for tests and for callers
+    that already hold a known budget).
 
     On platforms without ``fcntl`` (Windows) the throttle silently no-ops;
     the per-thread throttle in :mod:`hephaestus.automation.github_api`
     still applies.
     """
-    rate = float(os.environ.get("HEPHAESTUS_GH_GLOBAL_RATE", _DEFAULT_GLOBAL_RATE))
+    rate = _global_throttle_rate
     if rate <= 0:
         return
-    burst = float(os.environ.get("HEPHAESTUS_GH_GLOBAL_BURST", _DEFAULT_BURST))
+    burst = _global_throttle_burst
 
     try:
         import fcntl

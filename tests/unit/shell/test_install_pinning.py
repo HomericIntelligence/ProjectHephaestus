@@ -77,6 +77,14 @@ def test_trust_model_documented_for_unpinned(install_script: str) -> None:
     )
 
 
+def test_podman_socket_uses_tmpdir_subdirectory(install_script: str) -> None:
+    """Podman socket setup must not depend on desktop runtime directories."""
+    assert "XDG_RUNTIME_DIR" not in install_script
+    assert "/run/user" not in install_script
+    assert 'readonly HEPHAESTUS_TMP_ROOT="${TMPDIR:-/tmp}/hephaestus"' in install_script
+    assert 'PODMAN_SOCKET_DIR="$HEPHAESTUS_TMP_ROOT/podman"' in install_script
+
+
 def test_download_and_verify_rejects_bad_hash(tmp_path: Path) -> None:
     """Functional test: helper must exit non-zero on hash mismatch.
 

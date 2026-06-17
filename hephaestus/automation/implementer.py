@@ -809,10 +809,11 @@ def main() -> int:
 
     """
     from hephaestus.agents.runtime import resolve_agent
-    from hephaestus.cli.utils import emit_json_status
+    from hephaestus.cli.utils import configure_github_throttle_from_args, emit_json_status
     from hephaestus.utils.terminal import terminal_guard
 
     args = _parse_args()
+    configure_github_throttle_from_args(args)
     agent = resolve_agent(args.agent)
 
     state_dir = get_repo_root() / "build" / ".issue_implementer"

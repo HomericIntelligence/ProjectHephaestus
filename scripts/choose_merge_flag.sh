@@ -17,8 +17,10 @@ choose_merge_flag() {
         echo "choose_merge_flag: missing required argument <owner/repo>" >&2
         return 2
     fi
-    local raw flag _err_file
-    _err_file=$(mktemp)
+    local raw flag _err_file _tmp_dir
+    _tmp_dir="${TMPDIR:-/tmp}/hephaestus/choose-merge-flag"
+    mkdir -p "$_tmp_dir"
+    _err_file=$(mktemp "$_tmp_dir/gh-api-XXXXXX.err")
     # shellcheck disable=SC2064
     trap "rm -f '$_err_file'" RETURN
     if ! raw=$(gh api "repos/${repo}" 2>"$_err_file"); then

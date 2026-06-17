@@ -60,8 +60,10 @@ from hephaestus.automation.loop_repo_manager import (
 )
 from hephaestus.cli.utils import (
     add_dry_run_arg,
+    add_github_throttle_args,
     add_json_arg,
     add_version_arg,
+    configure_github_throttle_from_args,
     emit_json_status,
 )
 from hephaestus.config.paths import DEFAULT_PROJECTS_DIR, resolve_projects_dir
@@ -341,6 +343,8 @@ class LoopConfig:
     planner_model: str = ""
     reviewer_model: str = ""
     implementer_model: str = ""
+    gh_global_rate: float = 10.0
+    gh_global_burst: float = 30.0
     # Org is resolved at runtime from --org / --repos / cwd detection; no
     # hardcoded fallback. Always set by main() before ``run_loop``.
     org: str = ""
@@ -530,6 +534,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "enumeration. Space-separated input is NOT accepted."
         ),
     )
+    add_github_throttle_args(p)
     p.add_argument("-v", "--verbose", action="store_true", help="Enable DEBUG logging")
     add_json_arg(p)
     add_version_arg(p)
@@ -673,6 +678,15 @@ def _build_phase_argv(
     worker_arg = flags.get("worker_arg")
     if isinstance(worker_arg, str):
         argv.extend([worker_arg, str(cfg.max_workers)])
+
+    argv.extend(
+        [
+            "--gh-global-rate",
+            str(cfg.gh_global_rate),
+            "--gh-global-burst",
+            str(cfg.gh_global_burst),
+        ]
+    )
 
     if flags["no_ui"]:
         argv.append("--no-ui")
@@ -1241,6 +1255,7 @@ def _resolve_org_and_repos(
 def main(argv: list[str] | None = None) -> int:
     """Console-script entry point. Returns the process exit code."""
     args = _parse_args(argv)
+    configure_github_throttle_from_args(args)
     _setup_logging(args.verbose)
     agent = resolve_agent(args.agent)
 
@@ -1272,6 +1287,8 @@ def main(argv: list[str] | None = None) -> int:
         planner_model=args.planner_model,
         reviewer_model=args.reviewer_model,
         implementer_model=args.implementer_model,
+        gh_global_rate=args.gh_global_rate,
+        gh_global_burst=args.gh_global_burst,
         org=org,
         projects_dir=resolve_projects_dir(args.projects_dir),
         # A non-positive --phase-timeout explicitly disables the bound; any

@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from hephaestus.github.rate_limit import (
     ALLOWED_TIMEZONES,
@@ -12,7 +15,9 @@ from hephaestus.github.rate_limit import (
     RATE_LIMIT_RE,
     SECONDARY_RATE_LIMIT_RE,
     _countdown_loop,
+    _global_throttle_state_path,
     _rate_limit_probe_cache,
+    configure_gh_global_throttle,
     detect_claude_usage_cap,
     detect_claude_usage_limit,
     detect_rate_limit,
@@ -24,6 +29,11 @@ from hephaestus.github.rate_limit import (
     resolve_quota_reset_epoch,
     wait_until,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_global_throttle_config() -> None:
+    configure_gh_global_throttle(rate=10.0, burst=30.0)
 
 
 class TestRateLimitRegex:
@@ -522,24 +532,43 @@ class TestGlobalThrottle:
     """Tests for gh_global_throttle_acquire (cross-process token bucket)."""
 
     def test_no_op_when_rate_zero(self, monkeypatch, tmp_path) -> None:
-        monkeypatch.setenv("HEPHAESTUS_GH_GLOBAL_RATE", "0")
-        monkeypatch.setenv("HEPHAESTUS_RATE_DIR", str(tmp_path))
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        configure_gh_global_throttle(rate=0, burst=10)
         # Should return effectively immediately and never touch the state file.
         before = time.monotonic()
         gh_global_throttle_acquire()
         elapsed = time.monotonic() - before
         assert elapsed < 0.05
-        assert not (tmp_path / "hephaestus_gh_rate.json").exists()
+        assert not _global_throttle_state_path().exists()
 
     def test_first_call_succeeds_immediately_with_full_burst(self, monkeypatch, tmp_path) -> None:
-        monkeypatch.setenv("HEPHAESTUS_GH_GLOBAL_RATE", "1000")
-        monkeypatch.setenv("HEPHAESTUS_GH_GLOBAL_BURST", "10")
-        monkeypatch.setenv("HEPHAESTUS_RATE_DIR", str(tmp_path))
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        configure_gh_global_throttle(rate=1000, burst=10)
         before = time.monotonic()
         gh_global_throttle_acquire()
         elapsed = time.monotonic() - before
         assert elapsed < 0.1
-        assert (tmp_path / "hephaestus_gh_rate.json").exists()
+        assert _global_throttle_state_path().exists()
+
+    def test_state_path_is_tmpdir_subdirectory(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        assert _global_throttle_state_path() == (
+            tmp_path / "hephaestus" / "gh-rate" / "hephaestus_gh_rate.json"
+        )
+
+    def test_state_path_ignores_non_tmpdir_temp_envs(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("TMPDIR", raising=False)
+        monkeypatch.setenv("TEMP", str(tmp_path / "temp"))
+        monkeypatch.setenv("TMP", str(tmp_path / "tmp"))
+        assert _global_throttle_state_path() == (
+            Path("/tmp") / "hephaestus" / "gh-rate" / "hephaestus_gh_rate.json"
+        )
+
+    def test_config_rejects_invalid_values(self) -> None:
+        with pytest.raises(ValueError, match="rate"):
+            configure_gh_global_throttle(rate=-1, burst=10)
+        with pytest.raises(ValueError, match="burst"):
+            configure_gh_global_throttle(rate=10, burst=0)
 
     def test_rapid_calls_eventually_throttle(self, monkeypatch, tmp_path) -> None:
         """With burst=2 and rate=10/sec, the third call must request a sleep >= 0.1s.
@@ -567,9 +596,8 @@ class TestGlobalThrottle:
         """
         import unittest.mock
 
-        monkeypatch.setenv("HEPHAESTUS_GH_GLOBAL_RATE", "10")
-        monkeypatch.setenv("HEPHAESTUS_GH_GLOBAL_BURST", "2")
-        monkeypatch.setenv("HEPHAESTUS_RATE_DIR", str(tmp_path))
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        configure_gh_global_throttle(rate=10, burst=2)
 
         sleep_calls: list[float] = []
 

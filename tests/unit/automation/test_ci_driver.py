@@ -3699,9 +3699,7 @@ class TestHandleFailingPr:
             result = driver._handle_failing_pr(1, 42, 0, checks)
         assert result.success is False
 
-    def test_auto_merge_policy_failure_arms_when_implementation_go(
-        self, driver: CIDriver
-    ) -> None:
+    def test_auto_merge_policy_failure_arms_when_implementation_go(self, driver: CIDriver) -> None:
         """auto-merge-policy alone → arm auto-merge instead of invoking CI fixer."""
         checks = [_make_check("auto-merge-policy", conclusion="failure")]
         arm_result = WorkerResult(issue_number=1, success=True, pr_number=42)

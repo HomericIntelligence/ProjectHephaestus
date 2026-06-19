@@ -122,9 +122,7 @@ class TestBuildCiFixPrompt:
         assert "boom: import error" in prompt
         assert "1-fix" in prompt
 
-    def test_includes_failing_check_names(
-        self, tmp_path: Path
-    ) -> None:
+    def test_includes_failing_check_names(self, tmp_path: Path) -> None:
         orchestrator = _orchestrator_with_failing_checks(
             tmp_path, ["pr-policy", "required-checks-gate"]
         )
@@ -241,9 +239,7 @@ class TestAttemptMechanicalRebase:
             assert orchestrator.attempt_mechanical_rebase(5, 50, 0) is False
         mock_rebase.assert_not_called()
 
-    def test_blocked_pr_with_failing_checks_rebases_clean_and_pushes(
-        self, tmp_path: Path
-    ) -> None:
+    def test_blocked_pr_with_failing_checks_rebases_clean_and_pushes(self, tmp_path: Path) -> None:
         orchestrator = _orchestrator_with_failing_checks(tmp_path, ["pr-policy"])
         with (
             patch(

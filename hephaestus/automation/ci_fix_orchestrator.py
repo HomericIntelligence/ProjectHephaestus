@@ -570,9 +570,7 @@ class CIFixOrchestrator:
                     "the direct failure."
                 )
             failing_checks_block = (
-                "Failing checks reported by GitHub:\n"
-                f"{failing_lines}"
-                f"{aggregate_note}\n\n"
+                f"Failing checks reported by GitHub:\n{failing_lines}{aggregate_note}\n\n"
             )
         review_threads_block = self._format_review_threads_block(pr_number)
         return (

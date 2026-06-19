@@ -108,9 +108,7 @@ class TestRunPlanReviewLoop:
 
         assert mock_review.call_args.kwargs["advise_findings"] == "prior team learning"
 
-    def test_order_is_advise_plan_learn_review_with_shared_advise(
-        self, planner: Planner
-    ) -> None:
+    def test_order_is_advise_plan_learn_review_with_shared_advise(self, planner: Planner) -> None:
         """Planner loop order is advise → plan → planner-/learn → review."""
         planner.options.enable_advise = True
         calls: list[tuple[str, dict[str, object]]] = []

@@ -76,6 +76,10 @@ yamllint = ">=1.38.0,<2"
 
 [feature.shared.pypi-dependencies]
 pip-audit = ">=2.7,<3"
+# Transitive via pip-audit/cachecontrol. Floor 1.2.1 fixes GHSA-6v7p-g79w-8964
+# on linux-64; keep this direct floor so the audit environment cannot solve to
+# the vulnerable 1.1.x wheel.
+msgpack = ">=1.2.1,<2"
 
 [feature.dev.dependencies]
 pytest = ">=9.0.0,<10"

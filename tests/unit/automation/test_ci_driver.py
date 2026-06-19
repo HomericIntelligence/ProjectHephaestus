@@ -2445,7 +2445,7 @@ class TestMechanicalRebase:
         mock_push.assert_not_called()
 
     def test_up_to_date_pr_skips_rebase_entirely(self, driver: CIDriver, tmp_path: Path) -> None:
-        """A CLEAN/BLOCKED PR is already on its base — no rebase, no push."""
+        """A CLEAN PR is already on its base — no rebase, no push."""
         with (
             patch(
                 "hephaestus.automation.ci_fix_orchestrator._gh_call",
@@ -2471,6 +2471,7 @@ class TestMechanicalRebase:
                 "hephaestus.automation.ci_fix_orchestrator._gh_call",
                 return_value=self._pr_state("BLOCKED"),
             ),
+            patch.object(driver, "_failing_required_check_names", return_value=[]),
             patch("hephaestus.automation.ci_fix_orchestrator.rebase_worktree_onto") as mock_rebase,
         ):
             result = driver._attempt_mechanical_rebase(
@@ -2479,6 +2480,34 @@ class TestMechanicalRebase:
 
         assert result is False
         mock_rebase.assert_not_called()
+
+    def test_blocked_pr_with_failing_checks_rebases_before_agent(
+        self, driver: CIDriver, tmp_path: Path
+    ) -> None:
+        """BLOCKED with red required checks still gets the cheap rebase attempt."""
+        with (
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator._gh_call",
+                return_value=self._pr_state("BLOCKED"),
+            ),
+            patch.object(driver, "_failing_required_check_names", return_value=["pr-policy"]),
+            patch.object(driver, "_get_worktree_path", return_value=tmp_path),
+            patch("hephaestus.automation.ci_fix_orchestrator.sync_worktree_to_remote_branch"),
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator.rebase_worktree_onto",
+                return_value=True,
+            ) as mock_rebase,
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator.push_current_branch_with_lease_on_divergence"
+            ) as mock_push,
+        ):
+            result = driver._attempt_mechanical_rebase(
+                issue_number=5, pr_number=50, acquired_slot=0
+            )
+
+        assert result is True
+        mock_rebase.assert_called_once_with(tmp_path, "main")
+        mock_push.assert_called_once_with(tmp_path, branch="5-impl", push_ref="HEAD:5-impl")
 
     def test_uses_pr_base_ref_not_hardcoded_main(self, driver: CIDriver, tmp_path: Path) -> None:
         """The rebase targets the PR's actual baseRefName, not a hardcoded main."""

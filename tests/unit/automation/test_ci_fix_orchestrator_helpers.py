@@ -202,7 +202,7 @@ class TestRecordRepeatedNoCommit:
 
 
 class TestAttemptMechanicalRebase:
-    """Only BEHIND/DIRTY/CONFLICTING PRs are rebased; clean ones are skipped."""
+    """Only stale/conflicting or failing-check BLOCKED PRs are rebased."""
 
     @staticmethod
     def _pr_state(merge_state: str, head: str = "5-impl", base: str = "main") -> MagicMock:
@@ -227,6 +227,42 @@ class TestAttemptMechanicalRebase:
         ):
             assert orchestrator.attempt_mechanical_rebase(5, 50, 0) is False
         mock_rebase.assert_not_called()
+
+    def test_blocked_pr_without_failing_checks_skips_rebase(
+        self, orchestrator: CIFixOrchestrator
+    ) -> None:
+        with (
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator._gh_call",
+                return_value=self._pr_state("BLOCKED"),
+            ),
+            patch("hephaestus.automation.ci_fix_orchestrator.rebase_worktree_onto") as mock_rebase,
+        ):
+            assert orchestrator.attempt_mechanical_rebase(5, 50, 0) is False
+        mock_rebase.assert_not_called()
+
+    def test_blocked_pr_with_failing_checks_rebases_clean_and_pushes(
+        self, tmp_path: Path
+    ) -> None:
+        orchestrator = _orchestrator_with_failing_checks(tmp_path, ["pr-policy"])
+        with (
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator._gh_call",
+                return_value=self._pr_state("BLOCKED"),
+            ),
+            patch("hephaestus.automation.ci_fix_orchestrator.sync_worktree_to_remote_branch"),
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator.rebase_worktree_onto",
+                return_value=True,
+            ) as mock_rebase,
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator."
+                "push_current_branch_with_lease_on_divergence"
+            ) as mock_push,
+        ):
+            assert orchestrator.attempt_mechanical_rebase(5, 50, 0) is True
+        mock_rebase.assert_called_once_with(tmp_path, "main")
+        mock_push.assert_called_once()
 
     def test_behind_pr_rebases_clean_and_pushes(
         self, orchestrator: CIFixOrchestrator, tmp_path: Path

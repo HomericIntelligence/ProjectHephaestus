@@ -693,8 +693,10 @@ class CIFixOrchestrator:
 
         1. Query ``mergeStateStatus`` / ``mergeable`` / ``baseRefName``. Skip
            (return ``False``) unless the PR is ``BEHIND`` or ``DIRTY`` /
-           ``CONFLICTING`` — a PR already on top of its base needs no rebase and
-           the normal check-status path handles it.
+           ``CONFLICTING``. ``BLOCKED`` is also eligible only when required
+           checks are failing, because GitHub can report failed-check PRs as
+           branch-protection blocked even when a base rebase can bring in the
+           fix.
         2. Sync the worktree to the PR head, then ``rebase_worktree_onto`` the
            base branch.
         3. Clean rebase → push ``HEAD:<pr-head>`` with ``--force-with-lease`` and
@@ -740,10 +742,24 @@ class CIFixOrchestrator:
             return False
 
         merge_state = str(state.get("mergeStateStatus") or "").upper()
-        # Only behind-base / conflicting PRs need a rebase. CLEAN / BLOCKED /
-        # UNSTABLE / HAS_HOOKS PRs are already on top of their base — let the
-        # check-status path handle them. (BLOCKED is the review-gated case.)
-        if merge_state not in ("BEHIND", "DIRTY", "CONFLICTING"):
+        # Only behind-base / conflicting PRs need a rebase. CLEAN / UNSTABLE /
+        # HAS_HOOKS PRs are already on top of their base — let the check-status
+        # path handle them. BLOCKED is usually review-gated, but GitHub also
+        # reports some failed required-check PRs as BLOCKED; those are still
+        # eligible for the cheap rebase path before invoking an agent.
+        rebase_states = ("BEHIND", "DIRTY", "CONFLICTING")
+        if merge_state == "BLOCKED":
+            failing_checks = self._failing_required_check_names(pr_number)
+            if not failing_checks:
+                return False
+            logger.info(
+                "Issue #%s: PR #%s is BLOCKED with failing required checks (%s); "
+                "attempting mechanical rebase before CI-fix agent",
+                issue_number,
+                pr_number,
+                ", ".join(failing_checks),
+            )
+        elif merge_state not in rebase_states:
             return False
 
         pr_head_branch = str(state.get("headRefName") or "") or self._get_pr_branch(pr_number)

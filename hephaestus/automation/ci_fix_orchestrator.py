@@ -374,6 +374,7 @@ class CIFixOrchestrator:
                 worktree_path,
                 branch=pr_head_branch,
                 push_ref=f"HEAD:{pr_head_branch}",
+                verify=False,
             )
             logger.info("Issue #%s: pushed CI fixes for PR #%s", issue_number, pr_number)
             return True
@@ -799,6 +800,7 @@ class CIFixOrchestrator:
                 worktree_path,
                 branch=pr_head_branch,
                 push_ref=f"HEAD:{pr_head_branch}",
+                verify=False,
             )
             logger.info(
                 "Issue #%s: mechanically rebased PR #%s onto %s and pushed (no agent)",

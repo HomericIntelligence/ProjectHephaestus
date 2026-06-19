@@ -36,6 +36,25 @@ def orchestrator(tmp_path: Path) -> CIFixOrchestrator:
     )
 
 
+def _orchestrator_with_failing_checks(
+    tmp_path: Path, failing_checks: list[str]
+) -> CIFixOrchestrator:
+    options = MagicMock()
+    options.agent = "claude"
+    options.dry_run = False
+    status = MagicMock()
+    return CIFixOrchestrator(
+        options_provider=lambda: options,
+        repo_root_provider=lambda: tmp_path,
+        state_dir_provider=lambda: tmp_path,
+        status_tracker_provider=lambda: status,
+        get_pr_branch=lambda pr: f"{pr}-impl",
+        get_worktree_path=lambda issue, pr: tmp_path,
+        format_review_threads_block=lambda pr: "",
+        failing_required_check_names=lambda pr: failing_checks,
+    )
+
+
 class TestForceEngagementPrompt:
     """The retry prompt must name failing checks/dirty files verbatim."""
 
@@ -103,6 +122,25 @@ class TestBuildCiFixPrompt:
         assert "boom: import error" in prompt
         assert "1-fix" in prompt
 
+    def test_includes_failing_check_names(
+        self, tmp_path: Path
+    ) -> None:
+        orchestrator = _orchestrator_with_failing_checks(
+            tmp_path, ["pr-policy", "required-checks-gate"]
+        )
+        prompt = orchestrator.build_ci_fix_prompt(
+            issue_number=1,
+            pr_number=2,
+            worktree_path=tmp_path,
+            ci_logs="python3: can't open file 'scripts/check_conventional_commit.py'",
+            pr_head_branch="1-fix",
+            advise_findings="",
+        )
+        assert "Failing checks reported by GitHub" in prompt
+        assert "- pr-policy" in prompt
+        assert "- required-checks-gate" in prompt
+        assert "aggregate" in prompt
+
     def test_skip_marker_advise_contributes_nothing(
         self, orchestrator: CIFixOrchestrator, tmp_path: Path
     ) -> None:
@@ -115,6 +153,32 @@ class TestBuildCiFixPrompt:
             advise_findings="<!-- advise step skipped -->",
         )
         assert "Prior Learnings from Team Knowledge Base" not in prompt
+
+
+class TestRetryWorktreeChanges:
+    """No-commit retries should notice relevant new files without sweeping junk."""
+
+    def test_relevant_untracked_files_are_actionable(
+        self, orchestrator: CIFixOrchestrator, tmp_path: Path
+    ) -> None:
+        status = MagicMock(
+            stdout=(
+                " M hephaestus/automation/ci_driver.py\n"
+                "?? scripts/check_conventional_commit.py\n"
+                "?? tests/unit/scripts/test_check_conventional_commit.py\n"
+                "?? uv.lock\n"
+                "?? .pytest_cache/v/cache/nodeids\n"
+            ),
+            stderr="",
+            returncode=0,
+        )
+        with patch("hephaestus.automation.ci_fix_orchestrator.run", return_value=status):
+            changes = orchestrator._tracked_worktree_changes(tmp_path, 1515)
+        assert " M hephaestus/automation/ci_driver.py" in changes
+        assert "?? scripts/check_conventional_commit.py" in changes
+        assert "?? tests/unit/scripts/test_check_conventional_commit.py" in changes
+        assert all("uv.lock" not in line for line in changes)
+        assert all(".pytest_cache" not in line for line in changes)
 
 
 class TestRecordRepeatedNoCommit:

@@ -69,8 +69,7 @@ class TestInvalidNames:
         ],
     )
     def test_invalid_name_nonzero_exit(self, name: str, tmp_path: Path) -> None:
-        args = [name] if name else []
-        rc = main(["--root", str(tmp_path), *args]) if name else 1
+        rc = main(["--root", str(tmp_path), name])
         assert rc != 0
 
     @pytest.mark.parametrize("name", ["Bad-Name", "1abc", "CamelCase"])

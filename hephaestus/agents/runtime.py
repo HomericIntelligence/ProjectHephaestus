@@ -10,12 +10,14 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 AgentName = Literal["claude", "codex", "pi"]
+SubprocessCommandPart = str | bytes | os.PathLike[str] | os.PathLike[bytes]
+SubprocessCommand = SubprocessCommandPart | Sequence[SubprocessCommandPart]
 AGENT_CHOICES: tuple[AgentName, ...] = ("claude", "codex", "pi")
 DEFAULT_AGENT: AgentName = "claude"
 AGENT_AUTH_STATUS_TIMEOUT = 10
@@ -224,6 +226,18 @@ def redact_pi_private_values(text: str, tokens: Iterable[str]) -> str:
     for token in sorted((token for token in tokens if token), key=len, reverse=True):
         redacted = redacted.replace(token, PI_PRIVATE_REDACTION)
     return redacted
+
+
+def _redact_pi_command_args(cmd: SubprocessCommand, tokens: Iterable[str]) -> SubprocessCommand:
+    """Redact Pi private values from a subprocess command payload."""
+    if isinstance(cmd, str):
+        return redact_pi_private_values(cmd, tokens)
+    if isinstance(cmd, Sequence) and not isinstance(cmd, bytes):
+        return [
+            redact_pi_private_values(part, tokens) if isinstance(part, str) else part
+            for part in cmd
+        ]
+    return cmd
 
 
 def session_agent_matches(session_agent: str | None, selected_agent: str) -> bool:
@@ -588,19 +602,20 @@ def _run_pi_command(
             )
         except subprocess.CalledProcessError as exc:
             tokens = pi_private_redaction_tokens(cwd, _model_from_pi_cmd(cmd))
-            redacted_cmd = (
-                redact_pi_private_values(exc.cmd, tokens)
-                if isinstance(exc.cmd, str)
-                else [
-                    redact_pi_private_values(part, tokens) if isinstance(part, str) else part
-                    for part in exc.cmd
-                ]
-            )
+            redacted_cmd = _redact_pi_command_args(exc.cmd, tokens)
             raise subprocess.CalledProcessError(
                 exc.returncode,
                 redacted_cmd,
                 output=redact_pi_private_values(exc.stdout or "", tokens),
                 stderr=redact_pi_private_values(exc.stderr or "", tokens),
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            tokens = pi_private_redaction_tokens(cwd, _model_from_pi_cmd(cmd))
+            raise subprocess.TimeoutExpired(
+                _redact_pi_command_args(exc.cmd, tokens),
+                exc.timeout,
+                output=redact_pi_private_values(_coerce_timeout_output(exc.output), tokens),
+                stderr=redact_pi_private_values(_coerce_timeout_output(exc.stderr), tokens),
             ) from exc
     finally:
         if prompt_path is not None:

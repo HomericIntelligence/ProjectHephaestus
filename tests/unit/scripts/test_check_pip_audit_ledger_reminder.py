@@ -37,6 +37,8 @@ pip-audit = "pip-audit --ignore-vuln PYSEC-2025-183 --ignore-vuln PYSEC-2025-999
 
 
 class TestFindUndocumentedSuppressions:
+    """Tests for find_undocumented_suppressions()."""
+
     def test_empty_when_no_suppressions(self, tmp_path: Path) -> None:
         f = tmp_path / "pixi.toml"
         f.write_text('[feature.lint.tasks]\npip-audit = "pip-audit"\n')

@@ -35,7 +35,7 @@ print(hephaestus.__version__)
 
 > **Upgrading?** When moving across a major version, read the
 > [migration guide](docs/MIGRATION.md) for required consumer changes.
-
+>
 > **Note on naming.** `pip install hephaestus` and `pip install project-hephaestus` will **not** find this package — both names are unowned on PyPI. The `HomericIntelligence-<Project>` prefix is the deliberate naming convention shared across the HomericIntelligence ecosystem (ProjectKeystone, ProjectOdyssey, etc.) to avoid PyPI namespace collisions. Wheel filenames are PEP 625 normalized to lowercase, so you will see `homericintelligence_hephaestus-<version>-py3-none-any.whl` on disk and in release assets.
 
 ### Optional dependencies

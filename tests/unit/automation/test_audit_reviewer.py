@@ -264,21 +264,21 @@ class TestRunAuditCoordinator:
         run_audit_coordinator(prs=prs, agent="claude", state_dir=tmp_path)
         assert mock_invoke.called
 
-    @mock.patch("hephaestus.automation.audit_reviewer.run_codex_text")
+    @mock.patch("hephaestus.automation.audit_reviewer.run_agent_text")
     @mock.patch("hephaestus.automation.audit_reviewer.get_repo_root")
     def test_codex_path_invokes_runtime(
         self,
         mock_root: mock.Mock,
-        mock_codex: mock.Mock,
+        mock_agent: mock.Mock,
         tmp_path: Path,
     ) -> None:
         prs = [{"number": 100, "title": "Test"}]
         mock_root.return_value = Path(".")
-        mock_codex.return_value = mock.Mock(
+        mock_agent.return_value = mock.Mock(
             stdout='```json\n{"audits": [{"pr_number": 100, "verdict": "GO"}]}\n```'
         )
         run_audit_coordinator(prs=prs, agent="codex", state_dir=tmp_path)
-        assert mock_codex.called
+        assert mock_agent.call_args.kwargs["agent"] == "codex"
 
     @mock.patch("hephaestus.automation.audit_reviewer.invoke_claude_with_session")
     @mock.patch("hephaestus.automation.audit_reviewer.get_repo_root")

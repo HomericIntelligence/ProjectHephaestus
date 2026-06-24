@@ -437,6 +437,29 @@ class TestParser:
             main(["--codex", "--dry-run"])
             assert mock_cls.call_args[1]["agent"] == "codex"
 
+    def test_codex_flag_resolves_codex_for_live_run(self) -> None:
+        with mock.patch(
+            "hephaestus.automation.audit_reviewer.resolve_agent",
+            return_value="codex",
+        ) as mock_resolve:
+            with mock.patch("hephaestus.automation.audit_reviewer.AuditReviewer") as mock_cls:
+                mock_instance = mock.Mock()
+                mock_instance.run.return_value = (0, [])
+                mock_cls.return_value = mock_instance
+                main(["--codex"])
+                mock_resolve.assert_called_once_with("codex")
+                assert mock_cls.call_args[1]["agent"] == "codex"
+
+    def test_dry_run_skips_resolve_agent(self) -> None:
+        with mock.patch("hephaestus.automation.audit_reviewer.resolve_agent") as mock_resolve:
+            with mock.patch("hephaestus.automation.audit_reviewer.AuditReviewer") as mock_cls:
+                mock_instance = mock.Mock()
+                mock_instance.run.return_value = (0, [])
+                mock_cls.return_value = mock_instance
+                main(["--dry-run"])
+                mock_resolve.assert_not_called()
+                assert mock_cls.call_args[1]["agent"] == "claude"
+
     def test_json_flag_emits_envelope_on_exit(self) -> None:
         with mock.patch("hephaestus.automation.audit_reviewer.AuditReviewer") as mock_cls:
             mock_instance = mock.Mock()

@@ -277,7 +277,8 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    agent = resolve_agent("codex" if args.codex else args.agent)
+    selected_agent = "codex" if args.codex else args.agent
+    agent = (selected_agent or "claude") if args.dry_run else resolve_agent(selected_agent)
     reviewer = AuditReviewer(
         agent=agent,
         pr_numbers=args.pr_numbers,

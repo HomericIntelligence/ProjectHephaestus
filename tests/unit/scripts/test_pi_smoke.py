@@ -18,31 +18,62 @@ _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
 
-def test_model_alias_is_required_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The smoke harness must not bake model aliases into source."""
+def test_provider_and_model_aliases_are_required_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The smoke harness must require aliases from operator-local env vars."""
+    monkeypatch.delenv("HEPH_PI_PROVIDER", raising=False)
     monkeypatch.delenv("HEPH_PI_MODEL", raising=False)
 
     assert _mod.main([]) == 2
 
 
-def test_runs_pi_with_env_model_alias(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The smoke harness forwards only the operator-provided model alias."""
-    monkeypatch.setenv("HEPH_PI_MODEL", "private-test-alias")
+def test_runs_pi_with_env_aliases_without_alias_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The smoke harness keeps aliases out of argv-level Pi kwargs."""
+    monkeypatch.setenv("HEPH_PI_PROVIDER", "private-provider-alias")
+    monkeypatch.setenv("HEPH_PI_MODEL", "private-model-alias")
     run_pi = Mock(return_value=AgentRunResult(stdout="OK", stderr="", session_id="pi-smoke"))
     monkeypatch.setattr(_mod, "run_pi_session", run_pi)
 
-    assert _mod.main(["--cwd", str(tmp_path), "--prompt", "Say OK"]) == 0
+    assert (
+        _mod.main(
+            [
+                "--cwd",
+                str(tmp_path),
+                "--prompt",
+                "Say OK",
+                "--log-dir",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
 
     kwargs = run_pi.call_args.kwargs
     assert kwargs["cwd"] == tmp_path
-    assert kwargs["model"] == "private-test-alias"
+    assert kwargs["sandbox"] == "read-only"
+    assert "model" not in kwargs
+    assert "provider" not in kwargs
     assert run_pi.call_args.args == ("Say OK",)
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "OK"
+    assert "LOG_FILE=" in captured.err
+    log_path = Path(captured.err.strip().split("LOG_FILE=", 1)[1])
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "stdout: OK" in log_text
+    assert "private-provider-alias" not in log_text
+    assert "private-model-alias" not in log_text
 
 
 def test_failure_output_redacts_private_values(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Smoke failures should redact the local alias and denylist tokens."""
+    monkeypatch.setenv("HEPH_PI_PROVIDER", "private-provider-alias")
     monkeypatch.setenv("HEPH_PI_MODEL", "private-test-alias")
     (tmp_path / ".heph-private-denylist").write_text(
         "PRIVATE_ENDPOINT_TOKEN\n",
@@ -68,6 +99,7 @@ def test_success_output_redacts_private_values(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Smoke success output should also be safe for publication."""
+    monkeypatch.setenv("HEPH_PI_PROVIDER", "private-provider-alias")
     monkeypatch.setenv("HEPH_PI_MODEL", "private-test-alias")
     (tmp_path / ".heph-private-denylist").write_text(
         "PRIVATE_ENDPOINT_TOKEN\n",

@@ -643,9 +643,13 @@ class TestPublicSurface:
         assert not missing, f"Missing public correlation-ID symbols in __all__: {missing}"
 
     def test_package_root_and_submodule_are_same_object(self) -> None:
-        import hephaestus.logging as pkg
-        import hephaestus.logging.utils as utils
+        from hephaestus import logging as pkg
+        from hephaestus.logging.utils import (
+            correlation_id_scope,
+            get_current_correlation_id,
+            set_correlation_id,
+        )
 
-        assert pkg.set_correlation_id is utils.set_correlation_id
-        assert pkg.get_current_correlation_id is utils.get_current_correlation_id
-        assert pkg.correlation_id_scope is utils.correlation_id_scope
+        assert pkg.set_correlation_id is set_correlation_id
+        assert pkg.get_current_correlation_id is get_current_correlation_id
+        assert pkg.correlation_id_scope is correlation_id_scope

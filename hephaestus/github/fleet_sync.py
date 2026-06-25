@@ -281,6 +281,8 @@ def _load_fleet_config(config_path: str | None) -> tuple[str | None, list[str] |
                 raise RuntimeError(f"Failed to load fleet config from {config_path}: {e}") from e
             except ValueError as e:
                 raise RuntimeError(f"Failed to load fleet config from {config_path}: {e}") from e
+            except RuntimeError as e:
+                raise RuntimeError(f"Failed to load fleet config from {config_path}: {e}") from e
 
     return file_org, file_repos
 

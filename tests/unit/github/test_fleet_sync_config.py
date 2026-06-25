@@ -177,9 +177,7 @@ class TestResolveFleetConfig:
         assert org == "CwdOrg"
         assert repos == ["cwdrepo"]
 
-    def test_fleet_config_missing_pyyaml_wraps_with_context(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    def test_fleet_config_missing_pyyaml_wraps_with_context(self, tmp_path, monkeypatch) -> None:
         """A .yaml fleet config with PyYAML absent preserves the path context wrapper.
 
         Regression for issue #1510: the ValueError→RuntimeError type flip in load_config

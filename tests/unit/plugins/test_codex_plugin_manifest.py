@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
+import sys
 from pathlib import Path
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -64,3 +71,31 @@ def test_codexignore_excludes_generated_and_local_state() -> None:
         "build/",
         "*.egg-info/",
     } <= ignored
+
+
+def test_plugin_scanner_config_ignores_known_non_plugin_secret_fixtures() -> None:
+    """HOL scans the repo root, so scoped false-positive ignores stay explicit."""
+    config_path = REPO_ROOT / ".plugin-scanner.toml"
+
+    assert config_path.is_file()
+    config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+
+    scanner_config = config.get("scanner", {})
+    assert scanner_config.get("ignore_paths") == [
+        "scripts/shell/setup_api_key.sh",
+        "tests/unit/scripts/test_check_private_denylist.py",
+    ]
+
+
+def test_hol_plugin_scanner_workflow_is_pinned_and_uses_config() -> None:
+    """The HOL scanner workflow keeps a strict gate without repo-wide false positives."""
+    workflow = (REPO_ROOT / ".github" / "workflows" / "hol-plugin-scanner.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert re.search(
+        r"uses: hashgraph-online/ai-plugin-scanner-action@[0-9a-f]{40}\b",
+        workflow,
+    )
+    assert 'config: ".plugin-scanner.toml"' in workflow
+    assert "fail_on_severity: high" in workflow

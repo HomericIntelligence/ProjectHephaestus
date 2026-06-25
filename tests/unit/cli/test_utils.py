@@ -360,6 +360,24 @@ class TestCliBarrelExports:
             assert symbol in cli.__all__
             assert hasattr(cli, symbol)
 
+    def test_cli_all_covers_module_all(self) -> None:
+        """Package __all__ re-exports every symbol cli.utils.__all__ declares (#1511)."""
+        import hephaestus.cli as cli
+        from hephaestus.cli import utils
+
+        missing = set(utils.__all__) - set(cli.__all__)
+        assert not missing, f"cli.__all__ omits stable utils symbols: {sorted(missing)}"
+        for symbol in utils.__all__:
+            assert hasattr(cli, symbol), f"cli has no attribute {symbol!r}"
+
+    def test_dry_run_symbols_reexport_identity(self) -> None:
+        """Re-exports are the SAME objects so patch paths don't diverge (#1511)."""
+        import hephaestus.cli as cli
+        from hephaestus.cli import utils
+
+        assert cli.add_dry_run_arg is utils.add_dry_run_arg
+        assert cli.DRY_RUN_HELP_CAVEAT is utils.DRY_RUN_HELP_CAVEAT
+
 
 class TestAddJsonArg:
     """Tests for add_json_arg."""

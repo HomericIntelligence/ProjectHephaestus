@@ -199,3 +199,4 @@ class TestMain:
         monkeypatch.setattr("sys.argv", ["filter-audit"])
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(data)))
         assert main() == 0
+

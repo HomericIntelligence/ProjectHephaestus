@@ -183,3 +183,4 @@ class TestMain:
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 0
+

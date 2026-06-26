@@ -140,3 +140,5 @@ def test_json_flag_with_write_emits_ok_envelope(capsys) -> None:
     finally:
         for name, content in snapshots.items():
             (SKILLS_DIR / name / "SKILL.md").write_bytes(content)
+
+

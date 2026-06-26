@@ -57,6 +57,14 @@ from hephaestus.cli.utils import (
 from hephaestus.config.utils import load_config
 from hephaestus.github.client import gh_call
 from hephaestus.logging.utils import get_logger
+from hephaestus.utils.git import (
+    git_config_get,
+    git_diff_unmerged_names,
+    git_ls_remote,
+    git_rebase,
+    git_rev_list_count,
+    run_git,
+)
 from hephaestus.utils.helpers import METADATA_TIMEOUT, NETWORK_TIMEOUT
 
 logger = get_logger(__name__)
@@ -93,17 +101,10 @@ def _signing_key_uid_emails() -> list[str] | None:
     Returns an empty list only when the key exists but exposes no UID emails.
     """
     try:
-        key_result = subprocess.run(
-            ["git", "config", "--get", "user.signingkey"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=METADATA_TIMEOUT,
-        )
+        signing_key = git_config_get("user.signingkey", timeout=METADATA_TIMEOUT)
     except subprocess.TimeoutExpired:
         return None
-    signing_key = key_result.stdout.strip()
-    if key_result.returncode != 0 or not signing_key:
+    if not signing_key:
         return None
 
     try:
@@ -191,17 +192,14 @@ def get_resign_email() -> str:
     env = os.environ.get("FLEET_GIT_EMAIL", "").strip()
     if env:
         return _validate_resign_email(env)
-    for args in (["--global"], []):
+    for global_ in (True, False):
         try:
-            result = subprocess.run(
-                ["git", "config", *args, "--get", "user.email"],
-                capture_output=True,
-                text=True,
-                check=False,
+            email = git_config_get(
+                "user.email",
+                global_=global_,
                 timeout=METADATA_TIMEOUT,
             )
-            email = result.stdout.strip()
-            if result.returncode == 0 and email:
+            if email:
                 return _validate_resign_email(email)
         except subprocess.TimeoutExpired:
             continue
@@ -406,16 +404,13 @@ def _git(
 
     Uses NETWORK_TIMEOUT for operations involving network I/O (clone, fetch, push).
     """
-    if dry_run:
-        logger.info("[dry-run] git %s (in %s)", " ".join(args), cwd)
-        return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
-    return subprocess.run(
-        ["git", *args],
+    return run_git(
+        args,
         cwd=cwd,
-        capture_output=True,
-        text=True,
+        dry_run=dry_run,
         check=check,
         timeout=NETWORK_TIMEOUT,
+        retries=2 if args and args[0] in {"clone", "fetch", "push", "ls-remote"} else 0,
     )
 
 
@@ -759,25 +754,19 @@ def resolve_conflict_with_agent(
         add_pr_worktree(repo_clone, work, branch, base, dry_run=False)
 
         # Start rebase — will stop at conflicts
-        subprocess.run(
-            ["git", "rebase", f"origin/{base}"],
-            cwd=work,
-            capture_output=True,
-            text=True,
+        git_rebase(
+            work,
+            f"origin/{base}",
             check=False,
             timeout=NETWORK_TIMEOUT,
         )
 
         # Identify conflicted files
-        status_result = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=U"],
+        conflict_files = git_diff_unmerged_names(
             cwd=work,
-            capture_output=True,
-            text=True,
             check=True,
             timeout=METADATA_TIMEOUT,
         )
-        conflict_files = [f.strip() for f in status_result.stdout.splitlines() if f.strip()]
 
         if not conflict_files:
             _git(["rebase", "--continue"], cwd=work, dry_run=False, check=False)
@@ -794,15 +783,13 @@ def resolve_conflict_with_agent(
                 return False
 
             conflict_list = "\n".join(f"- {f}" for f in conflict_files)
-            commit_count_result = subprocess.run(
-                ["git", "rev-list", "--count", f"origin/{base}..HEAD"],
-                cwd=work,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=METADATA_TIMEOUT,
+            commit_count = str(
+                git_rev_list_count(
+                    work,
+                    f"origin/{base}..HEAD",
+                    timeout=METADATA_TIMEOUT,
+                )
             )
-            commit_count = commit_count_result.stdout.strip()
             resign_email = get_resign_email()
             resign_exec = get_resign_exec()
 
@@ -844,11 +831,10 @@ Rules:
                 return False
 
         # Verify branch was pushed
-        verify = subprocess.run(
-            ["git", "ls-remote", "origin", branch],
-            cwd=work,
-            capture_output=True,
-            text=True,
+        verify = git_ls_remote(
+            work,
+            "origin",
+            branch,
             check=False,
             timeout=NETWORK_TIMEOUT,
         )

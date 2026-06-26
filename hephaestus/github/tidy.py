@@ -40,6 +40,7 @@ from hephaestus.cli.utils import (
 from hephaestus.github.client import gh_call
 from hephaestus.github.pr_merge import detect_repo_from_remote
 from hephaestus.logging.utils import get_logger
+from hephaestus.utils.git import git_rev_parse, git_show_toplevel, git_status_porcelain
 from hephaestus.utils.helpers import METADATA_TIMEOUT
 
 logger = get_logger(__name__)
@@ -92,13 +93,7 @@ def _detect_default_branch(override: str | None) -> str:
 def _working_tree_clean() -> bool:
     """Return True if the git working tree has no uncommitted changes."""
     try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=METADATA_TIMEOUT,
-        )
+        result = git_status_porcelain(check=False, timeout=METADATA_TIMEOUT)
         return result.returncode == 0 and result.stdout.strip() == ""
     except subprocess.TimeoutExpired as e:
         logger.error("git status timed out: %s", e)
@@ -108,15 +103,7 @@ def _working_tree_clean() -> bool:
 def _in_git_repo() -> bool:
     """Return True if cwd is inside a git repository."""
     try:
-        return (
-            subprocess.run(
-                ["git", "rev-parse", "--git-dir"],
-                capture_output=True,
-                check=False,
-                timeout=METADATA_TIMEOUT,
-            ).returncode
-            == 0
-        )
+        return git_rev_parse(["--git-dir"], check=False, timeout=METADATA_TIMEOUT).returncode == 0
     except subprocess.TimeoutExpired as e:
         logger.error("git rev-parse --git-dir timed out: %s", e)
         raise
@@ -130,14 +117,7 @@ def _repo_root() -> Path:
     CalledProcessError path: both failures propagate as unhandled exceptions to
     the CLI entrypoint.
     """
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=METADATA_TIMEOUT,
-    )
-    return Path(result.stdout.strip())
+    return git_show_toplevel(timeout=METADATA_TIMEOUT)
 
 
 def parse_problem_branches(output: str) -> list[str]:

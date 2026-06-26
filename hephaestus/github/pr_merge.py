@@ -21,6 +21,7 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 from hephaestus.cli.utils import (
@@ -32,7 +33,7 @@ from hephaestus.cli.utils import (
 )
 from hephaestus.github.client import gh_call
 from hephaestus.logging.utils import get_logger
-from hephaestus.utils.helpers import METADATA_TIMEOUT, run_subprocess
+from hephaestus.utils.git import git_branch_exists, git_push, git_remote_url, run_git
 
 logger = get_logger(__name__)
 
@@ -45,8 +46,7 @@ def detect_repo_from_remote() -> str | None:
 
     """
     try:
-        result = run_subprocess(["git", "remote", "get-url", "origin"])
-        remote_url = result.stdout.strip()
+        remote_url = git_remote_url()
 
         # Parse github.com:owner/repo.git or https://github.com/owner/repo.git
         patterns = [
@@ -81,7 +81,7 @@ def run_git_cmd(cmd: list[str], dry_run: bool = False, cwd: str | None = None) -
         logger.info("$ %s (cwd=%s)", " ".join(cmd), cwd)
     else:
         logger.info("$ %s", " ".join(cmd))
-    run_subprocess(cmd, cwd=cwd, dry_run=dry_run)
+    run_git(cmd, cwd=Path(cwd) if cwd is not None else None, dry_run=dry_run)
 
 
 def checks_success_and_log(commit: Any) -> tuple[bool | None, list[Any]]:
@@ -149,15 +149,7 @@ def local_branch_exists(branch_name: str) -> bool:
         True if branch exists locally
 
     """
-    try:
-        out = subprocess.check_output(
-            ["git", "branch", "--list", branch_name],
-            stderr=subprocess.DEVNULL,
-            timeout=METADATA_TIMEOUT,
-        )
-        return bool(out.strip())
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return False
+    return git_branch_exists(branch_name)
 
 
 def try_push_head_branch(head_branch: str, dry_run: bool) -> None:
@@ -175,7 +167,7 @@ def try_push_head_branch(head_branch: str, dry_run: bool) -> None:
         return
 
     if local_branch_exists(head_branch):
-        run_git_cmd(["git", "push", "origin", f"{head_branch}:{head_branch}"], dry_run=False)
+        git_push(Path.cwd(), "origin", f"{head_branch}:{head_branch}", retries=2)
     else:
         logger.info(
             "  Local branch '%s' not found; assuming remote branch already present.", head_branch

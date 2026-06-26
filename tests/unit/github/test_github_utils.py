@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for GitHub utilities."""
 
-from subprocess import CalledProcessError
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,46 +20,38 @@ from hephaestus.github.pr_merge import (
 class TestDetectRepoFromRemote:
     """Tests for detect_repo_from_remote."""
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
-    def test_detect_repo_ssh_url(self, mock_run):
+    @patch("hephaestus.github.pr_merge.git_remote_url")
+    def test_detect_repo_ssh_url(self, mock_remote_url):
         """Detects repo from SSH remote URL."""
-        mock_result = MagicMock()
-        mock_result.stdout = "git@github.com:owner/repo.git\n"
-        mock_run.return_value = mock_result
+        mock_remote_url.return_value = "git@github.com:owner/repo.git"
         result = detect_repo_from_remote()
         assert result == "owner/repo"
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
-    def test_detect_repo_https_url(self, mock_run):
+    @patch("hephaestus.github.pr_merge.git_remote_url")
+    def test_detect_repo_https_url(self, mock_remote_url):
         """Detects repo from HTTPS remote URL."""
-        mock_result = MagicMock()
-        mock_result.stdout = "https://github.com/owner/repo.git\n"
-        mock_run.return_value = mock_result
+        mock_remote_url.return_value = "https://github.com/owner/repo.git"
         result = detect_repo_from_remote()
         assert result == "owner/repo"
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
-    def test_detect_repo_without_git_suffix(self, mock_run):
+    @patch("hephaestus.github.pr_merge.git_remote_url")
+    def test_detect_repo_without_git_suffix(self, mock_remote_url):
         """Detects repo from URL without .git suffix."""
-        mock_result = MagicMock()
-        mock_result.stdout = "https://github.com/owner/repo\n"
-        mock_run.return_value = mock_result
+        mock_remote_url.return_value = "https://github.com/owner/repo"
         result = detect_repo_from_remote()
         assert result == "owner/repo"
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
-    def test_detect_repo_failure_returns_none(self, mock_run):
+    @patch("hephaestus.github.pr_merge.git_remote_url")
+    def test_detect_repo_failure_returns_none(self, mock_remote_url):
         """Returns None when git command fails."""
-        mock_run.side_effect = Exception("Git command failed")
+        mock_remote_url.side_effect = Exception("Git command failed")
         result = detect_repo_from_remote()
         assert result is None
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
-    def test_detect_repo_non_github_url_returns_none(self, mock_run):
+    @patch("hephaestus.github.pr_merge.git_remote_url")
+    def test_detect_repo_non_github_url_returns_none(self, mock_remote_url):
         """Returns None for non-GitHub remote URLs."""
-        mock_result = MagicMock()
-        mock_result.stdout = "https://gitlab.com/owner/repo.git\n"
-        mock_run.return_value = mock_result
+        mock_remote_url.return_value = "https://gitlab.com/owner/repo.git"
         result = detect_repo_from_remote()
         assert result is None
 
@@ -67,31 +59,32 @@ class TestDetectRepoFromRemote:
 class TestLocalBranchExists:
     """Tests for local_branch_exists."""
 
-    @patch("subprocess.check_output")
-    def test_branch_exists(self, mock_check_output):
+    @patch("hephaestus.github.pr_merge.git_branch_exists")
+    def test_branch_exists(self, mock_branch_exists):
         """Returns True when branch exists."""
-        mock_check_output.return_value = b"  feature-branch\n"
+        mock_branch_exists.return_value = True
         result = local_branch_exists("feature-branch")
         assert result is True
+        mock_branch_exists.assert_called_once_with("feature-branch")
 
-    @patch("subprocess.check_output")
-    def test_branch_not_exists(self, mock_check_output):
-        """Returns False when branch doesn't exist (empty output)."""
-        mock_check_output.return_value = b""
+    @patch("hephaestus.github.pr_merge.git_branch_exists")
+    def test_branch_not_exists(self, mock_branch_exists):
+        """Returns False when branch doesn't exist."""
+        mock_branch_exists.return_value = False
         result = local_branch_exists("non-existent-branch")
         assert result is False
 
-    @patch("subprocess.check_output")
-    def test_branch_check_error_returns_false(self, mock_check_output):
-        """Returns False on CalledProcessError."""
-        mock_check_output.side_effect = CalledProcessError(1, ["git", "branch"])
+    @patch("hephaestus.github.pr_merge.git_branch_exists")
+    def test_branch_check_error_returns_false(self, mock_branch_exists):
+        """Returns False when the shared branch helper reports failure."""
+        mock_branch_exists.return_value = False
         result = local_branch_exists("any-branch")
         assert result is False
 
-    @patch("subprocess.check_output")
-    def test_branch_with_whitespace_output(self, mock_check_output):
-        """Branch name with whitespace in output still returns True."""
-        mock_check_output.return_value = b"  main  \n"
+    @patch("hephaestus.github.pr_merge.git_branch_exists")
+    def test_branch_with_whitespace_output(self, mock_branch_exists):
+        """Shared helper truthy output is preserved by the public wrapper."""
+        mock_branch_exists.return_value = True
         result = local_branch_exists("main")
         assert result is True
 
@@ -100,16 +93,20 @@ class TestRunGitCmd:
     """Tests for run_git_cmd."""
 
     def test_dry_run_does_not_call_subprocess(self):
-        """In dry-run mode, no subprocess is called."""
-        with patch("subprocess.run") as mock_run:
+        """In dry-run mode, dry_run is forwarded to the shared Git wrapper."""
+        with patch("hephaestus.github.pr_merge.run_git") as mock_run:
             run_git_cmd(["git", "push", "origin", "main"], dry_run=True)
-            mock_run.assert_not_called()
+            mock_run.assert_called_once_with(
+                ["git", "push", "origin", "main"],
+                cwd=None,
+                dry_run=True,
+            )
 
     def test_non_dry_run_calls_subprocess(self):
-        """In non-dry-run mode, subprocess is called."""
-        with patch("subprocess.run") as mock_run:
+        """In non-dry-run mode, the shared Git wrapper is called."""
+        with patch("hephaestus.github.pr_merge.run_git") as mock_run:
             run_git_cmd(["git", "status"], dry_run=False)
-            mock_run.assert_called_once()
+            mock_run.assert_called_once_with(["git", "status"], cwd=None, dry_run=False)
 
 
 class TestChecksSuccessAndPrint:
@@ -222,23 +219,28 @@ class TestTryPushHeadBranch:
 
     def test_dry_run_does_not_push(self):
         """In dry-run mode, no push happens."""
-        with patch("hephaestus.github.pr_merge.run_git_cmd") as mock_cmd:
+        with patch("hephaestus.github.pr_merge.git_push") as mock_push:
             try_push_head_branch("feature", dry_run=True)
-            mock_cmd.assert_not_called()
+            mock_push.assert_not_called()
 
     @patch("hephaestus.github.pr_merge.local_branch_exists", return_value=True)
     def test_pushes_when_branch_exists(self, mock_exists):
         """Pushes branch when it exists locally."""
-        with patch("hephaestus.github.pr_merge.run_git_cmd") as mock_cmd:
+        with patch("hephaestus.github.pr_merge.git_push") as mock_push:
             try_push_head_branch("feature", dry_run=False)
-            mock_cmd.assert_called_once()
+            mock_push.assert_called_once_with(
+                Path.cwd(),
+                "origin",
+                "feature:feature",
+                retries=2,
+            )
 
     @patch("hephaestus.github.pr_merge.local_branch_exists", return_value=False)
     def test_skips_push_when_branch_missing(self, mock_exists):
         """Does not push when local branch doesn't exist."""
-        with patch("hephaestus.github.pr_merge.run_git_cmd") as mock_cmd:
+        with patch("hephaestus.github.pr_merge.git_push") as mock_push:
             try_push_head_branch("feature", dry_run=False)
-            mock_cmd.assert_not_called()
+            mock_push.assert_not_called()
 
 
 if __name__ == "__main__":

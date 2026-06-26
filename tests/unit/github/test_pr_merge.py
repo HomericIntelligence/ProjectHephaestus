@@ -3,6 +3,7 @@
 
 import json
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from hephaestus.github.pr_merge import (
@@ -14,7 +15,6 @@ from hephaestus.github.pr_merge import (
     run_git_cmd,
     try_push_head_branch,
 )
-from hephaestus.utils.helpers import METADATA_TIMEOUT
 
 
 def _gh_result(payload: object) -> MagicMock:
@@ -29,42 +29,38 @@ def _gh_result(payload: object) -> MagicMock:
 class TestDetectRepoFromRemote:
     """Tests for detect_repo_from_remote."""
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
-    def test_detects_ssh_url(self, mock_run) -> None:
+    @patch("hephaestus.github.pr_merge.git_remote_url")
+    def test_detects_ssh_url(self, mock_remote_url) -> None:
         """Parses SSH-style github.com:owner/repo.git."""
-        mock_run.return_value = MagicMock(
-            stdout="git@github.com:HomericIntelligence/ProjectHephaestus.git"
-        )
+        mock_remote_url.return_value = "git@github.com:HomericIntelligence/ProjectHephaestus.git"
         result = detect_repo_from_remote()
         assert result == "HomericIntelligence/ProjectHephaestus"
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
-    def test_detects_https_url(self, mock_run) -> None:
+    @patch("hephaestus.github.pr_merge.git_remote_url")
+    def test_detects_https_url(self, mock_remote_url) -> None:
         """Parses HTTPS github.com/owner/repo.git."""
-        mock_run.return_value = MagicMock(
-            stdout="https://github.com/HomericIntelligence/ProjectScylla.git"
-        )
+        mock_remote_url.return_value = "https://github.com/HomericIntelligence/ProjectScylla.git"
         result = detect_repo_from_remote()
         assert result == "HomericIntelligence/ProjectScylla"
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
-    def test_detects_url_without_git_suffix(self, mock_run) -> None:
+    @patch("hephaestus.github.pr_merge.git_remote_url")
+    def test_detects_url_without_git_suffix(self, mock_remote_url) -> None:
         """Parses URL without .git suffix."""
-        mock_run.return_value = MagicMock(stdout="https://github.com/owner/repo")
+        mock_remote_url.return_value = "https://github.com/owner/repo"
         result = detect_repo_from_remote()
         assert result == "owner/repo"
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
-    def test_returns_none_for_non_github_url(self, mock_run) -> None:
+    @patch("hephaestus.github.pr_merge.git_remote_url")
+    def test_returns_none_for_non_github_url(self, mock_remote_url) -> None:
         """Returns None when URL is not a GitHub URL."""
-        mock_run.return_value = MagicMock(stdout="https://gitlab.com/owner/repo.git")
+        mock_remote_url.return_value = "https://gitlab.com/owner/repo.git"
         result = detect_repo_from_remote()
         assert result is None
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
-    def test_returns_none_on_exception(self, mock_run) -> None:
-        """Returns None when run_subprocess raises."""
-        mock_run.side_effect = RuntimeError("git not found")
+    @patch("hephaestus.github.pr_merge.git_remote_url")
+    def test_returns_none_on_exception(self, mock_remote_url) -> None:
+        """Returns None when git remote lookup raises."""
+        mock_remote_url.side_effect = RuntimeError("git not found")
         result = detect_repo_from_remote()
         assert result is None
 
@@ -72,33 +68,33 @@ class TestDetectRepoFromRemote:
 class TestRunGitCmd:
     """Tests for run_git_cmd."""
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
-    def test_calls_run_subprocess(self, mock_run) -> None:
-        """Passes command to run_subprocess."""
+    @patch("hephaestus.github.pr_merge.run_git")
+    def test_calls_run_git(self, mock_run) -> None:
+        """Passes command to shared git wrapper."""
         run_git_cmd(["git", "status"])
         mock_run.assert_called_once_with(["git", "status"], cwd=None, dry_run=False)
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
+    @patch("hephaestus.github.pr_merge.run_git")
     def test_dry_run_passed_through(self, mock_run) -> None:
-        """dry_run flag is forwarded to run_subprocess."""
+        """dry_run flag is forwarded to run_git."""
         run_git_cmd(["git", "push"], dry_run=True)
         mock_run.assert_called_once_with(["git", "push"], cwd=None, dry_run=True)
 
-    @patch("hephaestus.github.pr_merge.run_subprocess")
+    @patch("hephaestus.github.pr_merge.run_git")
     def test_cwd_passed_through(self, mock_run) -> None:
-        """Cwd is forwarded to run_subprocess."""
+        """Cwd is forwarded to run_git as a Path."""
         run_git_cmd(["git", "log"], cwd="/some/path")
-        mock_run.assert_called_once_with(["git", "log"], cwd="/some/path", dry_run=False)
+        mock_run.assert_called_once_with(["git", "log"], cwd=Path("/some/path"), dry_run=False)
 
     @patch("hephaestus.github.pr_merge.logger")
-    @patch("hephaestus.github.pr_merge.run_subprocess")
+    @patch("hephaestus.github.pr_merge.run_git")
     def test_log_includes_cwd_when_provided(self, _mock_run, mock_logger) -> None:
         """Log line includes (cwd=...) when cwd is passed."""
         run_git_cmd(["git", "log"], cwd="/some/path")
         mock_logger.info.assert_called_once_with("$ %s (cwd=%s)", "git log", "/some/path")
 
     @patch("hephaestus.github.pr_merge.logger")
-    @patch("hephaestus.github.pr_merge.run_subprocess")
+    @patch("hephaestus.github.pr_merge.run_git")
     def test_log_omits_cwd_when_not_provided(self, _mock_run, mock_logger) -> None:
         """Log line omits cwd suffix when cwd is None (no noise added to existing traces)."""
         run_git_cmd(["git", "status"])
@@ -240,58 +236,55 @@ class TestLegacyStatusAndPrint:
 class TestLocalBranchExists:
     """Tests for local_branch_exists."""
 
-    @patch("hephaestus.github.pr_merge.subprocess.check_output")
-    def test_returns_true_when_branch_exists(self, mock_check) -> None:
-        """Returns True when git branch --list output is non-empty."""
-        mock_check.return_value = b"  my-feature\n"
+    @patch("hephaestus.github.pr_merge.git_branch_exists")
+    def test_returns_true_when_branch_exists(self, mock_branch_exists) -> None:
+        """Returns True when shared branch helper sees the branch."""
+        mock_branch_exists.return_value = True
         assert local_branch_exists("my-feature") is True
+        mock_branch_exists.assert_called_once_with("my-feature")
 
-    @patch("hephaestus.github.pr_merge.subprocess.check_output")
-    def test_returns_false_when_branch_absent(self, mock_check) -> None:
-        """Returns False when git branch --list output is empty."""
-        mock_check.return_value = b""
+    @patch("hephaestus.github.pr_merge.git_branch_exists")
+    def test_returns_false_when_branch_absent(self, mock_branch_exists) -> None:
+        """Returns False when the shared branch helper does."""
+        mock_branch_exists.return_value = False
         assert local_branch_exists("nonexistent") is False
 
-    @patch("hephaestus.github.pr_merge.subprocess.check_output")
-    def test_returns_false_on_subprocess_error(self, mock_check) -> None:
-        """Returns False when subprocess raises CalledProcessError."""
-        mock_check.side_effect = subprocess.CalledProcessError(1, "git")
+    @patch("hephaestus.github.pr_merge.git_branch_exists")
+    def test_returns_false_on_subprocess_error(self, mock_branch_exists) -> None:
+        """Returns False when the shared branch helper handles subprocess errors."""
+        mock_branch_exists.return_value = False
         assert local_branch_exists("branch") is False
 
-    @patch("hephaestus.github.pr_merge.subprocess.check_output")
-    def test_passes_timeout(self, mock_check) -> None:
-        """The git branch lookup is bounded by METADATA_TIMEOUT (#684)."""
-        mock_check.return_value = b"  my-feature\n"
-        local_branch_exists("my-feature")
-        assert mock_check.call_args.kwargs["timeout"] == METADATA_TIMEOUT
-
-    @patch("hephaestus.github.pr_merge.subprocess.check_output")
-    def test_returns_false_on_timeout(self, mock_check) -> None:
+    @patch("hephaestus.github.pr_merge.git_branch_exists")
+    def test_returns_false_on_timeout(self, mock_branch_exists) -> None:
         """A hung ``git branch --list`` degrades to False instead of hanging (#684)."""
-        mock_check.side_effect = subprocess.TimeoutExpired(cmd="git", timeout=10)
+        mock_branch_exists.return_value = False
         assert local_branch_exists("branch") is False
 
 
 class TestTryPushHeadBranch:
     """Tests for try_push_head_branch."""
 
-    @patch("hephaestus.github.pr_merge.run_git_cmd")
+    @patch("hephaestus.github.pr_merge.git_push")
     @patch("hephaestus.github.pr_merge.local_branch_exists", return_value=True)
     def test_pushes_when_branch_exists(self, mock_exists, mock_run) -> None:
         """Pushes the branch when it exists locally."""
         try_push_head_branch("feature-branch", dry_run=False)
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert "feature-branch:feature-branch" in cmd
+        mock_run.assert_called_once_with(
+            Path.cwd(),
+            "origin",
+            "feature-branch:feature-branch",
+            retries=2,
+        )
 
-    @patch("hephaestus.github.pr_merge.run_git_cmd")
+    @patch("hephaestus.github.pr_merge.git_push")
     @patch("hephaestus.github.pr_merge.local_branch_exists", return_value=False)
     def test_skips_push_when_branch_absent(self, mock_exists, mock_run) -> None:
         """Does not push when branch is not found locally."""
         try_push_head_branch("feature-branch", dry_run=False)
         mock_run.assert_not_called()
 
-    @patch("hephaestus.github.pr_merge.run_git_cmd")
+    @patch("hephaestus.github.pr_merge.git_push")
     @patch("hephaestus.github.pr_merge.local_branch_exists")
     def test_dry_run_skips_local_check_and_push(self, mock_exists, mock_run) -> None:
         """In dry-run mode, skips local branch check and push entirely."""

@@ -196,18 +196,9 @@ class TestGetResignEmail:
         monkeypatch.setenv("FLEET_SKIP_EMAIL_KEY_CHECK", "1")
         monkeypatch.setenv("FLEET_GIT_EMAIL", "")
 
-        # Stub subprocess.run so the test does not depend on the operator's
-        # actual git config.
-        class _Result:
-            def __init__(self) -> None:
-                self.returncode = 0
-                self.stdout = "bob@example.com\n"
-
-        # Target the attribute by dotted path so strict mypy (implicit_reexport=False)
-        # doesn't complain about fleet_sync not re-exporting `subprocess`.
         monkeypatch.setattr(
-            "hephaestus.github.fleet_sync.subprocess.run",
-            lambda *a, **k: _Result(),
+            "hephaestus.github.fleet_sync.git_config_get",
+            lambda _key, **_kwargs: "bob@example.com",
         )
         assert fleet_sync.get_resign_email() == "bob@example.com"
 
@@ -219,13 +210,9 @@ class TestGetResignEmail:
 
         monkeypatch.delenv("FLEET_GIT_EMAIL", raising=False)
 
-        class _EmptyResult:
-            returncode = 1
-            stdout = ""
-
         monkeypatch.setattr(
-            "hephaestus.github.fleet_sync.subprocess.run",
-            lambda *a, **k: _EmptyResult(),
+            "hephaestus.github.fleet_sync.git_config_get",
+            lambda _key, **_kwargs: None,
         )
         with pytest.raises(RuntimeError, match="no resign email configured"):
             fleet_sync.get_resign_email()
@@ -252,12 +239,9 @@ class TestResignEmailKeyGuard:
     def _stub_signing_key(self, monkeypatch, *, signingkey: str, uids: list[str]) -> None:
         """Stub git+gpg so the signing key reports ``uids`` as its UID emails."""
 
-        def fake_run(cmd, *args, **kwargs):
+        def fake_gpg_run(cmd, *args, **kwargs):
             result = MagicMock()
-            if cmd[:3] == ["git", "config", "--get"] and cmd[3] == "user.signingkey":
-                result.returncode = 0 if signingkey else 1
-                result.stdout = f"{signingkey}\n" if signingkey else ""
-            elif cmd[:2] == ["gpg", "--list-keys"]:
+            if cmd[:2] == ["gpg", "--list-keys"]:
                 result.returncode = 0
                 result.stdout = "".join(
                     f"uid:-::::1700000000::HASH::Name <{e}>::::::::::0:\n" for e in uids
@@ -267,7 +251,11 @@ class TestResignEmailKeyGuard:
                 result.stdout = ""
             return result
 
-        monkeypatch.setattr("hephaestus.github.fleet_sync.subprocess.run", fake_run)
+        monkeypatch.setattr(
+            "hephaestus.github.fleet_sync.git_config_get",
+            lambda _key, **_kwargs: signingkey or None,
+        )
+        monkeypatch.setattr("hephaestus.github.fleet_sync.subprocess.run", fake_gpg_run)
 
     def test_email_on_key_is_accepted(self, monkeypatch) -> None:
         """Resolution succeeds when the email is a UID on the signing key."""
@@ -312,6 +300,11 @@ class TestResignEmailKeyGuard:
 
         monkeypatch.delenv("FLEET_SKIP_EMAIL_KEY_CHECK", raising=False)
         monkeypatch.setenv("FLEET_GIT_EMAIL", "anything@example.com")
+
+        monkeypatch.setattr(
+            "hephaestus.github.fleet_sync.git_config_get",
+            lambda _key, **_kwargs: "ABC123",
+        )
 
         def fake_run(cmd, *args, **kwargs):
             if cmd[:2] == ["gpg", "--list-keys"]:
@@ -431,17 +424,14 @@ class TestTimeoutHandling:
 
         call_count = [0]
 
-        def failing_run(*args, **kwargs):
+        def failing_config_get(*args, **kwargs):
             call_count[0] += 1
             # First call times out, second returns a result
             if call_count[0] == 1:
                 raise subprocess.TimeoutExpired(["git"], 10)
-            result = MagicMock()
-            result.returncode = 0
-            result.stdout = "alice@example.com\n"
-            return result
+            return "alice@example.com"
 
-        monkeypatch.setattr("hephaestus.github.fleet_sync.subprocess.run", failing_run)
+        monkeypatch.setattr("hephaestus.github.fleet_sync.git_config_get", failing_config_get)
         # Should get email from second attempt (after timeout)
         assert get_resign_email() == "alice@example.com"
 
@@ -451,11 +441,11 @@ class TestTimeoutHandling:
         # Isolate resolution from the #1025 GPG-key-match guard.
         monkeypatch.setenv("FLEET_SKIP_EMAIL_KEY_CHECK", "1")
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="test@example.com\n")
+        with patch("hephaestus.github.fleet_sync.git_config_get") as mock_config_get:
+            mock_config_get.return_value = "test@example.com"
             get_resign_email()
-            assert mock_run.called
-            call_kwargs = mock_run.call_args[1]
+            assert mock_config_get.called
+            call_kwargs = mock_config_get.call_args.kwargs
             assert "timeout" in call_kwargs
             assert call_kwargs["timeout"] == fleet_sync_module.METADATA_TIMEOUT
 
@@ -471,14 +461,15 @@ class TestTimeoutHandling:
 
     def test_git_uses_network_timeout(self) -> None:
         """_git function uses NETWORK_TIMEOUT."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout="")
+        with patch.object(fleet_sync_module, "run_git") as mock_run_git:
+            mock_run_git.return_value = MagicMock(stdout="")
             work_dir = Path("/tmp/test")
             fleet_sync_module._git(["clone", "url", "."], cwd=work_dir)
-            assert mock_run.called
-            call_kwargs = mock_run.call_args[1]
+            assert mock_run_git.called
+            call_kwargs = mock_run_git.call_args.kwargs
             assert "timeout" in call_kwargs
             assert call_kwargs["timeout"] == fleet_sync_module.NETWORK_TIMEOUT
+            assert call_kwargs["retries"] == 2
 
 
 def _pr(number: int, status: PRStatus, head: str = "feat") -> PRInfo:

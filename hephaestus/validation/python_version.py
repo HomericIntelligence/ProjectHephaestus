@@ -20,7 +20,7 @@ from pathlib import Path
 
 from hephaestus.cli.utils import add_json_arg, add_version_arg, format_output
 from hephaestus.io.toml import import_tomllib
-from hephaestus.utils.helpers import get_repo_root
+from hephaestus.utils.helpers import resolve_repo_root
 
 tomllib = import_tomllib()
 
@@ -511,7 +511,7 @@ def main() -> int:
     add_version_arg(parser)
 
     args = parser.parse_args()
-    repo_root = args.repo_root or get_repo_root()
+    repo_root = resolve_repo_root(args.repo_root)
 
     consistent, versions = check_python_version_consistency(
         repo_root,

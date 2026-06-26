@@ -14,7 +14,14 @@ from hephaestus.github.pr_merge import (
     run_git_cmd,
     try_push_head_branch,
 )
-from hephaestus.utils.helpers import METADATA_TIMEOUT
+
+
+def test_pr_merge_uses_canonical_run_subprocess() -> None:
+    """pr_merge uses the shared subprocess helper, not a local duplicate."""
+    import hephaestus.github.pr_merge as pr_merge
+    from hephaestus.utils.helpers import run_subprocess
+
+    assert pr_merge.run_subprocess is run_subprocess
 
 
 def _gh_result(payload: object) -> MagicMock:
@@ -240,36 +247,17 @@ class TestLegacyStatusAndPrint:
 class TestLocalBranchExists:
     """Tests for local_branch_exists."""
 
-    @patch("hephaestus.github.pr_merge.subprocess.check_output")
-    def test_returns_true_when_branch_exists(self, mock_check) -> None:
-        """Returns True when git branch --list output is non-empty."""
-        mock_check.return_value = b"  my-feature\n"
+    @patch("hephaestus.github.pr_merge._shared_local_branch_exists", return_value=True)
+    def test_delegates_true(self, mock_exists) -> None:
+        """Delegates branch checks to the shared git utility helper."""
         assert local_branch_exists("my-feature") is True
+        mock_exists.assert_called_once_with("my-feature")
 
-    @patch("hephaestus.github.pr_merge.subprocess.check_output")
-    def test_returns_false_when_branch_absent(self, mock_check) -> None:
-        """Returns False when git branch --list output is empty."""
-        mock_check.return_value = b""
+    @patch("hephaestus.github.pr_merge._shared_local_branch_exists", return_value=False)
+    def test_delegates_false(self, mock_exists) -> None:
+        """Preserves False results from the shared git utility helper."""
         assert local_branch_exists("nonexistent") is False
-
-    @patch("hephaestus.github.pr_merge.subprocess.check_output")
-    def test_returns_false_on_subprocess_error(self, mock_check) -> None:
-        """Returns False when subprocess raises CalledProcessError."""
-        mock_check.side_effect = subprocess.CalledProcessError(1, "git")
-        assert local_branch_exists("branch") is False
-
-    @patch("hephaestus.github.pr_merge.subprocess.check_output")
-    def test_passes_timeout(self, mock_check) -> None:
-        """The git branch lookup is bounded by METADATA_TIMEOUT (#684)."""
-        mock_check.return_value = b"  my-feature\n"
-        local_branch_exists("my-feature")
-        assert mock_check.call_args.kwargs["timeout"] == METADATA_TIMEOUT
-
-    @patch("hephaestus.github.pr_merge.subprocess.check_output")
-    def test_returns_false_on_timeout(self, mock_check) -> None:
-        """A hung ``git branch --list`` degrades to False instead of hanging (#684)."""
-        mock_check.side_effect = subprocess.TimeoutExpired(cmd="git", timeout=10)
-        assert local_branch_exists("branch") is False
+        mock_exists.assert_called_once_with("nonexistent")
 
 
 class TestTryPushHeadBranch:

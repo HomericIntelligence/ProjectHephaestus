@@ -32,7 +32,10 @@ from hephaestus.cli.utils import (
 )
 from hephaestus.github.client import gh_call
 from hephaestus.logging.utils import get_logger
-from hephaestus.utils.helpers import METADATA_TIMEOUT, run_subprocess
+from hephaestus.utils.helpers import (
+    local_branch_exists as _shared_local_branch_exists,
+    run_subprocess,
+)
 
 logger = get_logger(__name__)
 
@@ -149,15 +152,7 @@ def local_branch_exists(branch_name: str) -> bool:
         True if branch exists locally
 
     """
-    try:
-        out = subprocess.check_output(
-            ["git", "branch", "--list", branch_name],
-            stderr=subprocess.DEVNULL,
-            timeout=METADATA_TIMEOUT,
-        )
-        return bool(out.strip())
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return False
+    return _shared_local_branch_exists(branch_name)
 
 
 def try_push_head_branch(head_branch: str, dry_run: bool) -> None:

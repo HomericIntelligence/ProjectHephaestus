@@ -32,7 +32,7 @@ from pathlib import Path
 
 from hephaestus.cli.utils import add_json_arg, add_version_arg, emit_json_status, format_output
 from hephaestus.io.toml import import_tomllib
-from hephaestus.utils.helpers import get_repo_root
+from hephaestus.utils.helpers import resolve_repo_root
 from hephaestus.version.manager import VersionManager, parse_version
 from hephaestus.version.parsing import parse_version_tuple
 
@@ -522,7 +522,7 @@ def check_version_consistency_main() -> int:
     add_json_arg(parser)
     add_version_arg(parser)
     args = parser.parse_args()
-    root = args.repo_root or get_repo_root()
+    root = resolve_repo_root(args.repo_root)
     if args.json:
         canonical = _version_from_git_tag(root) or _version_from_metadata()
         pixi_version = _get_pixi_version(root)
@@ -577,7 +577,7 @@ def check_package_versions_main() -> int:
     add_json_arg(parser)
     add_version_arg(parser)
     args = parser.parse_args()
-    root = args.repo_root or get_repo_root()
+    root = resolve_repo_root(args.repo_root)
     init_path: Path | None = args.package_init
     if init_path is not None and not init_path.is_absolute():
         init_path = root / init_path
@@ -642,7 +642,7 @@ def bump_version_main() -> int:
     add_json_arg(parser)
     add_version_arg(parser)
     args = parser.parse_args()
-    root = args.repo_root or get_repo_root()
+    root = resolve_repo_root(args.repo_root)
     if args.json:
         exit_code = bump_version(root, part=args.part, dry_run=args.dry_run, verbose=False)
         emit_json_status(

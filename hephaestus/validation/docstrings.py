@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from hephaestus.cli.utils import add_json_arg, add_version_arg
-from hephaestus.utils.helpers import get_repo_root
+from hephaestus.utils.helpers import resolve_repo_root
 
 _CONTINUATION_STARTERS = frozenset(
     {
@@ -307,7 +307,7 @@ def main() -> int:
     add_version_arg(parser)
 
     args = parser.parse_args()
-    repo_root = args.repo_root or get_repo_root()
+    repo_root = resolve_repo_root(args.repo_root)
     directory = args.directory or repo_root
 
     findings = scan_directory(directory, repo_root)

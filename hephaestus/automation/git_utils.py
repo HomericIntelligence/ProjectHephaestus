@@ -17,7 +17,11 @@ from pathlib import Path
 # import path for the automation package and its tests. The ``X as X`` form
 # marks it an explicit re-export so mypy does not flag ``attr-defined`` at the
 # 13 import sites under --no-implicit-reexport.
-from hephaestus.utils.helpers import get_repo_root as get_repo_root, run_subprocess
+from hephaestus.utils.helpers import (
+    get_repo_root as get_repo_root,
+    local_branch_exists as _shared_local_branch_exists,
+    run_subprocess,
+)
 from hephaestus.utils.retry import retry_with_backoff
 
 logger = logging.getLogger(__name__)
@@ -271,6 +275,20 @@ def get_current_branch(repo_root: Path | None = None) -> str:
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Failed to get current branch: {e}") from e
+
+
+def local_branch_exists(branch_name: str, repo_root: Path | None = None) -> bool:
+    """Return True if ``branch_name`` exists in the local repository.
+
+    Args:
+        branch_name: Local branch name to look up.
+        repo_root: Repository root (defaults to auto-detect).
+
+    Returns:
+        True when ``git branch --list`` finds a matching local branch.
+
+    """
+    return _shared_local_branch_exists(branch_name, repo_root=repo_root)
 
 
 # When the remote branch has advanced (someone else — or a parallel ci_driver

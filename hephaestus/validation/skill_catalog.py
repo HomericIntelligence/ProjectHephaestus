@@ -32,7 +32,7 @@ from pathlib import Path
 from hephaestus.agents.frontmatter import check_agent_file, extract_frontmatter_parsed
 from hephaestus.cli.utils import add_json_arg, add_version_arg, emit_json_status
 from hephaestus.discovery.skills import discover_skills
-from hephaestus.utils.helpers import get_repo_root
+from hephaestus.utils.helpers import resolve_repo_root
 
 # Matches a markdown table row of the form ``| cell | cell | ... |``. We pull
 # out the leftmost non-empty cell as the skill name. Table header and the
@@ -242,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     add_version_arg(parser)
     args = parser.parse_args(argv)
 
-    repo_root: Path = args.repo_root or get_repo_root()
+    repo_root: Path = resolve_repo_root(args.repo_root)
     table_path: Path = args.table or (repo_root / "docs" / "plugin-installation.md")
     skills_dir: Path = args.skills_dir or (repo_root / "skills")
 

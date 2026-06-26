@@ -7,6 +7,8 @@ from .helpers import (
     get_repo_root,
     human_readable_size,
     install_package,
+    local_branch_exists,
+    resolve_repo_root,
     run_subprocess,
     slugify,
 )
@@ -34,6 +36,8 @@ __all__ = [
     "install_package",
     "install_signal_handlers",
     "is_network_error",
+    "local_branch_exists",
+    "resolve_repo_root",
     "restore_terminal",
     "retry_on_network_error",
     "retry_with_backoff",

@@ -37,7 +37,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from hephaestus.cli.utils import add_json_arg, add_version_arg
-from hephaestus.utils.helpers import get_repo_root
+from hephaestus.utils.helpers import resolve_repo_root
 
 # ---------------------------------------------------------------------------
 # Canonical mapping (source of truth)
@@ -361,7 +361,7 @@ def main() -> int:
 
     # Resolve repository root.
     try:
-        repo_root = args.repo_root if args.repo_root is not None else get_repo_root()
+        repo_root = resolve_repo_root(args.repo_root)
     except Exception as exc:
         print(f"ERROR: Could not determine repository root: {exc}", file=sys.stderr)
         return 2

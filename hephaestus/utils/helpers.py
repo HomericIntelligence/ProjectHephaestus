@@ -127,6 +127,27 @@ def get_repo_root(start_path: str | Path | None = None) -> Path:
     return start_path
 
 
+def resolve_repo_root(repo_root: str | Path | None = None) -> Path:
+    """Return an explicit repository root or the canonical auto-detected root.
+
+    CLI entry points commonly accept ``--repo-root`` with ``default=None``.
+    Centralizing that fallback keeps callers from repeating ad hoc
+    explicit-root-or-auto-detect expressions while preserving existing behavior:
+    explicit values are used as provided, and only missing values trigger
+    auto-detection.
+
+    Args:
+        repo_root: Explicit repository root, or ``None`` to auto-detect.
+
+    Returns:
+        Path to the explicit or auto-detected repository root.
+
+    """
+    if repo_root is not None:
+        return Path(repo_root)
+    return get_repo_root()
+
+
 _LOG_ARG_MAX = 200
 
 
@@ -214,6 +235,32 @@ def run_subprocess(
             stderr = e.stderr or ""
             logger.error("stderr: %s", stderr[:_LOG_ARG_MAX])
         raise
+
+
+def local_branch_exists(branch_name: str, repo_root: str | Path | None = None) -> bool:
+    """Return True if ``branch_name`` exists in the local repository.
+
+    Args:
+        branch_name: Local branch name to look up.
+        repo_root: Repository root (defaults to auto-detect).
+
+    Returns:
+        True when ``git branch --list`` finds a matching local branch.
+
+    """
+    root = resolve_repo_root(repo_root)
+    try:
+        result = run_subprocess(
+            ["git", "branch", "--list", branch_name],
+            cwd=str(root),
+            timeout=METADATA_TIMEOUT,
+            check=False,
+            log_on_error=False,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+
+    return result.returncode == 0 and bool((result.stdout or "").strip())
 
 
 def get_proj_root(proj_name: str) -> str:

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from hephaestus.cli.utils import add_json_arg, add_version_arg, emit_json_status, format_output
+from hephaestus.utils.helpers import resolve_repo_root
 
 _yaml: Any | None = None
 try:
@@ -320,12 +321,7 @@ def check_workflow_inventory_main() -> int:
     add_version_arg(parser)
     args = parser.parse_args()
 
-    if args.repo_root is not None:
-        repo_root = args.repo_root
-    else:
-        from hephaestus.utils.helpers import get_repo_root
-
-        repo_root = get_repo_root()
+    repo_root = resolve_repo_root(args.repo_root)
 
     undocumented, missing_files = check_inventory(repo_root)
 
@@ -386,9 +382,7 @@ def validate_workflow_checkout_main() -> int:
 
     target_paths: list[str] = args.paths
     if not target_paths:
-        from hephaestus.utils.helpers import get_repo_root
-
-        repo_root = get_repo_root()
+        repo_root = resolve_repo_root()
         target_paths = [str(repo_root / ".github" / "workflows")]
 
     workflow_files = collect_workflow_files(target_paths)

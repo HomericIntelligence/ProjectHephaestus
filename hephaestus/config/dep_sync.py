@@ -40,7 +40,7 @@ from typing import NamedTuple
 
 from hephaestus.cli.utils import add_json_arg, add_version_arg, emit_json_status, format_output
 from hephaestus.config.pixi import is_deps_section
-from hephaestus.utils.helpers import METADATA_TIMEOUT
+from hephaestus.utils.helpers import METADATA_TIMEOUT, resolve_repo_root
 from hephaestus.version.parsing import parse_version_tuple
 
 # Header written at the top of every auto-generated requirements file.
@@ -257,10 +257,7 @@ def check_dep_sync(repo_root: Path | None = None) -> list[str]:
         List of error messages (empty = all checks passed).
 
     """
-    if repo_root is None:
-        from hephaestus.utils.helpers import get_repo_root
-
-        repo_root = get_repo_root()
+    repo_root = resolve_repo_root(repo_root)
 
     errors: list[str] = []
     pixi_path = repo_root / "pixi.toml"
@@ -534,12 +531,7 @@ def sync_requirements_main() -> int:
 
     args = parser.parse_args()
 
-    if args.repo_root is not None:
-        repo_root: Path = args.repo_root
-    else:
-        from hephaestus.utils.helpers import get_repo_root
-
-        repo_root = get_repo_root()
+    repo_root = resolve_repo_root(args.repo_root)
 
     resolved = get_pixi_packages()
 

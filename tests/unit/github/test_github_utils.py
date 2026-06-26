@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Tests for GitHub utilities."""
 
-from subprocess import CalledProcessError
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -67,33 +66,33 @@ class TestDetectRepoFromRemote:
 class TestLocalBranchExists:
     """Tests for local_branch_exists."""
 
-    @patch("subprocess.check_output")
-    def test_branch_exists(self, mock_check_output):
-        """Returns True when branch exists."""
-        mock_check_output.return_value = b"  feature-branch\n"
+    @patch("hephaestus.github.pr_merge._shared_local_branch_exists", return_value=True)
+    def test_branch_exists(self, mock_exists):
+        """Returns True when the shared branch helper finds the branch."""
         result = local_branch_exists("feature-branch")
         assert result is True
+        mock_exists.assert_called_once_with("feature-branch")
 
-    @patch("subprocess.check_output")
-    def test_branch_not_exists(self, mock_check_output):
-        """Returns False when branch doesn't exist (empty output)."""
-        mock_check_output.return_value = b""
+    @patch("hephaestus.github.pr_merge._shared_local_branch_exists", return_value=False)
+    def test_branch_not_exists(self, mock_exists):
+        """Returns False when the shared branch helper misses the branch."""
         result = local_branch_exists("non-existent-branch")
         assert result is False
+        mock_exists.assert_called_once_with("non-existent-branch")
 
-    @patch("subprocess.check_output")
-    def test_branch_check_error_returns_false(self, mock_check_output):
-        """Returns False on CalledProcessError."""
-        mock_check_output.side_effect = CalledProcessError(1, ["git", "branch"])
+    @patch("hephaestus.github.pr_merge._shared_local_branch_exists", return_value=False)
+    def test_branch_check_error_returns_false(self, mock_exists):
+        """Preserves False from the shared branch helper."""
         result = local_branch_exists("any-branch")
         assert result is False
+        mock_exists.assert_called_once_with("any-branch")
 
-    @patch("subprocess.check_output")
-    def test_branch_with_whitespace_output(self, mock_check_output):
-        """Branch name with whitespace in output still returns True."""
-        mock_check_output.return_value = b"  main  \n"
+    @patch("hephaestus.github.pr_merge._shared_local_branch_exists", return_value=True)
+    def test_branch_with_whitespace_output(self, mock_exists):
+        """Preserves True from the shared branch helper."""
         result = local_branch_exists("main")
         assert result is True
+        mock_exists.assert_called_once_with("main")
 
 
 class TestRunGitCmd:

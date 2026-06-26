@@ -8,12 +8,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from hephaestus.utils.helpers import (
+    METADATA_TIMEOUT,
     _format_cmd_for_log,
     flatten_dict,
     get_proj_root,
     get_repo_root,
     human_readable_size,
     install_package,
+    local_branch_exists,
+    resolve_repo_root,
     run_subprocess,
     slugify,
 )
@@ -202,6 +205,27 @@ class TestGetRepoRoot:
         assert get_repo_root(seed) == inner.resolve()
 
 
+class TestResolveRepoRoot:
+    """Tests for resolve_repo_root."""
+
+    def test_returns_explicit_path_without_autodetect(self, tmp_path):
+        """Explicit roots are returned without invoking auto-detection."""
+        explicit = tmp_path / "repo"
+        with patch("hephaestus.utils.helpers.get_repo_root") as mock_get:
+            assert resolve_repo_root(explicit) == explicit
+        mock_get.assert_not_called()
+
+    def test_accepts_string_path(self, tmp_path):
+        """String roots are converted to Path."""
+        assert resolve_repo_root(str(tmp_path)) == tmp_path
+
+    def test_falls_back_to_get_repo_root_when_none(self, tmp_path):
+        """Missing roots use the canonical auto-detected repo root."""
+        with patch("hephaestus.utils.helpers.get_repo_root", return_value=tmp_path) as mock_get:
+            assert resolve_repo_root(None) == tmp_path
+        mock_get.assert_called_once_with()
+
+
 class TestRunSubprocess:
     """Tests for run_subprocess."""
 
@@ -252,6 +276,39 @@ class TestRunSubprocess:
         rendered = str(mock_error.call_args_list)
         assert long_arg not in rendered, "full long arg leaked into log"
         assert "more chars" in rendered, "truncation marker missing"
+
+
+class TestLocalBranchExists:
+    """Tests for local_branch_exists."""
+
+    @patch("hephaestus.utils.helpers.run_subprocess")
+    def test_true_when_branch_list_has_output(self, mock_run, tmp_path):
+        """Returns True when git branch --list emits a matching branch."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="  feature\n")
+
+        assert local_branch_exists("feature", repo_root=tmp_path) is True
+
+        mock_run.assert_called_once_with(
+            ["git", "branch", "--list", "feature"],
+            cwd=str(tmp_path),
+            timeout=METADATA_TIMEOUT,
+            check=False,
+            log_on_error=False,
+        )
+
+    @patch("hephaestus.utils.helpers.run_subprocess")
+    def test_false_when_branch_list_is_empty(self, mock_run, tmp_path):
+        """Returns False when git branch --list has no matching output."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+        assert local_branch_exists("missing", repo_root=tmp_path) is False
+
+    @patch("hephaestus.utils.helpers.run_subprocess")
+    def test_false_on_timeout(self, mock_run, tmp_path):
+        """Returns False when the bounded git branch lookup times out."""
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="git", timeout=METADATA_TIMEOUT)
+
+        assert local_branch_exists("feature", repo_root=tmp_path) is False
 
 
 class TestFormatCmdForLog:

@@ -30,6 +30,7 @@ import sys
 from pathlib import Path
 
 from hephaestus.cli.utils import add_json_arg, add_version_arg, format_output
+from hephaestus.utils.helpers import resolve_repo_root
 
 # Scripts that are imported by other scripts (not invoked directly) — always active.
 _ALWAYS_ACTIVE: frozenset[str] = frozenset(
@@ -289,12 +290,7 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    if args.repo_root is not None:
-        repo_root: Path = args.repo_root
-    else:
-        from hephaestus.utils.helpers import get_repo_root
-
-        repo_root = get_repo_root()
+    repo_root = resolve_repo_root(args.repo_root)
 
     if args.json:
         stale = find_stale_scripts(repo_root, exclude_pattern=args.exclude)

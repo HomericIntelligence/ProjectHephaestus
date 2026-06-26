@@ -712,7 +712,7 @@ def main() -> int:
         Exit code (0 if all links valid, 1 if broken links found).
 
     """
-    from hephaestus.utils.helpers import get_repo_root
+    from hephaestus.utils.helpers import resolve_repo_root
 
     parser = argparse.ArgumentParser(
         description="Validate markdown links in documentation",
@@ -741,7 +741,7 @@ def main() -> int:
     add_version_arg(parser)
 
     args = parser.parse_args()
-    repo_root = args.repo_root or get_repo_root()
+    repo_root = resolve_repo_root(args.repo_root)
     directory = args.directory or repo_root
 
     if not directory.exists():

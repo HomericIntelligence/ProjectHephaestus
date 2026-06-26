@@ -44,7 +44,7 @@ from enum import Enum
 from pathlib import Path
 
 from hephaestus.cli.utils import add_json_arg, add_version_arg
-from hephaestus.utils.helpers import get_repo_root
+from hephaestus.utils.helpers import resolve_repo_root
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -380,7 +380,7 @@ def main() -> int:
     add_version_arg(parser)
 
     args = parser.parse_args()
-    repo_root: Path = args.repo_root or get_repo_root()
+    repo_root: Path = resolve_repo_root(args.repo_root)
     scan_root: Path = args.directory or repo_root
 
     excluded: tuple[str, ...] = EXCLUDED_PREFIXES

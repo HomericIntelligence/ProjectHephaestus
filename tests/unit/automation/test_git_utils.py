@@ -16,6 +16,7 @@ from hephaestus.automation.git_utils import (
     get_repo_info,
     get_repo_root,
     is_clean_working_tree,
+    local_branch_exists,
     push_current_branch_with_lease_on_divergence,
     rebase_worktree_onto,
     run,
@@ -204,6 +205,24 @@ class TestGetCurrentBranch:
 
         with pytest.raises(RuntimeError, match="Failed to get current branch"):
             get_current_branch()
+
+
+class TestLocalBranchExists:
+    """Tests for local_branch_exists."""
+
+    @patch("hephaestus.automation.git_utils._shared_local_branch_exists", return_value=True)
+    def test_true_when_branch_list_has_output(self, mock_run: Any, tmp_path: Path) -> None:
+        """Delegates to the shared utility helper and preserves True."""
+        assert local_branch_exists("feature", repo_root=tmp_path) is True
+
+        mock_run.assert_called_once_with("feature", repo_root=tmp_path)
+
+    @patch("hephaestus.automation.git_utils._shared_local_branch_exists", return_value=False)
+    def test_false_when_branch_list_is_empty(self, mock_run: Any, tmp_path: Path) -> None:
+        """Delegates to the shared utility helper and preserves False."""
+        assert local_branch_exists("missing", repo_root=tmp_path) is False
+
+        mock_run.assert_called_once_with("missing", repo_root=tmp_path)
 
 
 class TestIsCleanWorkingTree:

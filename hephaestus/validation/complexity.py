@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from hephaestus.cli.utils import add_json_arg, add_version_arg, format_output
-from hephaestus.utils.helpers import NETWORK_TIMEOUT, get_repo_root
+from hephaestus.utils.helpers import NETWORK_TIMEOUT, resolve_repo_root
 
 
 def run_ruff_complexity_check(
@@ -95,8 +95,7 @@ def check_max_complexity(
         True if all functions are within the threshold, False otherwise.
 
     """
-    if repo_root is None:
-        repo_root = get_repo_root()
+    repo_root = resolve_repo_root(repo_root)
 
     if verbose:
         print(f"\nChecking cyclomatic complexity (threshold={threshold}) in: {path}")
@@ -153,7 +152,7 @@ def main() -> int:
     add_version_arg(parser)
     args = parser.parse_args()
 
-    repo_root = args.repo_root or get_repo_root()
+    repo_root = resolve_repo_root(args.repo_root)
 
     if args.json:
         violations = run_ruff_complexity_check(args.path, args.threshold, repo_root)

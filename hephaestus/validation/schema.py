@@ -21,6 +21,7 @@ from typing import Any
 import yaml
 
 from hephaestus.cli.utils import add_json_arg, add_version_arg, emit_json_status
+from hephaestus.utils.helpers import resolve_repo_root
 
 SchemaMapping = list[tuple[re.Pattern[str], Path]]
 
@@ -219,9 +220,7 @@ def main() -> int:
             emit_json_status(0, message="no files to validate", error_count=0)
         return 0
 
-    from hephaestus.utils.helpers import get_repo_root as _get_repo_root
-
-    repo_root = args.repo_root or _get_repo_root()
+    repo_root = resolve_repo_root(args.repo_root)
 
     if args.schema_map is None:
         if args.json:

@@ -31,7 +31,7 @@ from typing import Any, cast
 
 from hephaestus.cli.utils import add_json_arg, add_version_arg, format_output
 from hephaestus.io.toml import import_tomllib
-from hephaestus.utils.helpers import NETWORK_TIMEOUT
+from hephaestus.utils.helpers import NETWORK_TIMEOUT, resolve_repo_root
 
 _tomllib = import_tomllib()
 
@@ -468,12 +468,7 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    if args.repo_root is not None:
-        repo_root: Path = args.repo_root
-    else:
-        from hephaestus.utils.helpers import get_repo_root
-
-        repo_root = get_repo_root()
+    repo_root = resolve_repo_root(args.repo_root)
 
     if args.json:
         expected_threshold = load_coverage_threshold(repo_root)

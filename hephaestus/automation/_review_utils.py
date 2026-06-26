@@ -251,7 +251,7 @@ def build_review_parser(
     epilog: str | None = None,
     *,
     issues_help: str,
-    dry_run_help: str,
+    dry_run_prefix: str,
 ) -> argparse.ArgumentParser:
     """Build the argparse parser shared by ``pr_reviewer`` and ``address_review``.
 
@@ -264,7 +264,8 @@ def build_review_parser(
         description: Parser description text.
         epilog: Parser epilog text (typically an Examples block).
         issues_help: Help text for the ``--issues`` argument.
-        dry_run_help: Help text for the ``--dry-run`` argument.
+        dry_run_prefix: Prefix string for the ``--dry-run`` help text, appended
+            with ``DRY_RUN_HELP_CAVEAT``.
 
     Returns:
         Configured ``argparse.ArgumentParser`` — caller invokes ``parse_args``.
@@ -275,7 +276,7 @@ def build_review_parser(
         epilog=epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_github_throttle=True,
-        dry_run_prefix=dry_run_help,
+        dry_run_prefix=dry_run_prefix,
         add_no_ui=True,
         add_version=False,
     )

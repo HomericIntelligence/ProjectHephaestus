@@ -879,7 +879,7 @@ Examples:
   %(prog)s --issues 595 596 --max-workers 5
         """,
         issues_help="Issue numbers whose linked PRs should be reviewed",
-        dry_run_help="Show what would be done without actually posting any review comments.",
+        dry_run_prefix="Show what would be done without actually posting any review comments.",
     )
     add_version_arg(parser)
     return parser

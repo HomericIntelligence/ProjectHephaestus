@@ -22,6 +22,7 @@ from hephaestus.automation import (
 )
 from hephaestus.automation._review_utils import build_automation_parser
 from hephaestus.cli.utils import DRY_RUN_HELP_CAVEAT
+from hephaestus.config.paths import DEFAULT_PROJECTS_DIR
 
 AGENT_CHOICES = ("claude", "codex", "pi")
 WORKER_CHOICES = tuple(range(1, 33))
@@ -606,7 +607,7 @@ EXPECTED_SPECS: dict[str, tuple[ActionSpec, ...]] = {
                 "Local directory containing repo clones. When omitted, resolved from the "
                 "``PROJECTS_ROOT`` env var (if set and existing), otherwise the current "
                 "checkout parent when available, then "
-                "``/mnt/weka/home/micah.villmow/Projects``."
+                f"``{DEFAULT_PROJECTS_DIR}``."
             ),
         ),
         _action_spec(

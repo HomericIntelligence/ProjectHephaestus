@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from hephaestus.automation import _reviewer_base
+from hephaestus.automation._review_utils import DEFAULT_STATE_DIR
 
 
 def _make_options(max_workers: int = 2) -> object:
@@ -36,6 +37,14 @@ def test_injection_wires_repo_root(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     r = ConcreteReviewer(_make_options(), **deps)
     assert r.repo_root == tmp_path
+
+
+def test_injection_wires_default_state_dir(tmp_path: Path) -> None:
+    """Constructor injection must create the canonical default state directory."""
+    deps = _make_deps(tmp_path)
+    r = ConcreteReviewer(_make_options(), **deps)
+    assert r.state_dir == tmp_path / DEFAULT_STATE_DIR
+    assert r.state_dir.is_dir()
 
 
 def test_injection_calls_factories(tmp_path: Path) -> None:

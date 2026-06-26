@@ -2,19 +2,74 @@
 
 import argparse
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from hephaestus.automation._review_utils import (
+    DEFAULT_STATE_DIR,
     add_max_workers_arg,
     close_issue_as_covered,
+    ensure_state_dir,
     find_merged_closing_pr,
     find_pr_for_issue,
     get_pr_head_branch,
     parse_json_block,
 )
+
+# ---------------------------------------------------------------------------
+# ensure_state_dir
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureStateDir:
+    """Tests for the shared automation state directory helper."""
+
+    def test_default_state_dir_literal(self) -> None:
+        """Default state directory path remains the existing on-disk layout."""
+        assert DEFAULT_STATE_DIR == "build/.issue_implementer"
+
+    def test_creates_default_state_dir(self, tmp_path: Path) -> None:
+        """Default helper creates and returns the repo-local state directory."""
+        state_dir = ensure_state_dir(tmp_path)
+
+        assert state_dir == tmp_path / DEFAULT_STATE_DIR
+        assert state_dir.is_dir()
+
+    def test_creates_custom_subdir(self, tmp_path: Path) -> None:
+        """A custom subdir keeps the helper reusable for alternate state roots."""
+        state_dir = ensure_state_dir(tmp_path, "custom/state")
+
+        assert state_dir == tmp_path / "custom/state"
+        assert state_dir.is_dir()
+
+
+def test_issue_implementer_state_dir_literal_is_centralized() -> None:
+    """Only the canonical helper and literal-pin test may spell issue_implementer."""
+    import ast
+
+    allowed = {
+        Path("hephaestus/automation/_review_utils.py"),
+        Path("tests/unit/automation/test_review_utils.py"),
+    }
+    hits: list[tuple[Path, int, str]] = []
+    for base in (Path("hephaestus/automation"), Path("tests/unit/automation")):
+        for path in base.rglob("*.py"):
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and "issue_implementer" in node.value
+                ):
+                    hits.append((path, node.lineno, node.value))
+
+    bad = [hit for hit in hits if hit[0] not in allowed]
+    assert not bad
+    assert {path for path, _, _ in hits} == allowed
+
 
 # ---------------------------------------------------------------------------
 # parse_json_block

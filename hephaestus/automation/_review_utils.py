@@ -4,6 +4,8 @@ Extracts utilities that were previously duplicated across
 ``pr_reviewer.py`` and ``address_review.py``.
 
 Provides:
+- ``DEFAULT_STATE_DIR`` / ``ensure_state_dir``: Canonical automation state
+  directory path and creation helper.
 - ``parse_json_block``: Extract the last ```json``` block from Claude output.
 - ``find_pr_for_issue``: Locate the open PR for a GitHub issue (two or three
   lookup strategies depending on the caller's needs).
@@ -22,6 +24,7 @@ import json
 import logging
 import re
 import threading
+from pathlib import Path
 from typing import Any
 
 from hephaestus.agents.runtime import add_agent_argument
@@ -30,6 +33,24 @@ from hephaestus.cli.utils import add_dry_run_arg, add_github_throttle_args
 from .github_api import _gh_call
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_STATE_DIR = "build/.issue_implementer"
+
+
+def ensure_state_dir(repo_root: Path, subdir: str = DEFAULT_STATE_DIR) -> Path:
+    """Return the repo-local automation state directory, creating it if needed.
+
+    Args:
+        repo_root: Repository root path.
+        subdir: Repo-relative state directory path.
+
+    Returns:
+        The created state directory path.
+
+    """
+    state_dir = repo_root / subdir
+    state_dir.mkdir(parents=True, exist_ok=True)
+    return state_dir
 
 
 def setup_review_logging(verbose: bool = False) -> None:

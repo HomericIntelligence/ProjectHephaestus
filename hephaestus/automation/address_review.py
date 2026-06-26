@@ -41,6 +41,7 @@ from ._review_utils import (
     build_review_parser,
     find_pr_for_issue,
     instance_log,
+    log_file_path,
     setup_review_logging,
 )
 from ._reviewer_base import BaseReviewer
@@ -849,7 +850,7 @@ class AddressReviewer(BaseReviewer):
             Parsed dict with "addressed" and "replies" keys
 
         """
-        log_file = self.state_dir / f"address-review-{issue_number}.log"
+        log_file = log_file_path(self.state_dir, "address-review", issue_number)
 
         if not self.options.dry_run and uses_direct_agent_runner(self.options.agent) and session_id:
             threads_json = json.dumps(
@@ -962,7 +963,9 @@ class AddressReviewer(BaseReviewer):
         if issue_number is None:
             logger.warning("Parse trace skipped (no issue_number): %s", reason)
             return
-        trace_path = self.state_dir / f"address-{issue_number}.parse-error.log"
+        trace_path = log_file_path(
+            self.state_dir, "address", issue_number, suffix="parse-error.log"
+        )
         try:
             payload = [
                 f"reason: {reason}",

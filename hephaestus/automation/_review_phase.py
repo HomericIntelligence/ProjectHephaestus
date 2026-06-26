@@ -33,6 +33,7 @@ from hephaestus.github.client import ClaudeUsageCapError, gh_call
 from hephaestus.github.rate_limit import resolve_quota_reset_epoch, wait_until
 
 from . import review_state
+from ._review_utils import log_file_path
 from ._stage_context import StageMixin
 from .address_review import run_address_fix_session
 from .claude_invoke import (
@@ -1375,7 +1376,9 @@ class ReviewPhase(StageMixin):
             _, task_review_block = self.runner._fetch_plan_and_review(issue_number)
             diff_text = self.impl._collect_diff(worktree_path, branch_name)
 
-        log_file = self.state_dir / f"address-review-{issue_number}-r{iteration}.log"
+        log_file = log_file_path(
+            self.state_dir, "address-review", issue_number, iteration=iteration
+        )
         fix_result = run_address_fix_session(
             issue_number=issue_number,
             pr_number=pr_number,
@@ -1432,7 +1435,13 @@ class ReviewPhase(StageMixin):
         matches = _parse_addressed_block(text)
         if not matches.get("addressed") and "```json" not in text:
             with contextlib.suppress(Exception):
-                trace_path = self.state_dir / f"address-{issue_number}-r{iteration}.parse-error.log"
+                trace_path = log_file_path(
+                    self.state_dir,
+                    "address",
+                    issue_number,
+                    iteration=iteration,
+                    suffix="parse-error.log",
+                )
                 trace_path.write_text(
                     f"reason: no fenced ```json block found in response\n\n"
                     f"=== full response ===\n{text}"
@@ -1539,9 +1548,11 @@ class ReviewPhase(StageMixin):
                     timeout=implementer_claude_timeout(),
                     model=direct_agent_model(self.options.agent, "HEPH_IMPLEMENTER_MODEL"),
                 )
-                log_file = (
-                    self.state_dir
-                    / f"{self.options.agent}-feedback-{issue_number}-r{prev_iteration + 1}.log"
+                log_file = log_file_path(
+                    self.state_dir,
+                    f"{self.options.agent}-feedback",
+                    issue_number,
+                    iteration=prev_iteration + 1,
                 )
                 log_file.write_text(result.stdout or "")
                 return True
@@ -1758,7 +1769,7 @@ class ReviewPhase(StageMixin):
     def _save_review_log(self, issue_number: int, iteration: int, review_text: str) -> None:
         """Persist a per-iteration review log for later inspection."""
         try:
-            log_file = self.state_dir / f"review-{issue_number}-r{iteration}.log"
+            log_file = log_file_path(self.state_dir, "review", issue_number, iteration=iteration)
             log_file.write_text(review_text)
         except Exception as e:
             logger.warning("#%s: failed to save review log r%s: %s", issue_number, iteration, e)

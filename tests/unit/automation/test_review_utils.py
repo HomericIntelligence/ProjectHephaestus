@@ -2,6 +2,7 @@
 
 import argparse
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -13,8 +14,30 @@ from hephaestus.automation._review_utils import (
     find_merged_closing_pr,
     find_pr_for_issue,
     get_pr_head_branch,
+    log_file_path,
     parse_json_block,
 )
+
+
+class TestLogFilePath:
+    """Tests for the standardized issue-scoped log path helper."""
+
+    def test_log_file_path_default(self, tmp_path: Path) -> None:
+        assert log_file_path(tmp_path, "learn", 42) == tmp_path / "learn-42.log"
+
+    def test_log_file_path_iteration(self, tmp_path: Path) -> None:
+        assert log_file_path(tmp_path, "review", 42, iteration=3) == (tmp_path / "review-42-r3.log")
+
+    def test_log_file_path_parse_error_suffix(self, tmp_path: Path) -> None:
+        assert log_file_path(tmp_path, "address", 42, iteration=2, suffix="parse-error.log") == (
+            tmp_path / "address-42-r2.parse-error.log"
+        )
+
+    def test_log_file_path_dynamic_prefix(self, tmp_path: Path) -> None:
+        assert log_file_path(tmp_path, "codex-feedback", 42, iteration=1) == (
+            tmp_path / "codex-feedback-42-r1.log"
+        )
+
 
 # ---------------------------------------------------------------------------
 # parse_json_block

@@ -4,6 +4,7 @@ Extracts utilities that were previously duplicated across
 ``pr_reviewer.py`` and ``address_review.py``.
 
 Provides:
+- ``log_file_path``: Build standardized issue-scoped automation log paths.
 - ``parse_json_block``: Extract the last ```json``` block from Claude output.
 - ``find_pr_for_issue``: Locate the open PR for a GitHub issue (two or three
   lookup strategies depending on the caller's needs).
@@ -22,6 +23,7 @@ import json
 import logging
 import re
 import threading
+from pathlib import Path
 from typing import Any
 
 from hephaestus.agents.runtime import add_agent_argument
@@ -30,6 +32,21 @@ from hephaestus.cli.utils import add_dry_run_arg, add_github_throttle_args
 from .github_api import _gh_call
 
 logger = logging.getLogger(__name__)
+
+
+def log_file_path(
+    state_dir: Path,
+    prefix: str,
+    issue_number: int,
+    *,
+    iteration: int | None = None,
+    suffix: str = "log",
+) -> Path:
+    """Return the standardized issue-scoped automation log path."""
+    stem = f"{prefix}-{issue_number}"
+    if iteration is not None:
+        stem = f"{stem}-r{iteration}"
+    return state_dir / f"{stem}.{suffix.removeprefix('.')}"
 
 
 def setup_review_logging(verbose: bool = False) -> None:

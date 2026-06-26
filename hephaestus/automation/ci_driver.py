@@ -38,7 +38,7 @@ from hephaestus.cli.utils import (
 )
 from hephaestus.utils.file_lock import file_lock
 
-from ._review_utils import add_max_workers_arg, find_pr_for_issue
+from ._review_utils import add_max_workers_arg, find_pr_for_issue, log_file_path
 from .address_review import (
     _parse_addressed_block,
     resolve_addressed_threads,
@@ -1079,7 +1079,7 @@ class CIDriver:
         if pre_agent_sha is None:
             return False
 
-        log_file = self.state_dir / f"address-review-blocked-{issue_number}.log"
+        log_file = log_file_path(self.state_dir, "address-review-blocked", issue_number)
         try:
             fix_result = run_address_fix_session(
                 issue_number=issue_number,

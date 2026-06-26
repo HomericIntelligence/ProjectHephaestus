@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import hephaestus.automation._review_utils as review_utils
 from hephaestus.automation._review_utils import (
     _discover_prs_simple,
     add_max_workers_arg,
@@ -19,6 +18,7 @@ from hephaestus.automation._review_utils import (
     get_pr_head_branch,
     load_impl_session_id,
     parse_json_block,
+    print_worker_summary,
 )
 from hephaestus.automation.models import WorkerResult
 
@@ -73,7 +73,7 @@ class TestPrintWorkerSummary:
     ) -> None:
         """Empty result sets log zero totals and omit the failure block."""
         with caplog.at_level(logging.INFO):
-            review_utils.print_worker_summary("PR Review Summary", {})
+            print_worker_summary("PR Review Summary", {})
 
         text = "\n".join(caplog.messages)
         assert "PR Review Summary" in text
@@ -92,7 +92,7 @@ class TestPrintWorkerSummary:
         }
 
         with caplog.at_level(logging.INFO):
-            review_utils.print_worker_summary("Plan Review Summary", results)
+            print_worker_summary("Plan Review Summary", results)
 
         text = "\n".join(caplog.messages)
         assert "Plan Review Summary" in text
@@ -108,7 +108,7 @@ class TestPrintWorkerSummary:
         }
 
         with caplog.at_level(logging.INFO):
-            review_utils.print_worker_summary("CI Driver Summary", results)
+            print_worker_summary("CI Driver Summary", results)
 
         text = "\n".join(caplog.messages)
         assert "CI Driver Summary" in text
@@ -124,7 +124,7 @@ class TestPrintWorkerSummary:
         results = {1: self._worker_result(1, True)}
 
         with caplog.at_level(logging.INFO):
-            review_utils.print_worker_summary("PR Review Summary", results, count_noun="PRs")
+            print_worker_summary("PR Review Summary", results, count_noun="PRs")
 
         assert "Total PRs: 1" in caplog.messages
 
@@ -135,7 +135,7 @@ class TestPrintWorkerSummary:
         results = {1: self._worker_result(1, False, "x")}
 
         with caplog.at_level(logging.INFO):
-            review_utils.print_worker_summary(
+            print_worker_summary(
                 "Address Review Summary",
                 results,
                 failed_header="\nFailed issues:",

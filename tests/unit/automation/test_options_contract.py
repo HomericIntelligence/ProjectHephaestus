@@ -195,10 +195,10 @@ def test_worker_option_classes_use_narrowest_base_class() -> None:
 @pytest.mark.parametrize(
     ("build_parser", "ordered_flags"),
     (
-        (planner._build_parser, ("--dry-run", "--force", "--parallel")),
+        (planner._build_parser, ("--parallel", "--dry-run", "--force")),
         (
             implementer_cli._build_parser,
-            ("--resume", "--max-workers", "--no-skip-closed", "--dry-run"),
+            ("--max-workers", "--dry-run", "--resume", "--no-skip-closed"),
         ),
         (pr_reviewer._build_parser, ("--max-workers", "--dry-run", "--no-ui", "--verbose")),
         (plan_reviewer._build_parser, ("--max-workers", "--dry-run", "--no-ui", "--verbose")),

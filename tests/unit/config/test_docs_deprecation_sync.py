@@ -25,20 +25,41 @@ def test_get_config_value_emits_deprecation_warning() -> None:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         get_config_value("nonexistent.key", default=None)
-    assert any(
-        issubclass(w.category, DeprecationWarning) for w in caught
-    ), "get_config_value must emit a DeprecationWarning"
+    assert any(issubclass(w.category, DeprecationWarning) for w in caught), (
+        "get_config_value must emit a DeprecationWarning"
+    )
 
 
 def test_compatibility_md_annotates_get_config_value_deprecated() -> None:
-    """COMPATIBILITY.md must flag get_config_value as (deprecated)."""
+    """COMPATIBILITY.md table must flag get_config_value as (deprecated)."""
     text = COMPATIBILITY.read_text(encoding="utf-8")
-    for line in text.splitlines():
-        if "get_config_value" in line and "deprecated" in line.lower():
-            return
-    raise AssertionError(
-        "COMPATIBILITY.md must annotate get_config_value as deprecated "
-        "(inline '(deprecated)' marker or a Deprecated-symbols callout)"
+    # Find the hephaestus.config section
+    marker = "### `hephaestus.config`"
+    assert marker in text, "COMPATIBILITY.md must have a 'hephaestus.config' section"
+    section = text.split(marker, 1)[1]
+    # Extract just the table (stop at the next section heading)
+    for stop in ("### ", "## "):
+        if stop in section:
+            section = section.split(stop, 1)[0]
+    # Verify inline annotation in table row
+    assert "get_config_value" in section and "deprecated" in section.lower(), (
+        "COMPATIBILITY.md 'hephaestus.config' table must have a row with "
+        "get_config_value and (deprecated)"
+    )
+
+
+def test_compatibility_md_deprecated_symbols_callout_has_get_config_value() -> None:
+    """COMPATIBILITY.md 'Deprecated symbols' callout must list get_config_value."""
+    text = COMPATIBILITY.read_text(encoding="utf-8")
+    marker = "**Deprecated symbols**"
+    assert marker in text, "COMPATIBILITY.md must have a 'Deprecated symbols' callout"
+    callout = text.split(marker, 1)[1]
+    # Extract just the callout (stop at the next section or list marker at column 0)
+    for stop in ("### ", "## ", "\n| "):
+        if stop in callout:
+            callout = callout.split(stop, 1)[0]
+    assert "get_config_value" in callout, (
+        "COMPATIBILITY.md 'Deprecated symbols' callout must list get_config_value"
     )
 
 

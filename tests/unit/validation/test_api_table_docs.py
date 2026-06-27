@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from hephaestus.utils.helpers import get_repo_root
 from hephaestus.validation.api_table_docs import (
     ApiTableFinding,

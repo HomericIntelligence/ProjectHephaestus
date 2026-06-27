@@ -42,7 +42,6 @@ from hephaestus.cli.utils import (
 )
 from hephaestus.github.client import gh_call
 
-from .claude_timeouts import AGENT_GIT_TIMEOUT
 from .state_labels import STATE_LABEL_SPECS
 
 logger = logging.getLogger(__name__)
@@ -119,7 +118,7 @@ def ensure_labels_on_repo(repo: str, *, dry_run: bool = False) -> int:
             "--force",  # upsert: create-or-update
         ]
         try:
-            gh_call(cmd, timeout=AGENT_GIT_TIMEOUT)
+            gh_call(cmd)
         except subprocess.CalledProcessError as exc:
             logger.warning(
                 "%s: failed to ensure label %r (rc=%s): %s",
@@ -139,7 +138,6 @@ def _detect_current_repo_slug() -> str:
     try:
         proc = gh_call(
             ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-            timeout=AGENT_GIT_TIMEOUT,
         )
     except subprocess.CalledProcessError as exc:
         raise SystemExit(

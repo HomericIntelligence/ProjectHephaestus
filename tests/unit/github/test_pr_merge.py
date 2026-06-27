@@ -244,23 +244,13 @@ class TestLocalBranchExists:
     @patch("hephaestus.github.pr_merge.run_subprocess")
     def test_returns_true_when_branch_exists(self, mock_run) -> None:
         """Returns True when git branch --list output is non-empty."""
-        mock_run.return_value = subprocess.CompletedProcess(
-            ["git", "branch", "--list", "my-feature"],
-            0,
-            stdout="  my-feature\n",
-            stderr="",
-        )
+        mock_run.return_value = MagicMock(stdout="  my-feature\n")
         assert local_branch_exists("my-feature") is True
 
     @patch("hephaestus.github.pr_merge.run_subprocess")
     def test_returns_false_when_branch_absent(self, mock_run) -> None:
         """Returns False when git branch --list output is empty."""
-        mock_run.return_value = subprocess.CompletedProcess(
-            ["git", "branch", "--list", "nonexistent"],
-            0,
-            stdout="",
-            stderr="",
-        )
+        mock_run.return_value = MagicMock(stdout="")
         assert local_branch_exists("nonexistent") is False
 
     @patch("hephaestus.github.pr_merge.run_subprocess")
@@ -272,12 +262,7 @@ class TestLocalBranchExists:
     @patch("hephaestus.github.pr_merge.run_subprocess")
     def test_passes_timeout_and_suppresses_expected_error_logs(self, mock_run) -> None:
         """The git branch lookup is bounded and avoids noisy expected-error logs."""
-        mock_run.return_value = subprocess.CompletedProcess(
-            ["git", "branch", "--list", "my-feature"],
-            0,
-            stdout="  my-feature\n",
-            stderr="",
-        )
+        mock_run.return_value = MagicMock(stdout="  my-feature\n")
         local_branch_exists("my-feature")
         assert mock_run.call_args.kwargs["timeout"] == METADATA_TIMEOUT
         assert mock_run.call_args.kwargs["log_on_error"] is False

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -397,19 +398,22 @@ class TestPromptNullByteSanitization:
     ) -> None:
         """End-to-end regression: the real subprocess.run path tolerates a NUL.
 
-        Reproduces the #1509 crash. We point the invoked binary at ``true`` so
-        the call succeeds; before the fix, argv marshaling raised
-        ``ValueError: embedded null byte`` and never reached the child.
+        Reproduces the #1509 crash. We point the invoked binary at a portable
+        no-op (``sys.executable -c ""``, always present — unlike ``true``) so the
+        call succeeds; WITHOUT the fix, argv marshaling raises
+        ``ValueError: embedded null byte`` here and never reaches the child.
         """
         cwd = fake_home / "work"
         cwd.mkdir()
 
         real_run = subprocess.run
+        noop = [sys.executable, "-c", ""]
 
         def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-            # Replace the "claude" binary with a harmless no-op; keep the real
-            # argv-marshaling behaviour (which is what raised the ValueError).
-            return real_run(["true", *cmd[1:]], **kwargs)
+            # Swap the "claude" binary for a guaranteed no-op while preserving the
+            # rest of argv verbatim — so the real argv/stdin marshaling (which
+            # raised the original ValueError) is still exercised.
+            return real_run([*noop, *cmd[1:]], **kwargs)
 
         monkeypatch.setattr("hephaestus.automation.claude_invoke.subprocess.run", fake_run)
 

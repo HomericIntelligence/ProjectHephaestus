@@ -5,6 +5,7 @@ import json
 import subprocess
 from unittest.mock import MagicMock, patch
 
+from hephaestus.github import pr_merge as pr_merge_module
 from hephaestus.github.pr_merge import (
     checks_success_and_log,
     detect_repo_from_remote,
@@ -335,6 +336,61 @@ class TestHandleMergeResult:
         result.message = "Merge conflict"
         result.sha = None
         handle_merge_result(result, pr_number=42, base_branch="main")
+
+
+class TestProcessPr:
+    """Tests for extracted PR processing helpers."""
+
+    def test_process_pr_pushes_and_merges_passed_pr(self, monkeypatch) -> None:
+        """Successful PRs are pushed and delegated to the merge helper."""
+        pushes: list[tuple[str, bool]] = []
+        merges: list[tuple[str, int, str, str, bool]] = []
+
+        monkeypatch.setattr(pr_merge_module, "_checks_pass_or_legacy", lambda *args: True)
+        monkeypatch.setattr(
+            pr_merge_module,
+            "try_push_head_branch",
+            lambda branch, dry_run: pushes.append((branch, dry_run)),
+        )
+        monkeypatch.setattr(
+            pr_merge_module,
+            "_attempt_pr_merge",
+            lambda repo, number, sha, base, dry_run: merges.append(
+                (repo, number, sha, base, dry_run)
+            ),
+        )
+
+        pr_merge_module._process_pr(
+            "owner/repo",
+            {
+                "number": 1,
+                "headRefName": "feature",
+                "headRefOid": "abc123",
+                "baseRefName": "main",
+            },
+            push_all=False,
+            dry_run=False,
+        )
+
+        assert pushes == [("feature", False)]
+        assert merges == [("owner/repo", 1, "abc123", "main", False)]
+
+    def test_process_pr_missing_head_sha_skips_checks_and_merge(self, monkeypatch) -> None:
+        """PRs without a head SHA skip check and merge work."""
+        check = MagicMock()
+        merge = MagicMock()
+        monkeypatch.setattr(pr_merge_module, "_checks_pass_or_legacy", check)
+        monkeypatch.setattr(pr_merge_module, "_attempt_pr_merge", merge)
+
+        pr_merge_module._process_pr(
+            "owner/repo",
+            {"number": 1, "headRefName": "feature", "baseRefName": "main"},
+            push_all=False,
+            dry_run=False,
+        )
+
+        check.assert_not_called()
+        merge.assert_not_called()
 
 
 class TestMain:

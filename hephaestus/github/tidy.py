@@ -40,7 +40,7 @@ from hephaestus.cli.utils import (
 from hephaestus.github.client import gh_call
 from hephaestus.github.pr_merge import detect_repo_from_remote
 from hephaestus.logging.utils import get_logger
-from hephaestus.utils.helpers import METADATA_TIMEOUT, run_subprocess
+from hephaestus.utils.helpers import METADATA_TIMEOUT
 
 logger = get_logger(__name__)
 
@@ -92,8 +92,10 @@ def _detect_default_branch(override: str | None) -> str:
 def _working_tree_clean() -> bool:
     """Return True if the git working tree has no uncommitted changes."""
     try:
-        result = run_subprocess(
+        result = subprocess.run(
             ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
             check=False,
             timeout=METADATA_TIMEOUT,
         )
@@ -107,8 +109,9 @@ def _in_git_repo() -> bool:
     """Return True if cwd is inside a git repository."""
     try:
         return (
-            run_subprocess(
+            subprocess.run(
                 ["git", "rev-parse", "--git-dir"],
+                capture_output=True,
                 check=False,
                 timeout=METADATA_TIMEOUT,
             ).returncode
@@ -127,8 +130,11 @@ def _repo_root() -> Path:
     CalledProcessError path: both failures propagate as unhandled exceptions to
     the CLI entrypoint.
     """
-    result = run_subprocess(
+    result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        check=True,
         timeout=METADATA_TIMEOUT,
     )
     return Path(result.stdout.strip())
@@ -521,6 +527,7 @@ def _print_summary(results: dict[str, str]) -> int:
 
 
 def _configure_logging(verbose: bool) -> None:
+    """Configure CLI logging for tidy output."""
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
@@ -620,6 +627,18 @@ def _handle_problem_branches(
         return _handle_dry_run_problem_branches(problem_branches, args.json)
 
     return _dispatch_tidy_swarm(args, problem_branches, trunk, repo_path, repo_slug, agent)
+
+
+def _handle_tidy_problem_branches(
+    args: argparse.Namespace,
+    agent: str,
+    problem_branches: list[str],
+    trunk: str,
+    repo_path: Path,
+    repo_slug: str,
+) -> int:
+    """Compatibility wrapper for the pre-extraction tidy handler name."""
+    return _handle_problem_branches(args, problem_branches, trunk, repo_path, repo_slug, agent)
 
 
 def main() -> int:

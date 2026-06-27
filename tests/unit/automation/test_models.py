@@ -1,11 +1,9 @@
 """Tests for automation Pydantic models."""
 
-import ast
 from datetime import datetime
-from pathlib import Path
 
 from hephaestus.automation.models import (
-    _DEFAULT_WORKERS,
+    DEFAULT_WORKER_COUNT,
     AddressReviewOptions,
     CIDriverOptions,
     DependencyGraph,
@@ -14,17 +12,16 @@ from hephaestus.automation.models import (
     ImplementerOptions,
     IssueInfo,
     IssueState,
+    ParallelWorkerOptionsBase,
     PlannerOptions,
     PlanResult,
     PlanReviewerOptions,
     ReviewerOptions,
     ReviewPhase,
     ReviewState,
+    VerboseParallelWorkerOptionsBase,
     WorkerOptionsBase,
     WorkerResult,
-    _MaxWorkerOptionsBase,
-    _ParallelWorkerOptionsBase,
-    _VerboseWorkerOptionsBase,
 )
 
 
@@ -290,6 +287,85 @@ class TestWorkerResult:
         assert result.pr_number is None
 
 
+class TestWorkerOptionsBase:
+    """Tests for shared worker option defaults."""
+
+    def test_base_defaults_and_model_dump(self) -> None:
+        """WorkerOptionsBase exposes only the dry-run field."""
+        options = WorkerOptionsBase()
+
+        assert WorkerOptionsBase.model_fields["dry_run"].default is False
+        assert "verbose" not in WorkerOptionsBase.model_fields
+        assert options.model_dump() == {"dry_run": False}
+
+    def test_parallel_and_verbose_base_defaults(self) -> None:
+        """Narrow worker base classes expose only their shared fields."""
+        assert ParallelWorkerOptionsBase.model_fields["max_workers"].default == DEFAULT_WORKER_COUNT
+        assert VerboseParallelWorkerOptionsBase.model_fields["verbose"].default is False
+
+    def test_all_option_models_inherit_shared_fields(self) -> None:
+        """Every automation option model inherits dry-run and omits state_dir."""
+        for model_cls in (
+            PlannerOptions,
+            ImplementerOptions,
+            ReviewerOptions,
+            PlanReviewerOptions,
+            AddressReviewOptions,
+            CIDriverOptions,
+        ):
+            assert issubclass(model_cls, WorkerOptionsBase)
+            assert "dry_run" in model_cls.model_fields
+            assert "state_dir" not in model_cls.model_fields
+
+    def test_worker_count_defaults_use_shared_constant(self) -> None:
+        """Worker-count fields all use DEFAULT_WORKER_COUNT without renaming."""
+        assert PlannerOptions.model_fields["parallel"].default == DEFAULT_WORKER_COUNT
+        for model_cls in (
+            ImplementerOptions,
+            ReviewerOptions,
+            PlanReviewerOptions,
+            AddressReviewOptions,
+            CIDriverOptions,
+        ):
+            assert model_cls.model_fields["max_workers"].default == DEFAULT_WORKER_COUNT
+
+    def test_constructor_keywords_and_model_dump_are_compatible(self) -> None:
+        """Existing constructor keyword shapes still validate and dump correctly."""
+        cases = (
+            (
+                PlannerOptions,
+                {"issues": [1], "parallel": 5, "dry_run": True},
+                "parallel",
+            ),
+            (
+                ImplementerOptions,
+                {"max_workers": 5, "dry_run": True},
+                "max_workers",
+            ),
+            (ReviewerOptions, {"max_workers": 5, "dry_run": True}, "max_workers"),
+            (
+                PlanReviewerOptions,
+                {"max_workers": 5, "dry_run": True, "verbose": True},
+                "max_workers",
+            ),
+            (
+                AddressReviewOptions,
+                {"max_workers": 5, "dry_run": True, "verbose": True},
+                "max_workers",
+            ),
+            (CIDriverOptions, {"max_workers": 5, "dry_run": True, "verbose": True}, "max_workers"),
+        )
+
+        for model_cls, kwargs, worker_field in cases:
+            options = model_cls(**kwargs)
+            dumped = options.model_dump(include={worker_field, "dry_run", "verbose"})
+            expected = {worker_field: 5, "dry_run": True}
+            if "verbose" in model_cls.model_fields:
+                expected["verbose"] = True
+
+            assert dumped == expected
+
+
 class TestReviewState:
     """Tests for ReviewState model."""
 
@@ -309,74 +385,6 @@ class TestReviewState:
         assert restored.session_agent == "pi"
 
 
-_MODELS_PATH = Path(__file__).parents[3] / "hephaestus" / "automation" / "models.py"
-
-
-def _annotated_field_owners(field_name: str) -> list[str]:
-    module = ast.parse(_MODELS_PATH.read_text())
-    owners: list[str] = []
-    for node in module.body:
-        if isinstance(node, ast.ClassDef):
-            for stmt in node.body:
-                if (
-                    isinstance(stmt, ast.AnnAssign)
-                    and isinstance(stmt.target, ast.Name)
-                    and stmt.target.id == field_name
-                ):
-                    owners.append(node.name)
-    return owners
-
-
-def _field_default_expr(class_name: str, field_name: str) -> str:
-    module = ast.parse(_MODELS_PATH.read_text())
-    for node in module.body:
-        if isinstance(node, ast.ClassDef) and node.name == class_name:
-            for stmt in node.body:
-                if (
-                    isinstance(stmt, ast.AnnAssign)
-                    and isinstance(stmt.target, ast.Name)
-                    and stmt.target.id == field_name
-                    and stmt.value is not None
-                ):
-                    return ast.unparse(stmt.value)
-    raise AssertionError(f"{class_name}.{field_name} not found")
-
-
-class TestWorkerOptionsBase:
-    """Tests for shared automation option model fields."""
-
-    def test_all_worker_options_inherit_common_base(self) -> None:
-        for options_cls in (
-            PlannerOptions,
-            ImplementerOptions,
-            ReviewerOptions,
-            PlanReviewerOptions,
-            AddressReviewOptions,
-            CIDriverOptions,
-        ):
-            assert issubclass(options_cls, WorkerOptionsBase)
-
-    def test_shared_fields_are_declared_only_on_intended_bases(self) -> None:
-        assert _annotated_field_owners("dry_run") == ["WorkerOptionsBase"]
-        assert _annotated_field_owners("max_workers") == ["_MaxWorkerOptionsBase"]
-        assert _annotated_field_owners("parallel") == ["_ParallelWorkerOptionsBase"]
-        assert _annotated_field_owners("verbose") == ["_VerboseWorkerOptionsBase"]
-
-    def test_worker_defaults_route_through_default_workers(self) -> None:
-        assert _field_default_expr("_MaxWorkerOptionsBase", "max_workers") == "_DEFAULT_WORKERS"
-        assert _field_default_expr("_ParallelWorkerOptionsBase", "parallel") == "_DEFAULT_WORKERS"
-        assert _MaxWorkerOptionsBase.model_fields["max_workers"].default == _DEFAULT_WORKERS
-        assert _ParallelWorkerOptionsBase.model_fields["parallel"].default == _DEFAULT_WORKERS
-
-    def test_verbose_only_exists_on_current_verbose_option_models(self) -> None:
-        assert issubclass(PlanReviewerOptions, _VerboseWorkerOptionsBase)
-        assert issubclass(AddressReviewOptions, _VerboseWorkerOptionsBase)
-        assert issubclass(CIDriverOptions, _VerboseWorkerOptionsBase)
-        assert "verbose" not in PlannerOptions.model_fields
-        assert "verbose" not in ImplementerOptions.model_fields
-        assert "verbose" not in ReviewerOptions.model_fields
-
-
 class TestPlannerOptions:
     """Tests for PlannerOptions model."""
 
@@ -387,7 +395,7 @@ class TestPlannerOptions:
         assert options.issues == [123, 456]
         assert options.dry_run is False
         assert options.force is False
-        assert options.parallel == 3
+        assert options.parallel == DEFAULT_WORKER_COUNT
         assert options.system_prompt_file is None
         assert options.skip_closed is True
         assert options.enable_advise is True
@@ -424,7 +432,7 @@ class TestImplementerOptions:
         assert options.analyze_only is False
         assert options.health_check is False
         assert options.resume is False
-        assert options.max_workers == 3
+        assert options.max_workers == DEFAULT_WORKER_COUNT
         assert options.skip_closed is True
         assert options.auto_merge is True
         assert options.dry_run is False

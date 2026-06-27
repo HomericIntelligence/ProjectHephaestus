@@ -142,34 +142,28 @@ class PlanResult(BaseModel):
     plan_already_exists: bool = False
 
 
-_DEFAULT_WORKERS = 3
+DEFAULT_WORKER_COUNT = 3
 
 
 class WorkerOptionsBase(BaseModel):
-    """Shared fields for automation worker option models."""
+    """Shared options for automation worker stages."""
 
     dry_run: bool = False
 
 
-class _MaxWorkerOptionsBase(WorkerOptionsBase):
-    """Shared fields for commands that expose --max-workers."""
+class ParallelWorkerOptionsBase(WorkerOptionsBase):
+    """Shared options for stages that expose ``max_workers``."""
 
-    max_workers: int = _DEFAULT_WORKERS
-
-
-class _ParallelWorkerOptionsBase(WorkerOptionsBase):
-    """Shared fields for planner commands that expose --parallel."""
-
-    parallel: int = _DEFAULT_WORKERS
+    max_workers: int = DEFAULT_WORKER_COUNT
 
 
-class _VerboseWorkerOptionsBase(_MaxWorkerOptionsBase):
-    """Shared fields for worker commands that expose --verbose."""
+class VerboseParallelWorkerOptionsBase(ParallelWorkerOptionsBase):
+    """Shared worker options for stages with verbose logging."""
 
     verbose: bool = False
 
 
-class PlannerOptions(_ParallelWorkerOptionsBase):
+class PlannerOptions(WorkerOptionsBase):
     """Options for the Planner."""
 
     issues: list[int]
@@ -180,12 +174,13 @@ class PlannerOptions(_ParallelWorkerOptionsBase):
     issues_explicit: bool = False
     agent: str = "claude"
     force: bool = False
+    parallel: int = DEFAULT_WORKER_COUNT
     system_prompt_file: Path | None = None
     skip_closed: bool = True
     enable_advise: bool = True
 
 
-class ImplementerOptions(_MaxWorkerOptionsBase):
+class ImplementerOptions(ParallelWorkerOptionsBase):
     """Options for the Implementer."""
 
     epic_number: int = 0
@@ -240,7 +235,7 @@ class ReviewState(BaseModel):
     addressed_thread_ids: list[str] = Field(default_factory=list)  # thread IDs Claude addressed
 
 
-class ReviewerOptions(_MaxWorkerOptionsBase):
+class ReviewerOptions(ParallelWorkerOptionsBase):
     """Options for the PRReviewer."""
 
     issues: list[int] = Field(default_factory=list)
@@ -249,7 +244,7 @@ class ReviewerOptions(_MaxWorkerOptionsBase):
     enable_ui: bool = True
 
 
-class PlanReviewerOptions(_VerboseWorkerOptionsBase):
+class PlanReviewerOptions(VerboseParallelWorkerOptionsBase):
     """Options for the PlanReviewer."""
 
     issues: list[int] = Field(default_factory=list)
@@ -257,7 +252,7 @@ class PlanReviewerOptions(_VerboseWorkerOptionsBase):
     enable_ui: bool = True
 
 
-class AddressReviewOptions(_VerboseWorkerOptionsBase):
+class AddressReviewOptions(VerboseParallelWorkerOptionsBase):
     """Options for the AddressReview workflow."""
 
     issues: list[int] = Field(default_factory=list)
@@ -266,7 +261,7 @@ class AddressReviewOptions(_VerboseWorkerOptionsBase):
     resume_impl_session: bool = True  # attempt to resume implementer's saved agent session
 
 
-class CIDriverOptions(_VerboseWorkerOptionsBase):
+class CIDriverOptions(VerboseParallelWorkerOptionsBase):
     """Options for the CIDriver workflow."""
 
     issues: list[int] = Field(default_factory=list)

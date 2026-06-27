@@ -51,5 +51,6 @@ def work_report_context(work_units_fn: Callable[[], int]) -> Iterator[None]:
     try:
         yield
     finally:
+        # Best-effort reporting: suppress reporting failures without masking the block's exception.
         with contextlib.suppress(Exception):
             write_work_report(work_units_fn())

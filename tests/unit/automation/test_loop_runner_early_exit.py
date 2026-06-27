@@ -65,7 +65,6 @@ class TestWriteWorkReport:
         # Should not raise
         write_work_report(7)
 
-
     def test_context_env_unset_does_not_call_work_units_fn(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -108,13 +107,9 @@ class TestWriteWorkReport:
         report = tmp_path / "report.txt"
         monkeypatch.setenv("HEPH_WORK_REPORT", str(report))
 
-        try:
+        with pytest.raises(RuntimeError, match=r"^boom$"):
             with work_report_context(lambda: 7):
                 raise RuntimeError("boom")
-        except RuntimeError as exc:
-            assert str(exc) == "boom"
-        else:
-            pytest.fail("RuntimeError('boom') was not raised")
 
         assert report.read_text(encoding="utf-8") == "7"
 
@@ -130,13 +125,9 @@ class TestWriteWorkReport:
         def work_units() -> int:
             raise ValueError("report failed")
 
-        try:
+        with pytest.raises(RuntimeError, match=r"^boom$"):
             with work_report_context(work_units):
                 raise RuntimeError("boom")
-        except RuntimeError as exc:
-            assert str(exc) == "boom"
-        else:
-            pytest.fail("RuntimeError('boom') was not raised")
 
         assert not report.exists()
 
@@ -156,7 +147,6 @@ class TestWriteWorkReport:
             pass
 
         assert not report.exists()
-
 
 
 class TestMakeWorkReportPath:

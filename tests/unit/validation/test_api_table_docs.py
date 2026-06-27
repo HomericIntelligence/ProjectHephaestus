@@ -135,9 +135,7 @@ class TestFindViolations:
         p.write_text(
             "### `hephaestus.config`\n\n"
             "| Symbol | Added | Notes |\n"
-            "|--------|-------|-------|\n"
-            + doc_lines
-            + "\n",
+            "|--------|-------|-------|\n" + doc_lines + "\n",
             encoding="utf-8",
         )
         documented = load_documented_symbols(p)

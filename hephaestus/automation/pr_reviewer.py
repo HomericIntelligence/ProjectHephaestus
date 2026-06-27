@@ -46,7 +46,6 @@ from ._review_utils import (
     find_pr_for_issue,
     instance_log,
     log_file_path,
-    parse_json_block,
     print_worker_summary,
     setup_review_logging,
 )

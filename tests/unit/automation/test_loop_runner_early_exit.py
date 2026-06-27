@@ -108,11 +108,54 @@ class TestWriteWorkReport:
         report = tmp_path / "report.txt"
         monkeypatch.setenv("HEPH_WORK_REPORT", str(report))
 
-        with pytest.raises(RuntimeError, match="boom"):
+        try:
             with work_report_context(lambda: 7):
                 raise RuntimeError("boom")
+        except RuntimeError as exc:
+            assert str(exc) == "boom"
+        else:
+            pytest.fail("RuntimeError('boom') was not raised")
 
         assert report.read_text(encoding="utf-8") == "7"
+
+    def test_context_preserves_body_exception_when_reporting_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reporting failures must not mask the protected block's exception."""
+        from hephaestus.automation.work_report import work_report_context
+
+        report = tmp_path / "report.txt"
+        monkeypatch.setenv("HEPH_WORK_REPORT", str(report))
+
+        def work_units() -> int:
+            raise ValueError("report failed")
+
+        try:
+            with work_report_context(work_units):
+                raise RuntimeError("boom")
+        except RuntimeError as exc:
+            assert str(exc) == "boom"
+        else:
+            pytest.fail("RuntimeError('boom') was not raised")
+
+        assert not report.exists()
+
+    def test_context_suppresses_reporting_failure_on_clean_exit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Best-effort reporting failures are non-fatal on clean exit too."""
+        from hephaestus.automation.work_report import work_report_context
+
+        report = tmp_path / "report.txt"
+        monkeypatch.setenv("HEPH_WORK_REPORT", str(report))
+
+        def work_units() -> int:
+            raise ValueError("report failed")
+
+        with work_report_context(work_units):
+            pass
+
+        assert not report.exists()
 
 
 

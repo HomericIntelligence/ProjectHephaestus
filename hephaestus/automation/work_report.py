@@ -51,4 +51,5 @@ def work_report_context(work_units_fn: Callable[[], int]) -> Iterator[None]:
     try:
         yield
     finally:
-        write_work_report(work_units_fn())
+        with contextlib.suppress(Exception):
+            write_work_report(work_units_fn())

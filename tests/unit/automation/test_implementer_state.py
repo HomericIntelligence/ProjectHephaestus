@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 import hephaestus.automation.implementer_state as implementer_state_module
-from hephaestus.automation.implementer_state import ImplementationStateManager
 from hephaestus.automation.models import ImplementationState
 from hephaestus.io.utils import write_secure as io_write_secure
 
@@ -39,7 +38,7 @@ def test_save_imports_canonical_write_secure(
 
     monkeypatch.setattr(implementer_state_module, "write_secure", fake_write_secure)
 
-    manager = ImplementationStateManager(tmp_path)
+    manager = implementer_state_module.ImplementationStateManager(tmp_path)
     state = ImplementationState(issue_number=1401)
     manager.save(state)
 

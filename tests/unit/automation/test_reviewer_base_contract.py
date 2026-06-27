@@ -10,7 +10,6 @@ from unittest.mock import MagicMock
 from hephaestus.automation import _reviewer_base
 from hephaestus.automation.models import ReviewState
 from hephaestus.io import utils as io_utils
-from hephaestus.io.utils import write_secure as io_write_secure
 
 
 def _make_options(max_workers: int = 2) -> object:
@@ -74,11 +73,6 @@ def test_no_importlib_in_base() -> None:
 def test_reviewer_base_uses_canonical_write_secure() -> None:
     """BaseReviewer should import the secure writer from the canonical IO module."""
     assert vars(_reviewer_base)["write_secure"] is io_utils.write_secure
-
-
-def test_base_reviewer_imports_canonical_write_secure() -> None:
-    """BaseReviewer imports the canonical secure writer directly."""
-    assert vars(_reviewer_base)["write_secure"] is io_write_secure
 
 
 def test_save_state_persists_review_state_with_secure_permissions(tmp_path: Path) -> None:

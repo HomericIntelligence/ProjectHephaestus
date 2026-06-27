@@ -16,7 +16,37 @@ from hephaestus.utils.helpers import (
     install_package,
     run_subprocess,
     slugify,
+    strip_null_bytes,
 )
+
+
+class TestStripNullBytes:
+    """Tests for strip_null_bytes (#1661)."""
+
+    def test_removes_embedded_null(self):
+        """An embedded NUL byte is removed, surrounding text preserved."""
+        assert strip_null_bytes("a\x00b") == "ab"
+
+    def test_removes_leading_and_trailing_null(self):
+        """Leading and trailing NULs are stripped."""
+        assert strip_null_bytes("\x00abc\x00") == "abc"
+
+    def test_removes_multiple_nulls(self):
+        """Every NUL is removed regardless of count or position."""
+        assert strip_null_bytes("\x00a\x00\x00b\x00c") == "abc"
+
+    def test_clean_text_unchanged(self):
+        """Text without NULs is returned byte-identical (same object)."""
+        text = "no nulls here — just unicode ✓"
+        assert strip_null_bytes(text) is text
+
+    def test_empty_string(self):
+        """An empty string is handled without error."""
+        assert strip_null_bytes("") == ""
+
+    def test_only_nulls(self):
+        """A string of only NULs becomes empty."""
+        assert strip_null_bytes("\x00\x00\x00") == ""
 
 
 class TestSlugify:

@@ -347,3 +347,78 @@ class TestEndToEndSessionResume:
         assert expected_sid in argv
         assert "--session-id" not in argv
         assert "--session-id" not in argv
+
+
+class TestPromptNullByteSanitization:
+    r"""#1661: a NUL byte in the prompt must not crash the invoke.
+
+    subprocess.run raises ``ValueError: embedded null byte`` if any argv element
+    (or text stdin) contains ``\x00``. The prompt is assembled from untrusted
+    multi-source text (issue body + advise/agent output + prior review), so a
+    single stray NUL would otherwise permanently strand the issue.
+    """
+
+    def test_argv_prompt_has_no_null_byte(self, stub_run: MagicMock, fake_home: Path) -> None:
+        """A NUL in the prompt is stripped before it reaches the argv."""
+        cwd = fake_home / "work"
+        cwd.mkdir()
+        invoke_claude_with_session(
+            repo="R",
+            issue=1509,
+            agent=AGENT_PLANNER,
+            prompt="plan this\x00issue",
+            model="sonnet",
+            cwd=cwd,
+        )
+        argv = _argv(stub_run.call_args)
+        assert all("\x00" not in arg for arg in argv)
+        # The prompt is the last positional argv element (after --print).
+        assert argv[-1] == "plan thisissue"
+
+    def test_stdin_prompt_has_no_null_byte(self, stub_run: MagicMock, fake_home: Path) -> None:
+        """A NUL is stripped on the stdin path too (input_via_stdin=True)."""
+        cwd = fake_home / "work"
+        cwd.mkdir()
+        invoke_claude_with_session(
+            repo="R",
+            issue=1509,
+            agent=AGENT_PLANNER,
+            prompt="plan this\x00issue",
+            model="sonnet",
+            cwd=cwd,
+            input_via_stdin=True,
+        )
+        kwargs = stub_run.call_args.kwargs
+        assert kwargs["input"] == "plan thisissue"
+        assert "\x00" not in kwargs["input"]
+
+    def test_real_subprocess_does_not_raise_with_null_byte(
+        self, fake_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End-to-end regression: the real subprocess.run path tolerates a NUL.
+
+        Reproduces the #1509 crash. We point the invoked binary at ``true`` so
+        the call succeeds; before the fix, argv marshaling raised
+        ``ValueError: embedded null byte`` and never reached the child.
+        """
+        cwd = fake_home / "work"
+        cwd.mkdir()
+
+        real_run = subprocess.run
+
+        def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            # Replace the "claude" binary with a harmless no-op; keep the real
+            # argv-marshaling behaviour (which is what raised the ValueError).
+            return real_run(["true", *cmd[1:]], **kwargs)
+
+        monkeypatch.setattr("hephaestus.automation.claude_invoke.subprocess.run", fake_run)
+
+        out, _sid = invoke_claude_with_session(
+            repo="R",
+            issue=1509,
+            agent=AGENT_PLANNER,
+            prompt="plan this\x00issue",
+            model="sonnet",
+            cwd=cwd,
+        )
+        assert out == ""

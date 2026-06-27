@@ -73,6 +73,28 @@ class TestGhIssueJson:
         with pytest.raises(RuntimeError, match="Failed to fetch issue"):
             gh_issue_json(123)
 
+    @patch("hephaestus.automation.github_api._gh_call")
+    def test_strips_null_bytes_from_title_and_body(self, mock_gh_call: Any) -> None:
+        """#1661: NUL bytes in title/body are stripped at the source."""
+        mock_result = Mock()
+        mock_result.stdout = json.dumps(
+            {
+                "number": 1509,
+                "title": "bad\x00title",
+                "state": "OPEN",
+                "labels": [],
+                "body": "bad\x00body",
+            }
+        )
+        mock_gh_call.return_value = mock_result
+
+        data = gh_issue_json(1509)
+
+        assert data["title"] == "badtitle"
+        assert data["body"] == "badbody"
+        assert "\x00" not in data["title"]
+        assert "\x00" not in data["body"]
+
 
 class TestParseIssueDependencies:
     """Tests for parse_issue_dependencies function."""

@@ -31,6 +31,7 @@ from hephaestus.github.rate_limit import (
     gh_rate_limit_reset_epoch,
 )
 from hephaestus.io.utils import write_secure
+from hephaestus.utils.helpers import strip_null_bytes
 
 from .git_utils import get_repo_info, run
 from .models import IssueInfo, IssueState
@@ -252,7 +253,15 @@ def gh_issue_json(issue_number: int) -> dict[str, Any]:
         result = _gh_call(
             ["issue", "view", str(issue_number), "--json", "number,title,state,labels,body"],
         )
-        return cast(dict[str, Any], json.loads(result.stdout))
+        data = cast(dict[str, Any], json.loads(result.stdout))
+        # Strip stray NUL bytes at the source so downstream prompt assembly never
+        # feeds an embedded null into a subprocess argv (#1661). Title/body are the
+        # only free-text fields consumed by the planner/implementer prompts.
+        for field in ("title", "body"):
+            value = data.get(field)
+            if isinstance(value, str):
+                data[field] = strip_null_bytes(value)
+        return data
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Failed to fetch issue #{issue_number}: {e}") from e
 

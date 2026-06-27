@@ -35,7 +35,6 @@ from hephaestus.agents.runtime import (
 )
 from hephaestus.cli.utils import (
     add_agent_timeout_arg,
-    add_learn_timeout_arg,
     add_version_arg,
     configure_github_throttle_from_args,
     emit_json_status,
@@ -876,7 +875,6 @@ Examples:
     )
     add_version_arg(parser)
     add_agent_timeout_arg(parser)
-    add_learn_timeout_arg(parser)
     return parser
 
 
@@ -910,7 +908,6 @@ def main() -> int:
         dry_run=args.dry_run,
         enable_ui=not args.no_ui and not args.json,
         agent_timeout=args.agent_timeout or DEFAULT_AGENT_TIMEOUT,
-        learn_timeout=args.learn_timeout or DEFAULT_AGENT_TIMEOUT,
     )
 
     with terminal_guard():

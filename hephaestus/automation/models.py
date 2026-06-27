@@ -257,7 +257,6 @@ class ReviewerOptions(ParallelWorkerOptionsBase):
     enable_learn: bool = True
     enable_ui: bool = True
     agent_timeout: int = DEFAULT_AGENT_TIMEOUT
-    learn_timeout: int = DEFAULT_AGENT_TIMEOUT
 
 
 class PlanReviewerOptions(VerboseParallelWorkerOptionsBase):

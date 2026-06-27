@@ -2554,10 +2554,18 @@ def main() -> int:
             include_all_authors=args.include_all_authors,
             enable_mechanical_rebase=args.enable_mechanical_rebase,
             max_fix_iterations=args.max_fix_iterations,
-            agent_timeout=args.agent_timeout or DEFAULT_AGENT_TIMEOUT,
-            advise_timeout=args.advise_timeout or DEFAULT_AGENT_TIMEOUT,
-            learn_timeout=args.learn_timeout or DEFAULT_AGENT_TIMEOUT,
-            poll_max_wait=args.poll_max_wait or DEFAULT_CI_POLL_MAX_WAIT,
+            agent_timeout=(
+                args.agent_timeout if args.agent_timeout is not None else DEFAULT_AGENT_TIMEOUT
+            ),
+            advise_timeout=(
+                args.advise_timeout if args.advise_timeout is not None else DEFAULT_AGENT_TIMEOUT
+            ),
+            learn_timeout=(
+                args.learn_timeout if args.learn_timeout is not None else DEFAULT_AGENT_TIMEOUT
+            ),
+            poll_max_wait=(
+                args.poll_max_wait if args.poll_max_wait is not None else DEFAULT_CI_POLL_MAX_WAIT
+            ),
         )
 
         driver = CIDriver(options)

@@ -33,7 +33,7 @@ def test_runs_pi_with_env_aliases_without_alias_kwargs(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The smoke harness keeps aliases out of argv-level Pi kwargs."""
+    """The smoke harness passes model kwarg to propagate via environment."""
     monkeypatch.setenv("HEPH_PI_PROVIDER", "private-provider-alias")
     monkeypatch.setenv("HEPH_PI_MODEL", "private-model-alias")
     run_pi = Mock(return_value=AgentRunResult(stdout="OK", stderr="", session_id="pi-smoke"))
@@ -56,7 +56,7 @@ def test_runs_pi_with_env_aliases_without_alias_kwargs(
     kwargs = run_pi.call_args.kwargs
     assert kwargs["cwd"] == tmp_path
     assert kwargs["sandbox"] == "read-only"
-    assert "model" not in kwargs
+    assert kwargs["model"] == "private-model-alias"
     assert "provider" not in kwargs
     assert run_pi.call_args.args == ("Say OK",)
     captured = capsys.readouterr()

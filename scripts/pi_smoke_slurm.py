@@ -9,12 +9,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from hephaestus.agents.runtime import PI_MODEL_ENV, PI_PROVIDER_ENV
+from hephaestus.agents.runtime import REQUIRED_ALIAS_ENVS, missing_pi_alias_env
 
 DEFAULT_LOG_DIR = Path("pi-smoke-logs")
 DEFAULT_TEMPLATE = Path("scripts/slurm/pi_smoke.sbatch")
 LOG_DIR_ENV = "HEPH_PI_SMOKE_LOG_DIR"
-REQUIRED_ALIAS_ENVS = (PI_PROVIDER_ENV, PI_MODEL_ENV)
 EXPORT_NAMES = ("ALL", *REQUIRED_ALIAS_ENVS, LOG_DIR_ENV)
 
 
@@ -25,11 +24,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--template", type=Path, default=DEFAULT_TEMPLATE)
     parser.add_argument("--sbatch", default="sbatch")
     return parser
-
-
-def _missing_alias_env() -> list[str]:
-    """Return required Pi alias env vars that are unset or blank."""
-    return [name for name in REQUIRED_ALIAS_ENVS if not os.environ.get(name, "").strip()]
 
 
 def build_sbatch_cmd(args: argparse.Namespace) -> list[str]:
@@ -48,7 +42,7 @@ def build_sbatch_cmd(args: argparse.Namespace) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     """Submit the Pi smoke Slurm template after validating alias env vars."""
     args = build_parser().parse_args(argv)
-    missing = _missing_alias_env()
+    missing = missing_pi_alias_env()
     if missing:
         print(f"ERROR: missing required env vars: {', '.join(missing)}", file=sys.stderr)
         return 2

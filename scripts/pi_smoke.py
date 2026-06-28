@@ -20,8 +20,9 @@ from pathlib import Path
 
 from hephaestus.agents.runtime import (
     PI_MODEL_ENV,
-    PI_PROVIDER_ENV,
+    REQUIRED_ALIAS_ENVS,
     AgentRunResult,
+    missing_pi_alias_env,
     pi_private_redaction_tokens,
     redact_pi_private_values,
     run_pi_session,
@@ -29,7 +30,6 @@ from hephaestus.agents.runtime import (
 
 DEFAULT_PROMPT = "Reply with exactly: OK"
 DEFAULT_LOG_DIR = Path("pi-smoke-logs")
-REQUIRED_ALIAS_ENVS = (PI_PROVIDER_ENV, PI_MODEL_ENV)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,11 +45,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Local directory for untracked smoke validation logs",
     )
     return parser
-
-
-def _missing_alias_env() -> list[str]:
-    """Return required Pi alias env vars that are unset or blank."""
-    return [name for name in REQUIRED_ALIAS_ENVS if not os.environ.get(name, "").strip()]
 
 
 def _redact_alias_values(text: str) -> str:
@@ -80,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     """Run the smoke prompt against aliases in operator-local env vars."""
     parser = build_parser()
     args = parser.parse_args(argv)
-    missing = _missing_alias_env()
+    missing = missing_pi_alias_env()
     if missing:
         print(f"ERROR: missing required env vars: {', '.join(missing)}", file=sys.stderr)
         return 2
@@ -93,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             model=model,
             sandbox="read-only",
+            model=model,
         )
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr or exc.stdout or f"Pi smoke failed with exit {exc.returncode}"

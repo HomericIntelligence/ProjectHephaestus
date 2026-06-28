@@ -43,11 +43,19 @@ PI_MODEL_CONFIG_RELATIVE_PATH = Path(".pi") / "agent" / "models.json"
 PI_PRIVATE_DENYLIST_FILENAME = ".heph-private-denylist"
 PI_PRIVATE_REDACTION = "<redacted-pi-private-value>"
 PI_READ_ONLY_TOOLS = "read,grep,find,ls"
+REQUIRED_ALIAS_ENVS: tuple[str, ...] = (PI_PROVIDER_ENV, PI_MODEL_ENV)
 AGENT_AUTH_STATUS_COMMANDS: dict[AgentName, tuple[tuple[str, ...], ...]] = {
     "claude": (("claude", "auth", "status"),),
     "codex": (("codex", "login", "status"),),
     "pi": (("pi", "--version"),),
 }
+
+
+def missing_pi_alias_env(
+    required: tuple[str, ...] = REQUIRED_ALIAS_ENVS,
+) -> list[str]:
+    """Return required Pi alias env vars that are unset or blank."""
+    return [name for name in required if not os.environ.get(name, "").strip()]
 
 
 @dataclass(frozen=True)
@@ -717,7 +725,7 @@ def _run_pi_command(
                 text=True,
                 capture_output=True,
                 timeout=timeout,
-                env=_pi_env(),
+                env=_pi_env(model=model),
                 check=True,
             )
         except subprocess.CalledProcessError as exc:

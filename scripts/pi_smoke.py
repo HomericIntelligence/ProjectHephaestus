@@ -16,6 +16,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from hephaestus.agents.runtime import (
@@ -58,9 +59,15 @@ def _redact_alias_values(text: str) -> str:
 
 
 def _write_smoke_log(log_dir: Path, result: AgentRunResult) -> Path:
-    """Write the local Pi smoke result log and return its path."""
+    """Write the local Pi smoke result log and return its path.
+
+    Each run produces a distinct artifact named with a nanosecond epoch suffix
+    so consecutive smoke runs never silently overwrite one another.
+    """
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / "pi-smoke-local.log"
+    epoch_ns = time.time_ns()
+    log_path = log_dir / f"pi-smoke-local-{epoch_ns}.log"
+    print(f"NOTE: writing smoke log to {log_path}", file=sys.stderr)
     lines = [
         f"session_id: {result.session_id or ''}",
         f"stdout: {_redact_alias_values(result.stdout)}",

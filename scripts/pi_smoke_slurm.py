@@ -29,7 +29,6 @@ def build_parser() -> argparse.ArgumentParser:
 def build_sbatch_cmd(args: argparse.Namespace) -> list[str]:
     """Build an sbatch command that exports alias env var names only."""
     log_dir: Path = args.log_dir
-    log_dir.mkdir(parents=True, exist_ok=True)
     return [
         args.sbatch,
         f"--export={','.join(EXPORT_NAMES)}",
@@ -47,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: missing required env vars: {', '.join(missing)}", file=sys.stderr)
         return 2
 
+    args.log_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env[LOG_DIR_ENV] = str(args.log_dir)
     cmd = build_sbatch_cmd(args)

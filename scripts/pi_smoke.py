@@ -95,7 +95,6 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             model=model,
             sandbox="read-only",
-            model=model,
         )
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr or exc.stdout or f"Pi smoke failed with exit {exc.returncode}"

@@ -637,8 +637,8 @@ def test_resume_pi_session_passes_resume_id_without_alias_argv_leak(tmp_path: Pa
     )
 
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        del kwargs
         captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
         prompt_arg = next(arg for arg in cmd if arg.startswith("@"))
         captured["prompt_text"] = Path(prompt_arg[1:]).read_text(encoding="utf-8")
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
@@ -661,6 +661,7 @@ def test_resume_pi_session_passes_resume_id_without_alias_argv_leak(tmp_path: Pa
     assert "private-alias" not in captured["cmd"]
     assert "private feedback content" not in captured["cmd"]
     assert captured["prompt_text"] == "private feedback content"
+    assert captured["kwargs"]["env"]["HEPH_PI_MODEL"] == "private-alias"
     assert result.stdout == "resumed"
     assert result.session_id == "pi-session-789"
 

@@ -8,7 +8,6 @@ from unittest.mock import patch
 
 import pytest
 
-import hephaestus.cli.utils as cli_utils
 from hephaestus.cli.utils import (
     CommandRegistry,
     add_github_throttle_args,

@@ -62,7 +62,7 @@ def test_runs_pi_with_env_aliases_model_via_kwarg_not_argv(
     captured = capsys.readouterr()
     assert captured.out.strip() == "OK"
     assert "LOG_FILE=" in captured.err
-    log_file_line = next(l for l in captured.err.splitlines() if l.startswith("LOG_FILE="))
+    log_file_line = next(line for line in captured.err.splitlines() if line.startswith("LOG_FILE="))
     log_path = Path(log_file_line.split("LOG_FILE=", 1)[1])
     log_text = log_path.read_text(encoding="utf-8")
     assert "stdout: OK" in log_text
@@ -129,6 +129,7 @@ def test_reports_pi_runtime_contract_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Pi JSON contract failures should produce an actionable smoke error."""
+    monkeypatch.setenv("HEPH_PI_PROVIDER", "private-provider-alias")
     monkeypatch.setenv("HEPH_PI_MODEL", "private-test-alias")
     run_pi = Mock(side_effect=RuntimeError("missing session id"))
     monkeypatch.setattr(_mod, "run_pi_session", run_pi)

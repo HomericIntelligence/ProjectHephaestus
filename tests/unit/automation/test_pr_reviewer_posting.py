@@ -93,7 +93,7 @@ class TestNoPrFoundSkipsGracefully:
         """
         gh_diff_failure = RuntimeError("no diff for PR #0 (test fixture)")
         with (
-            patch("hephaestus.automation._review_utils.find_pr_for_issue", return_value=None),
+            patch("hephaestus.automation.pr_reviewer.find_pr_for_issue", return_value=None),
             patch(
                 "hephaestus.automation.pr_reviewer._gh_call",
                 side_effect=gh_diff_failure,

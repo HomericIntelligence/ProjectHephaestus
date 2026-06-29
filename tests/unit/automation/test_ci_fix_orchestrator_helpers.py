@@ -179,6 +179,82 @@ class TestRetryWorktreeChanges:
         assert all(".pytest_cache" not in line for line in changes)
 
 
+class TestPushCiFix:
+    """The post-agent push path normalizes dirty but resolved tracked changes."""
+
+    def test_commits_resolved_dirty_tracked_changes_before_push(
+        self, orchestrator: CIFixOrchestrator, tmp_path: Path
+    ) -> None:
+        with (
+            patch.object(orchestrator, "_head_advanced", return_value=True),
+            patch.object(
+                orchestrator,
+                "_ci_fix_head_is_pushable",
+                side_effect=[False, True],
+            ),
+            patch.object(
+                orchestrator,
+                "_tracked_worktree_changes",
+                return_value=["MM hephaestus/automation/ci_driver.py"],
+            ),
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator.commit_if_changes",
+                return_value=True,
+            ) as commit,
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator."
+                "push_current_branch_with_lease_on_divergence"
+            ) as push,
+        ):
+            pushed = orchestrator.push_ci_fix(
+                worktree_path=tmp_path,
+                pre_agent_sha="abc123",
+                issue_number=1405,
+                pr_number=1633,
+                pr_head_branch="1405-auto-impl",
+                session_id=None,
+            )
+
+        assert pushed is True
+        commit.assert_called_once_with(
+            1405,
+            tmp_path,
+            "claude",
+            committed_log_message="Committed CI-fix residual changes for issue #%s",
+        )
+        push.assert_called_once()
+
+    def test_does_not_commit_unresolved_merge_residuals(
+        self, orchestrator: CIFixOrchestrator, tmp_path: Path
+    ) -> None:
+        with (
+            patch.object(orchestrator, "_head_advanced", return_value=True),
+            patch.object(orchestrator, "_ci_fix_head_is_pushable", return_value=False),
+            patch.object(
+                orchestrator,
+                "_tracked_worktree_changes",
+                return_value=["AA hephaestus/automation/ci_driver.py"],
+            ),
+            patch("hephaestus.automation.ci_fix_orchestrator.commit_if_changes") as commit,
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator."
+                "push_current_branch_with_lease_on_divergence"
+            ) as push,
+        ):
+            pushed = orchestrator.push_ci_fix(
+                worktree_path=tmp_path,
+                pre_agent_sha="abc123",
+                issue_number=1405,
+                pr_number=1633,
+                pr_head_branch="1405-auto-impl",
+                session_id=None,
+            )
+
+        assert pushed is False
+        commit.assert_not_called()
+        push.assert_not_called()
+
+
 class TestRecordRepeatedNoCommit:
     """The forensics marker is written into the state dir."""
 

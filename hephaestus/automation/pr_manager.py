@@ -725,6 +725,7 @@ def commit_changes(
     # X = index status, Y = worktree status
     # Common codes: M (modified), A (added), D (deleted), R (renamed), ?? (untracked)
     files_to_add = []
+    files_to_update = []
 
     for line in result.stdout.splitlines():
         if not line:
@@ -754,16 +755,22 @@ def commit_changes(
             logger.warning("Skipping potential secret file: %s", filename_part)
             continue
 
-        files_to_add.append(filename_part)
+        if "D" in status:
+            files_to_update.append(filename_part)
+        else:
+            files_to_add.append(filename_part)
 
-    if not files_to_add:
+    if not files_to_add and not files_to_update:
         raise RuntimeError(
             f"No non-secret files to commit for issue {issue_ref(issue_number)}. "
             "All changes appear to be secret files."
         )
 
     # Stage the files
-    run(["git", "add", *files_to_add], cwd=worktree_path)
+    if files_to_update:
+        run(["git", "add", "-u", "--", *files_to_update], cwd=worktree_path)
+    if files_to_add:
+        run(["git", "add", "--", *files_to_add], cwd=worktree_path)
 
     # Generate commit message
     issue = fetch_issue_info(issue_number)

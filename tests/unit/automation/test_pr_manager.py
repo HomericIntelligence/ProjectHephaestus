@@ -106,6 +106,28 @@ class TestCommitChanges:
         add_call = run_mock.call_args_list[1].args[0]
         assert "new.py" in add_call
 
+    def test_stages_deleted_files_without_pathspec(self) -> None:
+        porcelain = " D hephaestus/github/fleet_sync.py\n"
+        run_mock = MagicMock(
+            side_effect=[
+                _status(porcelain),
+                _status(""),
+                _status("D\thephaestus/github/fleet_sync.py\n"),
+                _status(" hephaestus/github/fleet_sync.py | 10 ----------\n"),
+                _status(""),
+            ]
+        )
+        issue = MagicMock(title="Delete obsolete module")
+        with (
+            patch.object(pr_manager, "run", run_mock),
+            patch.object(pr_manager, "fetch_issue_info", return_value=issue),
+            patch.object(pr_manager, "_invoke_git_message_agent", return_value="not json"),
+        ):
+            pr_manager.commit_changes(1406, Path("/tmp/wt"))
+
+        add_call = run_mock.call_args_list[1].args[0]
+        assert add_call == ["git", "add", "-u", "--", "hephaestus/github/fleet_sync.py"]
+
     def test_uses_message_agent_for_commit_subject_and_body(self) -> None:
         porcelain = " M LICENSE\n M NOTICE\n"
         run_mock = MagicMock(

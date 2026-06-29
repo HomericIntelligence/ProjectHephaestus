@@ -34,6 +34,7 @@ from hephaestus.io.utils import write_secure
 from .claude_invoke import invoke_claude_with_session
 from .claude_models import implementer_model
 from .git_utils import (
+    commit_if_changes,
     get_repo_slug,
     issue_ref,
     pr_ref,
@@ -82,6 +83,7 @@ _IGNORED_UNTRACKED_PREFIXES: tuple[str, ...] = (
     "dist/",
     "htmlcov/",
 )
+_UNMERGED_STATUS_CODES: frozenset[str] = frozenset({"DD", "AU", "UD", "UA", "DU", "AA", "UU"})
 
 
 class CIFixOrchestrator:
@@ -378,7 +380,13 @@ class CIFixOrchestrator:
             ):
                 return False
         if not self._ci_fix_head_is_pushable(worktree_path, issue_number):
-            return False
+            if not self._commit_residual_ci_fix_changes(
+                worktree_path=worktree_path,
+                issue_number=issue_number,
+            ):
+                return False
+            if not self._ci_fix_head_is_pushable(worktree_path, issue_number):
+                return False
         try:
             push_current_branch_with_lease_on_divergence(
                 worktree_path,
@@ -390,6 +398,33 @@ class CIFixOrchestrator:
         except Exception as push_err:
             logger.error("Issue #%s: git push failed after CI fix: %s", issue_number, push_err)
             return False
+
+    def _commit_residual_ci_fix_changes(self, *, worktree_path: Path, issue_number: int) -> bool:
+        """Commit resolved tracked leftovers from a CI-fix agent turn.
+
+        A CI-fix session can advance HEAD and still leave tracked files dirty
+        (for example ``MM`` after resolving conflicts). Those resolved changes
+        are part of the fix and must be signed/DCO committed before push. True
+        unmerged paths stay blocked: porcelain status codes containing ``U`` are
+        unresolved conflict state, not committable residual work.
+        """
+        dirty_changes = self._tracked_worktree_changes(worktree_path, issue_number)
+        if not dirty_changes:
+            return False
+        unmerged = [line for line in dirty_changes if line[:2] in _UNMERGED_STATUS_CODES]
+        if unmerged:
+            logger.error(
+                "Issue #%s: refusing to commit CI-fix residuals with unresolved merge status: %s",
+                issue_number,
+                ", ".join(unmerged[:10]),
+            )
+            return False
+        return commit_if_changes(
+            issue_number,
+            worktree_path,
+            self._options().agent,
+            committed_log_message="Committed CI-fix residual changes for issue #%s",
+        )
 
     def retry_no_commit_once(
         self,

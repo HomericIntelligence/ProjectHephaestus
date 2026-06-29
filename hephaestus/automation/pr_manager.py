@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -692,6 +693,7 @@ def commit_changes(
     worktree_path: Path,
     agent: str = "claude",
     git_message_timeout: int = DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT,
+    allowed_paths: Collection[str] | None = None,
 ) -> None:
     """Commit changes in worktree, filtering out secret files.
 
@@ -702,6 +704,8 @@ def commit_changes(
             compatibility with existing direct callers.
         git_message_timeout: Timeout in seconds for the lightweight commit-message
             agent. Defaults to :data:`DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT`.
+        allowed_paths: Optional exact set of porcelain paths allowed to be
+            staged. Secret filtering still applies.
 
     Raises:
         RuntimeError: If there are no changes, or all changes are secret files.
@@ -726,6 +730,7 @@ def commit_changes(
     # Common codes: M (modified), A (added), D (deleted), R (renamed), ?? (untracked)
     files_to_add = []
     files_to_update = []
+    allowed_path_set = set(allowed_paths) if allowed_paths is not None else None
 
     for line in result.stdout.splitlines():
         if not line:
@@ -745,6 +750,10 @@ def commit_changes(
         if filename_part.startswith('"') and filename_part.endswith('"'):
             # Remove quotes - git uses C-style escaping
             filename_part = filename_part[1:-1]
+
+        if allowed_path_set is not None and filename_part not in allowed_path_set:
+            logger.debug("Skipping non-allowlisted file: %s", filename_part)
+            continue
 
         # Check if file is a potential secret
         filename = Path(filename_part).name

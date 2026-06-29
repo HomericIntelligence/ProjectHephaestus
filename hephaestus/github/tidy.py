@@ -40,7 +40,7 @@ from hephaestus.cli.utils import (
 from hephaestus.github.client import gh_call
 from hephaestus.github.pr_merge import detect_repo_from_remote
 from hephaestus.logging.utils import get_logger
-from hephaestus.utils.helpers import METADATA_TIMEOUT
+from hephaestus.utils.helpers import METADATA_TIMEOUT, run_subprocess
 
 logger = get_logger(__name__)
 
@@ -92,10 +92,8 @@ def _detect_default_branch(override: str | None) -> str:
 def _working_tree_clean() -> bool:
     """Return True if the git working tree has no uncommitted changes."""
     try:
-        result = subprocess.run(
+        result = run_subprocess(
             ["git", "status", "--porcelain"],
-            capture_output=True,
-            text=True,
             check=False,
             timeout=METADATA_TIMEOUT,
         )
@@ -109,9 +107,8 @@ def _in_git_repo() -> bool:
     """Return True if cwd is inside a git repository."""
     try:
         return (
-            subprocess.run(
+            run_subprocess(
                 ["git", "rev-parse", "--git-dir"],
-                capture_output=True,
                 check=False,
                 timeout=METADATA_TIMEOUT,
             ).returncode
@@ -130,11 +127,8 @@ def _repo_root() -> Path:
     CalledProcessError path: both failures propagate as unhandled exceptions to
     the CLI entrypoint.
     """
-    result = subprocess.run(
+    result = run_subprocess(
         ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=True,
         timeout=METADATA_TIMEOUT,
     )
     return Path(result.stdout.strip())
@@ -276,10 +270,13 @@ do NOT push, do NOT delete anything.
 git -C {worktree_path} push --force-with-lease --force-if-includes origin {branch}
 ```
 
-### 7. Re-arm auto-merge (if a PR exists)
+### 7. Re-arm auto-merge only for implementation-approved PRs
 ```bash
 GH_BIN="hephaestus-gh"
-PR=$("$GH_BIN" pr list --repo {repo_slug} --head {branch} --json number --jq '.[0].number // empty')
+ANY_PR=$("$GH_BIN" pr list --repo {repo_slug} --head {branch} --json number --jq \
+  '.[0].number // empty')
+PR=$("$GH_BIN" pr list --repo {repo_slug} --head {branch} --json number,labels --jq \
+  'map(select(any(.labels[]?; .name == "state:implementation-go"))) | .[0].number // empty')
 if [ -n "$PR" ]; then
   HELPER=""
   for cand in \
@@ -294,6 +291,8 @@ if [ -n "$PR" ]; then
     MERGE_FLAG="--squash"
   fi
   "$GH_BIN" pr merge --auto "$MERGE_FLAG" "$PR"
+elif [ -n "$ANY_PR" ]; then
+  echo "PR #$ANY_PR lacks state:implementation-go; leaving auto-merge disabled"
 fi
 ```
 

@@ -86,6 +86,17 @@ _IGNORED_UNTRACKED_PREFIXES: tuple[str, ...] = (
 _UNMERGED_STATUS_CODES: frozenset[str] = frozenset({"DD", "AU", "UD", "UA", "DU", "AA", "UU"})
 
 
+def _porcelain_path(line: str) -> str:
+    """Return the target path from one ``git status --porcelain`` line."""
+    status = line[:2]
+    filename_part = line[3:] if len(line) > 3 else ""
+    if status.startswith("R") and " -> " in filename_part:
+        filename_part = filename_part.split(" -> ", 1)[1]
+    if filename_part.startswith('"') and filename_part.endswith('"'):
+        filename_part = filename_part[1:-1]
+    return filename_part
+
+
 class CIFixOrchestrator:
     """Orchestrates CI fix sessions using narrow-callable injection.
 
@@ -419,12 +430,26 @@ class CIFixOrchestrator:
                 ", ".join(unmerged[:10]),
             )
             return False
-        return commit_if_changes(
-            issue_number,
-            worktree_path,
-            self._options().agent,
-            committed_log_message="Committed CI-fix residual changes for issue #%s",
+        tracked_paths = tuple(
+            path for line in dirty_changes if line[:2] != "??" and (path := _porcelain_path(line))
         )
+        if not tracked_paths:
+            logger.error(
+                "Issue #%s: CI-fix residuals contained no tracked files to commit",
+                issue_number,
+            )
+            return False
+        try:
+            return commit_if_changes(
+                issue_number,
+                worktree_path,
+                self._options().agent,
+                committed_log_message="Committed CI-fix residual changes for issue #%s",
+                allowed_paths=tracked_paths,
+            )
+        except Exception as exc:
+            logger.error("Issue #%s: failed to commit CI-fix residuals: %s", issue_number, exc)
+            return False
 
     def retry_no_commit_once(
         self,

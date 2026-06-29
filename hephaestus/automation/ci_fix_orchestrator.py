@@ -391,6 +391,11 @@ class CIFixOrchestrator:
             ):
                 return False
         if not self._ci_fix_head_is_pushable(worktree_path, issue_number):
+            if not self._ci_fix_residual_commit_is_safe(
+                worktree_path=worktree_path,
+                issue_number=issue_number,
+            ):
+                return False
             if not self._commit_residual_ci_fix_changes(
                 worktree_path=worktree_path,
                 issue_number=issue_number,
@@ -409,6 +414,58 @@ class CIFixOrchestrator:
         except Exception as push_err:
             logger.error("Issue #%s: git push failed after CI fix: %s", issue_number, push_err)
             return False
+
+    def _ci_fix_residual_commit_is_safe(
+        self,
+        *,
+        worktree_path: Path,
+        issue_number: int,
+        base_ref: str = "origin/main",
+    ) -> bool:
+        """Return True when dirty tracked CI-fix leftovers may be committed."""
+        unmerged = self._git_stdout_for_push_guard(
+            worktree_path,
+            issue_number,
+            ["git", "diff", "--name-only", "--diff-filter=U"],
+            "failed to inspect merge state before residual commit",
+        )
+        if unmerged is None:
+            return False
+        unmerged_paths = [line for line in unmerged.splitlines() if line.strip()]
+        if unmerged_paths:
+            logger.error(
+                "Issue #%s: refusing to commit CI-fix residuals with unresolved merge paths: %s",
+                issue_number,
+                ", ".join(unmerged_paths[:10]),
+            )
+            return False
+
+        ahead = self._git_stdout_for_push_guard(
+            worktree_path,
+            issue_number,
+            ["git", "rev-list", "--count", f"{base_ref}..HEAD"],
+            f"failed to inspect HEAD ahead of {base_ref} before residual commit",
+        )
+        if ahead is None:
+            return False
+        try:
+            ahead_count = int(ahead.strip() or "0")
+        except ValueError:
+            logger.error(
+                "Issue #%s: refusing to commit CI-fix residuals with invalid ahead count: %r",
+                issue_number,
+                ahead,
+            )
+            return False
+        if ahead_count <= 0:
+            logger.error(
+                "Issue #%s: refusing to commit CI-fix residuals because HEAD has no commits "
+                "ahead of %s",
+                issue_number,
+                base_ref,
+            )
+            return False
+        return True
 
     def _commit_residual_ci_fix_changes(self, *, worktree_path: Path, issue_number: int) -> bool:
         """Commit resolved tracked leftovers from a CI-fix agent turn.

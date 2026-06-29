@@ -193,6 +193,7 @@ class TestPushCiFix:
                 "_ci_fix_head_is_pushable",
                 side_effect=[False, True],
             ),
+            patch.object(orchestrator, "_ci_fix_residual_commit_is_safe", return_value=True),
             patch.object(
                 orchestrator,
                 "_tracked_worktree_changes",
@@ -236,6 +237,7 @@ class TestPushCiFix:
                 "_ci_fix_head_is_pushable",
                 side_effect=[False, True],
             ),
+            patch.object(orchestrator, "_ci_fix_residual_commit_is_safe", return_value=True),
             patch.object(
                 orchestrator,
                 "_tracked_worktree_changes",
@@ -282,6 +284,7 @@ class TestPushCiFix:
         with (
             patch.object(orchestrator, "_head_advanced", return_value=True),
             patch.object(orchestrator, "_ci_fix_head_is_pushable", return_value=False),
+            patch.object(orchestrator, "_ci_fix_residual_commit_is_safe", return_value=True),
             patch.object(
                 orchestrator,
                 "_tracked_worktree_changes",
@@ -318,6 +321,7 @@ class TestPushCiFix:
                 "_ci_fix_head_is_pushable",
                 side_effect=[False, False],
             ),
+            patch.object(orchestrator, "_ci_fix_residual_commit_is_safe", return_value=True),
             patch.object(
                 orchestrator,
                 "_tracked_worktree_changes",
@@ -344,12 +348,91 @@ class TestPushCiFix:
         assert pushed is False
         push.assert_not_called()
 
+    def test_does_not_commit_residuals_when_head_is_not_ahead(
+        self, orchestrator: CIFixOrchestrator, tmp_path: Path
+    ) -> None:
+        responses = [
+            MagicMock(stdout="", stderr="", returncode=0),  # no unmerged paths
+            MagicMock(stdout="0\n", stderr="", returncode=0),  # no commits ahead of origin/main
+        ]
+        with (
+            patch.object(orchestrator, "_head_advanced", return_value=True),
+            patch.object(orchestrator, "_ci_fix_head_is_pushable", return_value=False),
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator.run",
+                side_effect=responses,
+            ),
+            patch.object(
+                orchestrator,
+                "_tracked_worktree_changes",
+                return_value=["MM hephaestus/automation/ci_driver.py"],
+            ) as tracked,
+            patch("hephaestus.automation.ci_fix_orchestrator.commit_if_changes") as commit,
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator."
+                "push_current_branch_with_lease_on_divergence"
+            ) as push,
+        ):
+            pushed = orchestrator.push_ci_fix(
+                worktree_path=tmp_path,
+                pre_agent_sha="abc123",
+                issue_number=1405,
+                pr_number=1633,
+                pr_head_branch="1405-auto-impl",
+                session_id=None,
+            )
+
+        assert pushed is False
+        tracked.assert_not_called()
+        commit.assert_not_called()
+        push.assert_not_called()
+
+    def test_does_not_commit_residuals_when_push_guard_cannot_inspect_ahead(
+        self, orchestrator: CIFixOrchestrator, tmp_path: Path
+    ) -> None:
+        responses = [
+            MagicMock(stdout="", stderr="", returncode=0),  # no unmerged paths
+            MagicMock(stdout="fatal: bad revision\n", stderr="", returncode=128),
+        ]
+        with (
+            patch.object(orchestrator, "_head_advanced", return_value=True),
+            patch.object(orchestrator, "_ci_fix_head_is_pushable", return_value=False),
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator.run",
+                side_effect=responses,
+            ),
+            patch.object(
+                orchestrator,
+                "_tracked_worktree_changes",
+                return_value=["MM hephaestus/automation/ci_driver.py"],
+            ) as tracked,
+            patch("hephaestus.automation.ci_fix_orchestrator.commit_if_changes") as commit,
+            patch(
+                "hephaestus.automation.ci_fix_orchestrator."
+                "push_current_branch_with_lease_on_divergence"
+            ) as push,
+        ):
+            pushed = orchestrator.push_ci_fix(
+                worktree_path=tmp_path,
+                pre_agent_sha="abc123",
+                issue_number=1405,
+                pr_number=1633,
+                pr_head_branch="1405-auto-impl",
+                session_id=None,
+            )
+
+        assert pushed is False
+        tracked.assert_not_called()
+        commit.assert_not_called()
+        push.assert_not_called()
+
     def test_does_not_commit_unresolved_merge_residuals(
         self, orchestrator: CIFixOrchestrator, tmp_path: Path
     ) -> None:
         with (
             patch.object(orchestrator, "_head_advanced", return_value=True),
             patch.object(orchestrator, "_ci_fix_head_is_pushable", return_value=False),
+            patch.object(orchestrator, "_ci_fix_residual_commit_is_safe", return_value=True),
             patch.object(
                 orchestrator,
                 "_tracked_worktree_changes",

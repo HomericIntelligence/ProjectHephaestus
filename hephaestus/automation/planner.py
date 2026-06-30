@@ -35,6 +35,7 @@ from ._review_utils import (
     close_issue_as_covered,
     find_merged_closing_pr,
     find_pr_for_issue,
+    work_report_context,
 )
 from .advise_runner import advise_skipped, ensure_mnemosyne, run_advise
 from .claude_models import advise_model, codex_advise_model
@@ -57,7 +58,6 @@ from .prompts import get_advise_prompt_builder
 from .review_state import is_plan_review_go
 from .session_naming import AGENT_ADVISE
 from .status_tracker import StatusTracker
-from .work_report import work_report_context
 
 __all__ = ["MAX_REVIEW_ITERATIONS", "Planner", "main"]
 

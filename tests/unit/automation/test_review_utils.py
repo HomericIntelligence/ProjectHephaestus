@@ -240,6 +240,60 @@ class TestPrintWorkerSummary:
         assert "\nFailed issues:" in caplog.messages
 
 
+class TestDrainCompletedFutures:
+    """Tests for the shared future-drain polling helper."""
+
+    @staticmethod
+    def _helper() -> Any:
+        helper = getattr(review_utils, "drain_completed_futures", None)
+        assert helper is not None, "drain_completed_futures helper is missing"
+        return helper
+
+    def test_yields_all_completed_futures(self) -> None:
+        from concurrent.futures import Future
+
+        futures: dict[Future[int], int] = {}
+        for value in (1, 2, 3):
+            future: Future[int] = Future()
+            future.set_result(value)
+            futures[future] = value
+
+        seen: list[int] = []
+        for future in self._helper()(futures, timeout=0.1):
+            seen.append(futures.pop(future))
+
+        assert sorted(seen) == [1, 2, 3]
+        assert futures == {}
+
+    def test_backs_off_and_logs_on_wait_failure(self, caplog: pytest.LogCaptureFixture) -> None:
+        drain_completed_futures = self._helper()
+        fut = MagicMock()
+        futures = {fut: 1}
+        calls = {"count": 0}
+
+        def fake_wait(_keys: Any, timeout: float, return_when: Any) -> tuple[set[Any], set[Any]]:
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError("transient")
+            futures.pop(fut)
+            return ({fut}, set())
+
+        with (
+            patch("hephaestus.automation._review_utils.wait", side_effect=fake_wait, create=True),
+            patch("hephaestus.automation._review_utils.time.sleep", create=True) as sleep_mock,
+            caplog.at_level(logging.WARNING),
+        ):
+            list(drain_completed_futures(futures, timeout=0.1))
+
+        sleep_mock.assert_called_once_with(0.1)
+        assert any(
+            "futures.wait() raised RuntimeError" in record.message for record in caplog.records
+        )
+
+    def test_empty_futures_yields_nothing(self) -> None:
+        assert list(self._helper()({})) == []
+
+
 class TestEnsureStateDir:
     """Tests for the canonical automation state-dir helper."""
 

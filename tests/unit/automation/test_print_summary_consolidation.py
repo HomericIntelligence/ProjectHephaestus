@@ -1,4 +1,15 @@
-"""Regression tests for the consolidated worker-summary printers (#1461)."""
+"""Regression tests for issue #1461 worker-summary consolidation.
+
+The four reviewer/driver classes must delegate worker-summary printing to
+``print_worker_summary`` rather than re-implementing it (DRY).
+
+The four classes ``CIDriver``, ``PRReviewer``, ``AddressReviewer`` and
+``PlanReviewer`` once each carried a near-identical ``_print_summary`` body
+(total/successful/failed computation, the ``"=" * 60`` banner, and the
+failed-issue loop). PR #1612 consolidated that into the single canonical
+``print_worker_summary`` helper in ``_review_utils.py``; these tests guard
+against the duplication drifting back in.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +27,9 @@ from hephaestus.automation.plan_reviewer import PlanReviewer
 from hephaestus.automation.pr_reviewer import PRReviewer
 
 _AUTOMATION_DIR = Path(automation_pkg.__file__).parent
+
+# The four classes the issue named, the module that holds each one, and the
+# exact ``print_worker_summary`` call the delegate must make.
 _DELEGATING_MODULES = (
     "ci_driver.py",
     "pr_reviewer.py",
@@ -29,7 +43,10 @@ def test_named_summary_modules_do_not_inline_standard_separator(module_name: str
     """Issue-named modules must not reintroduce the duplicated summary banner."""
     source = (_AUTOMATION_DIR / module_name).read_text(encoding="utf-8")
 
-    assert '"=" * 60' not in source
+    assert '"=" * 60' not in source, (
+        f"{module_name} re-introduced an inline summary separator; it must "
+        f"delegate to print_worker_summary (issue #1461)."
+    )
 
 
 @pytest.mark.parametrize(
@@ -71,6 +88,6 @@ def test_named_summary_methods_delegate_to_print_worker_summary(
     results = {1: WorkerResult(issue_number=1, success=True)}
 
     with patch(patch_target) as summary:
-        reviewer_cls._print_summary(object(), results)
+        reviewer_cls._print_summary(object.__new__(reviewer_cls), results)
 
     summary.assert_called_once_with(title, results, **expected_kwargs)

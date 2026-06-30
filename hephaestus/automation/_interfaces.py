@@ -20,7 +20,8 @@ class ReviewerProtocol(Protocol):
               PlanReviewer.run (plan_reviewer.py:99).
     """
 
-    def run(self) -> Any: ...
+    def run(self) -> Any:
+        """Run the review phase for a single issue."""
 
 
 @runtime_checkable
@@ -32,12 +33,23 @@ class PRDiscoveryProtocol(Protocol):
     list_open_prs_remaining:279, pr_merge_state:375.
     """
 
-    def resolve_viewer_login(self) -> str: ...
-    def discover_bot_prs(self) -> dict[int, int]: ...
-    def discover_failing_prs(self, *args: Any, **kwargs: Any) -> Any: ...
-    def is_bot_pr_mode(self, issue_number: int, pr_number: int) -> bool: ...
-    def list_open_prs_remaining(self) -> list[dict[str, Any]]: ...
-    def pr_merge_state(self, pr_number: Any) -> tuple[str, str]: ...
+    def resolve_viewer_login(self) -> str:
+        """Resolve the authenticated viewer's GitHub login."""
+
+    def discover_bot_prs(self) -> dict[int, int]:
+        """Discover bot-authored PRs mapped by issue number."""
+
+    def discover_failing_prs(self, *args: Any, **kwargs: Any) -> Any:
+        """Discover PRs with failing CI checks."""
+
+    def is_bot_pr_mode(self, issue_number: int, pr_number: int) -> bool:
+        """Check if issue has an associated bot-authored PR."""
+
+    def list_open_prs_remaining(self) -> list[dict[str, Any]]:
+        """List all open PRs not yet processed."""
+
+    def pr_merge_state(self, pr_number: Any) -> tuple[str, str]:
+        """Get the merge state and status of a PR."""
 
 
 @runtime_checkable
@@ -49,14 +61,29 @@ class StatusTrackerProtocol(Protocol):
     wait_for_available:102, wait_all_complete:118, clear:134.
     """
 
-    def acquire_slot(self, timeout: float | None = ...) -> int | None: ...
-    def release_slot(self, slot_id: int) -> None: ...
-    def update_slot(self, slot_id: int, status: str) -> None: ...
-    def get_status(self) -> list[str | None]: ...
-    def get_active_count(self) -> int: ...
-    def wait_for_available(self, timeout: float | None = ...) -> bool: ...
-    def wait_all_complete(self, timeout: float | None = ...) -> bool: ...
-    def clear(self) -> None: ...
+    def acquire_slot(self, timeout: float | None = ...) -> int | None:
+        """Acquire a processing slot, blocking until one is available."""
+
+    def release_slot(self, slot_id: int) -> None:
+        """Release a previously acquired slot."""
+
+    def update_slot(self, slot_id: int, status: str) -> None:
+        """Update the status of a slot."""
+
+    def get_status(self) -> list[str | None]:
+        """Get the current status of all slots."""
+
+    def get_active_count(self) -> int:
+        """Get the count of active slots."""
+
+    def wait_for_available(self, timeout: float | None = ...) -> bool:
+        """Wait until a slot becomes available."""
+
+    def wait_all_complete(self, timeout: float | None = ...) -> bool:
+        """Wait until all slots are released."""
+
+    def clear(self) -> None:
+        """Clear all slots."""
 
 
 @runtime_checkable
@@ -70,15 +97,32 @@ class WorktreeManagerProtocol(Protocol):
     """
 
     @property
-    def base_branch(self) -> str: ...
-    def refresh_base_branch(self) -> str: ...
-    def create_worktree(self, *args: Any, **kwargs: Any) -> Any: ...
-    def remove_worktree(self, issue_number: int, force: bool = ...) -> None: ...
-    def get_worktree(self, issue_number: int) -> Path | None: ...
-    def cleanup_all(self, force: bool = ...) -> None: ...
-    def prune_worktrees(self) -> None: ...
-    def list_worktrees(self, *, raise_on_error: bool = ...) -> list[dict[str, str]]: ...
-    def ensure_branch_deleted(self, branch_name: str) -> None: ...
+    def base_branch(self) -> str:
+        """Get the base branch for worktree creation."""
+
+    def refresh_base_branch(self) -> str:
+        """Refresh the base branch and return its current name."""
+
+    def create_worktree(self, *args: Any, **kwargs: Any) -> Any:
+        """Create a new git worktree for an issue."""
+
+    def remove_worktree(self, issue_number: int, force: bool = ...) -> None:
+        """Remove a worktree for an issue."""
+
+    def get_worktree(self, issue_number: int) -> Path | None:
+        """Get the path to a worktree or None if not found."""
+
+    def cleanup_all(self, force: bool = ...) -> None:
+        """Clean up all worktrees."""
+
+    def prune_worktrees(self) -> None:
+        """Prune stale worktrees."""
+
+    def list_worktrees(self, *, raise_on_error: bool = ...) -> list[dict[str, str]]:
+        """List all worktrees."""
+
+    def ensure_branch_deleted(self, branch_name: str) -> None:
+        """Ensure a branch is deleted."""
 
 
 @runtime_checkable
@@ -90,11 +134,20 @@ class PlannerStateProtocol(Protocol):
     has_existing_plan:224.
     """
 
-    def filter(self) -> list[int]: ...
-    def get_cached_labels(self, issue_number: int) -> list[str] | None: ...
-    def prefetch_comments(self, issue_numbers: list[int]) -> None: ...
-    def get_cached_comments(self, issue_number: int) -> list[dict[str, Any]] | None: ...
-    def has_existing_plan(self, issue_number: int) -> bool: ...
+    def filter(self) -> list[int]:
+        """Filter and return matching issue numbers."""
+
+    def get_cached_labels(self, issue_number: int) -> list[str] | None:
+        """Get cached labels for an issue or None if not prefetched."""
+
+    def prefetch_comments(self, issue_numbers: list[int]) -> None:
+        """Prefetch comments for multiple issues."""
+
+    def get_cached_comments(self, issue_number: int) -> list[dict[str, Any]] | None:
+        """Get cached comments for an issue or None if not prefetched."""
+
+    def has_existing_plan(self, issue_number: int) -> bool:
+        """Check if a plan exists for an issue."""
 
 
 @runtime_checkable
@@ -106,11 +159,20 @@ class ImplementerStateProtocol(Protocol):
     """
 
     @property
-    def lock(self) -> Any: ...
-    def get_or_create(self, issue_number: int) -> Any: ...
-    def get(self, issue_number: int) -> Any | None: ...
-    def save(self, state: Any) -> None: ...
-    def load_all(self) -> None: ...
+    def lock(self) -> Any:
+        """Get the state store lock."""
+
+    def get_or_create(self, issue_number: int) -> Any:
+        """Get or create state for an issue."""
+
+    def get(self, issue_number: int) -> Any | None:
+        """Get state for an issue or None if not found."""
+
+    def save(self, state: Any) -> None:
+        """Save state."""
+
+    def load_all(self) -> None:
+        """Load all state."""
 
 
 # The two state managers expose DISJOINT public surfaces (verified:

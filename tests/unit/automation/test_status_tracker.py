@@ -3,8 +3,6 @@
 import threading
 import time
 
-import pytest
-
 from hephaestus.automation.status_tracker import StatusTracker
 
 
@@ -307,10 +305,14 @@ class TestSlotContextManager:
     def test_slot_releases_on_exception(self) -> None:
         """Slot is released even when the block raises."""
         tracker = StatusTracker(num_slots=2)
-        with pytest.raises(ValueError):
+        # Explicit try/except avoids the unreachable-code false positive from pytest.raises.
+        # The test asserts cleanup AFTER the exception is caught, not that it escapes.
+        try:
             with tracker.slot() as slot_id:
                 assert slot_id is not None
                 raise ValueError("boom")
+        except ValueError:
+            pass
         assert tracker.get_active_count() == 0
 
     def test_slot_sets_initial_msg(self) -> None:

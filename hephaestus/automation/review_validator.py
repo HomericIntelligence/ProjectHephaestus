@@ -32,7 +32,6 @@ import json
 import logging
 import re
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -83,25 +82,6 @@ _BY_DESIGN_PHRASES = (
     "nosec",
     "type: ignore",
 )
-
-
-@dataclass(frozen=True)
-class _ValidationContext:
-    pr_number: int
-    issue_number: int
-    worktree_path: Path
-    diff_text: str
-    agent: str
-    iteration: int
-    state_dir: Path
-    timeout: int
-
-
-@dataclass
-class _ReopenReview:
-    comments: list[dict[str, Any]]
-    pathless: list[dict[str, Any]]
-    new_keys: set[str]
 
 
 def _thread_key(*, path: Any, line: Any, body: Any) -> str:
@@ -257,152 +237,6 @@ def _run_validation_session(
     )
 
 
-def _serialize_prior_threads(prior_threads: list[dict[str, Any]]) -> str:
-    """Serialize prior thread fields for the read-only validation prompt."""
-    return json.dumps(
-        [
-            {
-                "thread_id": thread.get("id", ""),
-                "path": thread.get("path", ""),
-                "line": thread.get("line"),
-                "body": thread.get("body", ""),
-            }
-            for thread in prior_threads
-        ]
-    )
-
-
-def _run_validation_for_prior_threads(
-    context: _ValidationContext,
-    prior_threads: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Run validation using the compact context assembled by the orchestrator."""
-    return _run_validation_session(
-        pr_number=context.pr_number,
-        issue_number=context.issue_number,
-        worktree_path=context.worktree_path,
-        prior_comments_json=_serialize_prior_threads(prior_threads),
-        diff_text=context.diff_text,
-        agent=context.agent,
-        review_agent=reviewer_agent(AGENT_PR_REVIEWER, context.iteration),
-        state_dir=context.state_dir,
-        timeout=context.timeout,
-    )
-
-
-def _thread_ids(items: list[dict[str, Any]]) -> set[str]:
-    """Return non-empty ``thread_id`` values from validator result items."""
-    return {str(item.get("thread_id")) for item in items if item.get("thread_id")}
-
-
-def _reopen_body(item: dict[str, Any], *, recurring: bool) -> str:
-    """Build the body for a re-opened prior review finding."""
-    detail = (item.get("detail") or "").strip() or "prior review comment not addressed"
-    prefix = (
-        "Still unaddressed (recurring; not documented as by-design)"
-        if recurring
-        else "prior review comment not addressed"
-    )
-    body = f"Re-opening: {prefix} — {detail}"
-    original = (item.get("original_body") or "").strip()
-    if original:
-        quoted = "\n".join(f"> {line}" for line in original.splitlines())
-        body = f"{body}\n\n{quoted}"
-    return body
-
-
-def _is_documented_recurring(
-    context: _ValidationContext,
-    *,
-    path: str,
-    line: Any,
-    key: str,
-    seen_keys: set[str],
-) -> bool:
-    """Return True when a recurring finding is documented as by-design in source."""
-    if key not in seen_keys or not _source_documents_decision(context.worktree_path, path, line):
-        return False
-    logger.info(
-        "PR %s R%s: recurring finding at %s:%s is documented as by-design "
-        "in source — not re-adding (accepted design decision)",
-        pr_ref(context.pr_number),
-        context.iteration,
-        path or "(PR-level)",
-        line if isinstance(line, int) else "?",
-    )
-    return True
-
-
-def _build_reopen_review(
-    context: _ValidationContext,
-    unaddressed: list[dict[str, Any]],
-    seen_keys: set[str],
-) -> _ReopenReview:
-    """Build inline and PR-level re-open payloads for unaddressed findings."""
-    comments: list[dict[str, Any]] = []
-    pathless: list[dict[str, Any]] = []
-    new_keys: set[str] = set()
-
-    for item in unaddressed:
-        path = item.get("path") or ""
-        line = item.get("line")
-        original = (item.get("original_body") or "").strip()
-        key = _thread_key(path=path, line=line, body=original or item.get("detail"))
-
-        if _is_documented_recurring(context, path=path, line=line, key=key, seen_keys=seen_keys):
-            continue
-
-        body = _reopen_body(item, recurring=key in seen_keys)
-        new_keys.add(key)
-        if not path:
-            pathless.append({"body": body})
-            continue
-
-        comment: dict[str, Any] = {"path": path, "body": body, "side": "RIGHT"}
-        if isinstance(line, int):
-            comment["line"] = line
-        comments.append(comment)
-
-    return _ReopenReview(comments=comments, pathless=pathless, new_keys=new_keys)
-
-
-def _reopen_summary(review: _ReopenReview) -> str:
-    """Build the review summary for inline and pathless re-open findings."""
-    summary_parts: list[str] = []
-    if review.comments:
-        summary_parts.append(
-            f"Re-opening {len(review.comments)} prior review comment(s) "
-            "the current diff does not address."
-        )
-    if review.pathless:
-        bullets = "\n".join(f"- {item['body']}" for item in review.pathless)
-        summary_parts.append(
-            f"{len(review.pathless)} unaddressed PR-level review comment(s) remain:\n{bullets}"
-        )
-    return "\n\n".join(summary_parts)
-
-
-def _post_reopen_review(context: _ValidationContext, review: _ReopenReview) -> list[str]:
-    """Post the re-open review and return any inline thread IDs GitHub created."""
-    thread_ids = gh_pr_review_post(
-        pr_number=context.pr_number,
-        comments=review.comments,
-        summary=_reopen_summary(review),
-        dry_run=False,
-        # #1083: if the line already carries a bot comment, edit it in place
-        # rather than stacking a duplicate re-open thread.
-        dedupe_existing=True,
-    )
-    logger.info(
-        "PR %s R%s: re-opened %s inline + %s PR-level unaddressed review comment(s)",
-        pr_ref(context.pr_number),
-        context.iteration,
-        len(thread_ids),
-        len(review.pathless),
-    )
-    return thread_ids
-
-
 def validate_prior_comments_addressed(
     *,
     pr_number: int,
@@ -417,12 +251,31 @@ def validate_prior_comments_addressed(
     prior_reopened_keys: set[str] | None = None,
     timeout: int = DEFAULT_AGENT_TIMEOUT,
 ) -> tuple[list[str], bool, set[str]]:
-    """Validate, resolve, and re-open prior bot review threads.
+    """Re-open prior review comments the current diff does not address.
 
-    Returns ``(reopened_thread_ids, is_clean, reopened_keys)``. ``is_clean`` is
-    false only when the validator posts at least one inline or PR-level re-open.
-    ``reopened_keys`` carries stable finding keys across rounds so documented
-    recurring by-design findings can converge.
+    Runs a read-only sub-agent comparing each ``prior_threads`` comment against
+    ``diff_text``; for each judged NOT addressed, posts a NEW inline thread on
+    the same path/line and reports not-clean so the caller drives another
+    address iteration.
+
+    Convergence (#1329): a finding already re-opened in a prior round (same
+    :func:`_thread_key`) is RECURRING and is NOT re-added when the validator
+    marked it won't-fix or the current source documents the design decision
+    (:func:`_source_documents_decision`); only a genuinely unaddressed,
+    undocumented finding re-opens.
+
+    Args:
+        pr_number / issue_number / worktree_path / prior_threads / diff_text /
+        agent / iteration / state_dir / timeout: see the validation pipeline.
+        dry_run: skip the agent call and posting.
+        prior_reopened_keys: stable keys re-opened in EARLIER rounds, threaded
+            forward by the loop (``None`` on the first round).
+
+    Returns:
+        ``(reopened_thread_ids, is_clean, reopened_keys)``. ``is_clean`` is True
+        when nothing was re-opened; addressed prior threads are resolved in place
+        (#1083). ``reopened_keys`` is fed back as ``prior_reopened_keys``.
+
     """
     seen_keys: set[str] = set(prior_reopened_keys or set())
     if not prior_threads:
@@ -431,32 +284,236 @@ def validate_prior_comments_addressed(
         logger.info("[DRY RUN] Would validate prior comments on PR #%s", pr_number)
         return [], True, seen_keys
 
-    context = _ValidationContext(
+    unaddressed = _run_validation_and_reconcile(
         pr_number=pr_number,
         issue_number=issue_number,
         worktree_path=worktree_path,
+        prior_threads=prior_threads,
         diff_text=diff_text,
         agent=agent,
         iteration=iteration,
         state_dir=state_dir,
         timeout=timeout,
     )
-    unaddressed, wont_fix = _run_validation_for_prior_threads(context, prior_threads)
-    unaddressed_ids = _thread_ids(unaddressed)
-    wont_fix_ids = _thread_ids(wont_fix)
-
-    _dismiss_wont_fix_prior_threads(prior_threads, wont_fix, wont_fix_ids)
-    _resolve_addressed_prior_threads(prior_threads, unaddressed_ids | wont_fix_ids)
-
     if not unaddressed:
         return [], True, seen_keys
 
-    review = _build_reopen_review(context, unaddressed, seen_keys)
-    if not review.comments and not review.pathless:
+    comments, pathless, new_keys = _classify_unaddressed_findings(
+        unaddressed=unaddressed,
+        seen_keys=seen_keys,
+        worktree_path=worktree_path,
+        pr_number=pr_number,
+        iteration=iteration,
+    )
+    if not comments and not pathless:
+        # Everything unaddressed was a documented-by-design recurrence → clean.
         return [], True, seen_keys
 
-    thread_ids = _post_reopen_review(context, review)
-    return thread_ids, False, seen_keys | review.new_keys
+    thread_ids = _post_reopened_findings(
+        pr_number=pr_number,
+        iteration=iteration,
+        comments=comments,
+        pathless=pathless,
+    )
+    return thread_ids, False, seen_keys | new_keys
+
+
+def _run_validation_and_reconcile(
+    *,
+    pr_number: int,
+    issue_number: int,
+    worktree_path: Path,
+    prior_threads: list[dict[str, Any]],
+    diff_text: str,
+    agent: str,
+    iteration: int,
+    state_dir: Path,
+    timeout: int,
+) -> list[dict[str, Any]]:
+    """Run the validation sub-agent and reconcile prior threads; return unaddressed.
+
+    Serializes ``prior_threads`` to JSON, runs the read-only validation session
+    (:func:`_run_validation_session`), then (a) dismisses each won't-fix thread
+    with a durable marker (#1163) and (b) resolves every prior thread the agent
+    confirmed addressed (#1083), matching on GraphQL thread_id not (path,line)
+    (#1085).
+
+    Returns:
+        The list of unaddressed finding dicts the sub-agent flagged (possibly
+        empty — caller treats empty as clean).
+
+    """
+    prior_comments_json = json.dumps(
+        [
+            {
+                "thread_id": t.get("id", ""),
+                "path": t.get("path", ""),
+                "line": t.get("line"),
+                "body": t.get("body", ""),
+            }
+            for t in prior_threads
+        ]
+    )
+
+    unaddressed, wont_fix = _run_validation_session(
+        pr_number=pr_number,
+        issue_number=issue_number,
+        worktree_path=worktree_path,
+        prior_comments_json=prior_comments_json,
+        diff_text=diff_text,
+        agent=agent,
+        review_agent=reviewer_agent(AGENT_PR_REVIEWER, iteration),
+        state_dir=state_dir,
+        timeout=timeout,
+    )
+
+    # Won't-fix dismissals (#1163): resolve each thread the agent judged
+    # intentional-by-design with a durable WONT_FIX_MARKER reply. A marked thread
+    # is skipped forever (see _filter_wont_fix_threads at the fetch boundary), so
+    # an intentional-design finding cannot stack duplicate re-open threads.
+    wont_fix_ids = {
+        str(item.get("thread_id"))
+        for item in wont_fix
+        if isinstance(item, dict) and item.get("thread_id")
+    }
+    _dismiss_wont_fix_prior_threads(prior_threads, wont_fix, wont_fix_ids)
+
+    # Resolve the threads the validator confirms addressed (#1083). A prior
+    # thread is "addressed" when its thread_id is NOT among the unaddressed items
+    # the sub-agent flagged AND not a won't-fix dismissal. Matching on the GraphQL
+    # thread_id (not (path, line)) is required so two threads on the same line
+    # resolve independently and a path-normalization mismatch can't silently
+    # resolve an unaddressed thread (#1085). The sub-agent echoes back the
+    # thread_id we provided.
+    unaddressed_ids = {
+        str(item.get("thread_id"))
+        for item in unaddressed
+        if isinstance(item, dict) and item.get("thread_id")
+    }
+    _resolve_addressed_prior_threads(prior_threads, unaddressed_ids | wont_fix_ids)
+    return unaddressed
+
+
+def _classify_unaddressed_findings(
+    *,
+    unaddressed: list[dict[str, Any]],
+    seen_keys: set[str],
+    worktree_path: Path,
+    pr_number: int,
+    iteration: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[str]]:
+    """Split unaddressed sub-agent findings into postable comments + PR-level items.
+
+    Applies the #1329 convergence rule: a recurring finding (key already in
+    ``seen_keys``) whose source now documents the design decision
+    (:func:`_source_documents_decision`) is dropped rather than re-added.
+
+    Returns:
+        ``(comments, pathless, new_keys)``. When both ``comments`` and
+        ``pathless`` are empty, every unaddressed finding was a
+        documented-by-design recurrence and the caller treats the pass as clean.
+
+    """
+    comments: list[dict[str, Any]] = []
+    pathless: list[dict[str, Any]] = []
+    new_keys: set[str] = set()
+    for item in unaddressed:
+        path = item.get("path") or ""
+        line = item.get("line")
+        original = (item.get("original_body") or "").strip()
+        # Stable cross-round identity (#1329): a finding re-opened last round
+        # carries the SAME key even though its GraphQL thread_id was renewed.
+        key = _thread_key(path=path, line=line, body=original or item.get("detail"))
+        recurring = key in seen_keys
+
+        if recurring and _source_documents_decision(worktree_path, path, line):
+            # The same finding was re-opened before AND the current source at
+            # that location documents why the reviewer's suggestion was
+            # intentionally not taken — accept the design decision and stop
+            # re-adding it, so a documented by-design choice no longer makes the
+            # loop unwinnable (#1329). The key stays in ``seen_keys`` (carried
+            # forward) so any later round keeps recognising it as
+            # recurring-and-documented and keeps suppressing it.
+            logger.info(
+                "PR %s R%s: recurring finding at %s:%s is documented as by-design "
+                "in source — not re-adding (accepted design decision)",
+                pr_ref(pr_number),
+                iteration,
+                path or "(PR-level)",
+                line if isinstance(line, int) else "?",
+            )
+            continue
+
+        detail = (item.get("detail") or "").strip() or "prior review comment not addressed"
+        prefix = (
+            "Still unaddressed (recurring; not documented as by-design)"
+            if recurring
+            else "prior review comment not addressed"
+        )
+        body = f"Re-opening: {prefix} — {detail}"
+        if original:
+            quoted = "\n".join(f"> {ln}" for ln in original.splitlines())
+            body = f"{body}\n\n{quoted}"
+
+        new_keys.add(key)
+        if not path:
+            # PR-level (pathless) findings cannot be inline threads. Rather than
+            # silently dropping them (#1329), surface them at PR level in the
+            # review summary so the loop still treats the pass as not-clean and
+            # the finding stays visible.
+            pathless.append({"body": body})
+            continue
+
+        comment: dict[str, Any] = {"path": path, "body": body, "side": "RIGHT"}
+        if isinstance(line, int):
+            comment["line"] = line
+        comments.append(comment)
+    return comments, pathless, new_keys
+
+
+def _post_reopened_findings(
+    *,
+    pr_number: int,
+    iteration: int,
+    comments: list[dict[str, Any]],
+    pathless: list[dict[str, Any]],
+) -> list[str]:
+    """Post re-opened inline comments + a PR-level summary; return new thread IDs.
+
+    PR-level (pathless) findings cannot be inline threads, so they are appended
+    to the review summary rather than dropped (#1329). Inline comments use
+    ``dedupe_existing=True`` so an existing bot comment on a line is edited in
+    place instead of stacking a duplicate (#1083).
+    """
+    summary_parts = []
+    if comments:
+        summary_parts.append(
+            f"Re-opening {len(comments)} prior review comment(s) the current diff does not address."
+        )
+    if pathless:
+        # Append the PR-level findings to the summary so they are not lost.
+        bullets = "\n".join(f"- {p['body']}" for p in pathless)
+        summary_parts.append(
+            f"{len(pathless)} unaddressed PR-level review comment(s) remain:\n{bullets}"
+        )
+
+    thread_ids = gh_pr_review_post(
+        pr_number=pr_number,
+        comments=comments,
+        summary="\n\n".join(summary_parts),
+        dry_run=False,
+        # #1083: if the line already carries a bot comment, edit it in place
+        # rather than stacking a duplicate re-open thread.
+        dedupe_existing=True,
+    )
+    logger.info(
+        "PR %s R%s: re-opened %s inline + %s PR-level unaddressed review comment(s)",
+        pr_ref(pr_number),
+        iteration,
+        len(thread_ids),
+        len(pathless),
+    )
+    return thread_ids
 
 
 def _dismiss_wont_fix_prior_threads(

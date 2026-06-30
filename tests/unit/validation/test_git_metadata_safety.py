@@ -69,7 +69,11 @@ def _tracked_files() -> list[Path]:
         check=True,
         capture_output=True,
     )
-    return [REPO_ROOT / path.decode() for path in result.stdout.split(b"\0") if path]
+    return [
+        candidate
+        for path in result.stdout.split(b"\0")
+        if path and (candidate := REPO_ROOT / path.decode()).exists()
+    ]
 
 
 def test_project_scripts_do_not_flip_repository_to_bare_mode() -> None:
@@ -78,8 +82,6 @@ def test_project_scripts_do_not_flip_repository_to_bare_mode() -> None:
     for path in _tracked_files():
         try:
             text = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            continue
         except UnicodeDecodeError:
             continue
 

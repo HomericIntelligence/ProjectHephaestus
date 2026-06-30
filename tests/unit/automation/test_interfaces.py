@@ -1,6 +1,9 @@
 """Verify that all four reviewer classes satisfy ReviewerProtocol."""
 
-from hephaestus.automation._interfaces import ReviewerProtocol
+from pathlib import Path
+
+from hephaestus.automation._interfaces import ReviewerProtocol, StateStore
+from hephaestus.automation.arming_state import ArmingStateStore
 
 
 class _ConcreteReviewer:
@@ -51,3 +54,24 @@ def test_plan_reviewer_satisfies_protocol() -> None:
     from hephaestus.automation.plan_reviewer import PlanReviewer
 
     assert issubclass(PlanReviewer, ReviewerProtocol)
+
+
+def test_arming_state_store_satisfies_state_store_protocol() -> None:
+    """ArmingStateStore satisfies StateStore structurally (path/load/save)."""
+    assert issubclass(ArmingStateStore, StateStore)
+
+
+def test_arming_state_store_roundtrip_via_canonical_loader(tmp_path: Path) -> None:
+    """save/load/clear round-trips an arming record after the helper swap."""
+    store = ArmingStateStore(lambda: tmp_path)
+    store.save(42, {"head_sha": "abc", "armed": True})
+    assert store.load(42) == {"head_sha": "abc", "armed": True}
+    store.clear(42)
+    assert store.load(42) is None
+
+
+def test_arming_state_store_malformed_record_returns_none(tmp_path: Path) -> None:
+    """A malformed record file is logged and ignored, returning None."""
+    store = ArmingStateStore(lambda: tmp_path)
+    (tmp_path / "drive-green-armed-7.json").write_text("{not json")
+    assert store.load(7) is None

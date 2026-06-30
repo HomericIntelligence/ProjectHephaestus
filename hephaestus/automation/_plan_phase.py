@@ -59,7 +59,7 @@ class PlanPhase(StageMixin):
 
         The plan-issues subprocess is bounded by a stage-level wrapper timeout
         (default 7200s, ``HEPH_PLAN_STAGE_TIMEOUT``-tunable) instead of the
-        inner planner-agent timeout. A heavy god-class issue can exceed 600s of
+        inner planner-agent timeout. A heavy god-class issue can exceed 1200s of
         total planner runtime while individual planner agent calls still use
         their shorter ``AGENT_PLAN_TIMEOUT`` budget (#1374).
         """

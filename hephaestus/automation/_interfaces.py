@@ -42,12 +42,12 @@ class StateStore(Protocol):
 
     def path(self, issue_number: int) -> Path:
         """Return the on-disk path for ``issue_number``'s record."""
-        ...
+        raise NotImplementedError
 
     def load(self, issue_number: int) -> Any:
         """Return the parsed record for ``issue_number`` or ``None``."""
-        ...
+        raise NotImplementedError
 
     def save(self, issue_number: int, record: Any) -> None:
         """Persist ``record`` for ``issue_number``."""
-        ...
+        raise NotImplementedError

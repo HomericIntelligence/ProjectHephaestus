@@ -15,3 +15,19 @@ from hephaestus.automation.agent_config import (
     planner_model as planner_model,
     reviewer_model as reviewer_model,
 )
+
+__all__ = [
+    "CODEX_ADVISE",
+    "FABLE",
+    "HAIKU",
+    "OPUS",
+    "OPUS_48",
+    "SONNET",
+    "advise_model",
+    "codex_advise_model",
+    "git_message_model",
+    "implementer_model",
+    "learn_model",
+    "planner_model",
+    "reviewer_model",
+]

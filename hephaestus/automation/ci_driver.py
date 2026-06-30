@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import subprocess
 import threading
 import time
@@ -34,6 +33,7 @@ from hephaestus.cli.utils import (
     configure_github_throttle_from_args,
     emit_json_status,
 )
+from hephaestus.constants import read_timeout_env
 from hephaestus.io.utils import write_secure
 from hephaestus.utils.file_lock import file_lock
 
@@ -1513,7 +1513,7 @@ class CIDriver:
         if self.options.dry_run:
             return "TIMEOUT"
 
-        max_wait = int(os.environ.get("HEPH_PR_MERGE_MAX_WAIT", "1800"))
+        max_wait = read_timeout_env("HEPH_PR_MERGE_MAX_WAIT", 1800)
         elapsed = 0
         attempt = 0
         iref = issue_ref(issue_number)

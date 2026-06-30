@@ -13,9 +13,6 @@ of a runtime startup error is higher than the cost of falling back.
 
 from __future__ import annotations
 
-import logging
-import os
-
 from hephaestus.constants import (
     AGENT_IMPL_TIMEOUT,
     AGENT_LEARN_TIMEOUT,
@@ -23,8 +20,6 @@ from hephaestus.constants import (
     AGENT_REVIEW_TIMEOUT,
     read_timeout_env,
 )
-
-logger = logging.getLogger(__name__)
 
 PLAN_STAGE_TIMEOUT = 7200
 
@@ -36,18 +31,6 @@ PLAN_STAGE_TIMEOUT = 7200
 DEFAULT_AGENT_TIMEOUT: int = 7200
 DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT: int = 300
 DEFAULT_CI_POLL_MAX_WAIT: int = 600
-
-
-def _read_int_env(name: str, default: int) -> int:
-    """Return ``int(os.environ[name])`` or ``default`` if unset/invalid."""
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        logger.warning("Ignoring non-integer %s=%r — using default %ds", name, raw, default)
-        return default
 
 
 def planner_claude_timeout() -> int:
@@ -88,7 +71,7 @@ def implementer_claude_timeout() -> int:
 
 def advise_claude_timeout() -> int:
     """Timeout for advise agent calls (default 7200s)."""
-    return _read_int_env("HEPH_ADVISE_AGENT_TIMEOUT", 7200)
+    return read_timeout_env("HEPH_ADVISE_AGENT_TIMEOUT", 7200)
 
 
 def pr_reviewer_claude_timeout() -> int:
@@ -102,12 +85,12 @@ def pr_reviewer_claude_timeout() -> int:
 
 def address_review_claude_timeout() -> int:
     """Timeout for the address-review fix session (default 7200s)."""
-    return _read_int_env("HEPH_ADDRESS_REVIEW_AGENT_TIMEOUT", 7200)
+    return read_timeout_env("HEPH_ADDRESS_REVIEW_AGENT_TIMEOUT", 7200)
 
 
 def ci_driver_claude_timeout() -> int:
     """Timeout for the CI-driver fix session (default 7200s)."""
-    return _read_int_env("HEPH_CI_DRIVER_AGENT_TIMEOUT", 7200)
+    return read_timeout_env("HEPH_CI_DRIVER_AGENT_TIMEOUT", 7200)
 
 
 def learn_claude_timeout() -> int:
@@ -121,12 +104,12 @@ def learn_claude_timeout() -> int:
 
 def follow_up_claude_timeout() -> int:
     """Timeout for the follow-up-issue agent session (default 7200s)."""
-    return _read_int_env("HEPH_FOLLOW_UP_AGENT_TIMEOUT", 7200)
+    return read_timeout_env("HEPH_FOLLOW_UP_AGENT_TIMEOUT", 7200)
 
 
 def git_message_agent_timeout() -> int:
     """Timeout for the lightweight commit/PR message writer (default 300s)."""
-    return _read_int_env("HEPH_GIT_MESSAGE_AGENT_TIMEOUT", 300)
+    return read_timeout_env("HEPH_GIT_MESSAGE_AGENT_TIMEOUT", 300)
 
 
 # Re-exported from hephaestus.github.client so the gh-adapter timeout lives
@@ -166,4 +149,4 @@ def ci_poll_max_wait() -> int:
     are still pending. Re-read on each invocation so tests and operators can
     tune it at runtime via ``HEPH_CI_POLL_MAX_WAIT``.
     """
-    return _read_int_env("HEPH_CI_POLL_MAX_WAIT", 600)
+    return read_timeout_env("HEPH_CI_POLL_MAX_WAIT", 600)

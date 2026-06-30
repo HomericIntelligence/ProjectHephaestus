@@ -15,8 +15,6 @@ without needing the console script on `$PATH`.
   consistent across pyproject.toml, pixi.toml, and CI configs.
 - **`check_tier_labels.py`** — Check the `tier-X` issue/PR labels match the
   policy.
-- **`check_unit_test_structure.py`** — Verify `tests/unit/` mirrors the
-  `hephaestus/` subpackage layout. Wired into pre-commit.
 - **`check_version_single_source.py`** — Validate the project has a single
   authoritative version source (hatch-vcs git tags) and `pixi.toml` has no
   version field. Wired into pre-commit.
@@ -70,7 +68,6 @@ module — most users invoke the `hephaestus-*` console scripts instead.
 
 ```bash
 # Pre-commit-checked validators
-python3 scripts/check_unit_test_structure.py
 python3 scripts/check_version_single_source.py
 python3 scripts/check_cli_table_sync.py
 

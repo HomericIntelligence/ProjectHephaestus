@@ -85,7 +85,7 @@ from .pr_discovery import PRDiscovery
 from .pr_manager import pr_has_implementation_go_label
 from .prompts import get_advise_prompt_builder
 from .session_naming import AGENT_ADVISE
-from .status_tracker import SlotUnavailable, StatusTracker
+from .status_tracker import StatusTracker
 from .worktree_manager import WorktreeManager
 
 logger = logging.getLogger(__name__)
@@ -729,8 +729,13 @@ class CIDriver:
             WorkerResult indicating success or failure.
 
         """
-        try:
-            with self.status_tracker.slot() as acquired_slot:
+        with self.status_tracker.slot() as acquired_slot:
+            if acquired_slot is None:
+                return WorkerResult(
+                    issue_number=issue_number, success=False, error="Failed to acquire worker slot"
+                )
+
+            try:
                 armed_result = self._check_arming_on_drive_start(issue_number, pr_number)
                 if armed_result is not None:
                     return armed_result
@@ -761,13 +766,9 @@ class CIDriver:
                     issue_number, pr_number, acquired_slot, required_checks
                 )
 
-        except SlotUnavailable:
-            return WorkerResult(
-                issue_number=issue_number, success=False, error="Failed to acquire worker slot"
-            )
-        except Exception as e:
-            logger.error("Issue #%s: unexpected error: %s", issue_number, e)
-            return WorkerResult(issue_number=issue_number, success=False, error=str(e)[:200])
+            except Exception as e:
+                logger.error("Issue #%s: unexpected error: %s", issue_number, e)
+                return WorkerResult(issue_number=issue_number, success=False, error=str(e)[:200])
 
     def _attempt_mechanical_rebase(
         self,

@@ -39,7 +39,7 @@ says nothing about the Python package version and vice versa. See
 
 ## Stability Tiers
 
-ProjectHephaestus ships 19 documented subpackages with different maturity levels. Only the
+ProjectHephaestus ships 20 documented subpackages with different maturity levels. Only the
 **stable** subpackages below are covered by the [deprecation policy](#deprecation-policy);
 **provisional** subpackages may change without notice, even across minor versions.
 
@@ -247,6 +247,7 @@ removal):
 
 | Symbol | Added | Notes |
 |--------|-------|-------|
+| `ThreadSafeCache` | 0.9.8 | Lock-protected TTL cache with `get_or_compute` |
 | `flatten_dict` | 0.1.0 | Flatten nested dict |
 | `get_proj_root` | 0.1.0 | Locate the project root directory |
 | `get_repo_root` | 0.1.0 | Locate the git repository root |

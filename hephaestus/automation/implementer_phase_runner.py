@@ -106,7 +106,6 @@ from .session_naming import (  # noqa: F401
     current_trunk_githash,
 )
 from .state_labels import STATE_SKIP
-from .status_tracker import SlotUnavailable
 
 if TYPE_CHECKING:
     from .implementer import IssueImplementer
@@ -304,49 +303,47 @@ class ImplementationPhaseRunner:
 
         """
         impl = self.impl
+        with self.status_tracker.slot() as slot_id:
+            if slot_id is None:
+                return WorkerResult(
+                    issue_number=issue_number, success=False, error="Failed to acquire worker slot"
+                )
 
-        try:
-            with self.status_tracker.slot() as slot_id:
-                thread_id = threading.get_ident()
+            thread_id = threading.get_ident()
 
-                try:
-                    return self._dispatch_issue_work(
-                        issue_number=issue_number,
-                        slot_id=slot_id,
-                        thread_id=thread_id,
-                    )
+            try:
+                return self._dispatch_issue_work(
+                    issue_number=issue_number,
+                    slot_id=slot_id,
+                    thread_id=thread_id,
+                )
 
-                except subprocess.TimeoutExpired as e:
-                    error_msg = f"Timeout: {' '.join(e.cmd[:3])} exceeded {e.timeout}s"
-                    impl._log("error", error_msg, thread_id)
-                    return self._record_issue_failure(
-                        issue_number, slot_id, thread_id, error_msg, persist_error=error_msg
-                    )
+            except subprocess.TimeoutExpired as e:
+                error_msg = f"Timeout: {' '.join(e.cmd[:3])} exceeded {e.timeout}s"
+                impl._log("error", error_msg, thread_id)
+                return self._record_issue_failure(
+                    issue_number, slot_id, thread_id, error_msg, persist_error=error_msg
+                )
 
-                except subprocess.CalledProcessError as e:
-                    error_msg = f"Command failed (exit {e.returncode}): {' '.join(e.cmd[:3])}"
-                    impl._log("error", error_msg, thread_id)
-                    if e.stderr:
-                        impl._log("error", f"stderr: {e.stderr[:300]}", thread_id)
-                    return self._record_issue_failure(
-                        issue_number, slot_id, thread_id, error_msg, persist_error=str(e)
-                    )
+            except subprocess.CalledProcessError as e:
+                error_msg = f"Command failed (exit {e.returncode}): {' '.join(e.cmd[:3])}"
+                impl._log("error", error_msg, thread_id)
+                if e.stderr:
+                    impl._log("error", f"stderr: {e.stderr[:300]}", thread_id)
+                return self._record_issue_failure(
+                    issue_number, slot_id, thread_id, error_msg, persist_error=str(e)
+                )
 
-                except RuntimeError as e:
-                    return self._handle_runtime_error(issue_number, slot_id, thread_id, e)
+            except RuntimeError as e:
+                return self._handle_runtime_error(issue_number, slot_id, thread_id, e)
 
-                except (
-                    Exception
-                ) as e:  # broad catch: top-level worker boundary, must not crash thread pool
-                    impl._log("error", f"Unexpected {type(e).__name__}: {e}", thread_id)
-                    return self._record_issue_failure(
-                        issue_number, slot_id, thread_id, str(e)[:80], persist_error=str(e)
-                    )
-
-        except SlotUnavailable:
-            return WorkerResult(
-                issue_number=issue_number, success=False, error="Failed to acquire worker slot"
-            )
+            except (
+                Exception
+            ) as e:  # broad catch: top-level worker boundary, must not crash thread pool
+                impl._log("error", f"Unexpected {type(e).__name__}: {e}", thread_id)
+                return self._record_issue_failure(
+                    issue_number, slot_id, thread_id, str(e)[:80], persist_error=str(e)
+                )
 
     def _handle_runtime_error(
         self,

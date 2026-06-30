@@ -42,7 +42,7 @@ from .review_state import (
     is_plan_review_go,
 )
 from .session_naming import AGENT_PLAN_REVIEWER
-from .status_tracker import SlotUnavailable, StatusTracker
+from .status_tracker import StatusTracker
 from .work_report import work_report_context
 
 logger = logging.getLogger(__name__)
@@ -170,8 +170,15 @@ class PlanReviewer:
             WorkerResult indicating success or failure.
 
         """
-        try:
-            with self.status_tracker.slot() as acquired_slot:
+        with self.status_tracker.slot() as acquired_slot:
+            if acquired_slot is None:
+                return WorkerResult(
+                    issue_number=issue_number,
+                    success=False,
+                    error="Failed to acquire worker slot",
+                )
+
+            try:
                 self.status_tracker.update_slot(
                     acquired_slot, f"{issue_ref(issue_number)}: checking"
                 )
@@ -251,19 +258,13 @@ class PlanReviewer:
 
                 return WorkerResult(issue_number=issue_number, success=True)
 
-        except SlotUnavailable:
-            return WorkerResult(
-                issue_number=issue_number,
-                success=False,
-                error="Failed to acquire worker slot",
-            )
-        except Exception as e:
-            logger.error("Issue %s: unexpected error: %s", issue_ref(issue_number), e)
-            return WorkerResult(
-                issue_number=issue_number,
-                success=False,
-                error=str(e)[:80],
-            )
+            except Exception as e:
+                logger.error("Issue %s: unexpected error: %s", issue_ref(issue_number), e)
+                return WorkerResult(
+                    issue_number=issue_number,
+                    success=False,
+                    error=str(e)[:80],
+                )
 
     def _fetch_issue_comments(self, issue_number: int) -> list[dict[str, Any]]:
         """Fetch all comments for an issue, caching the result per instance.

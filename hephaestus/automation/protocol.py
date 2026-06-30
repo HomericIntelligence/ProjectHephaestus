@@ -49,7 +49,6 @@ class ReviewerProtocol(Protocol):
 
     def run(self) -> Any:
         """Execute the reviewer and return its result."""
-        ...
 
 
 __all__ = ["PLAN_COMMENT_MARKER", "PLAN_REVIEW_PREFIX", "WONT_FIX_MARKER", "ReviewerProtocol"]

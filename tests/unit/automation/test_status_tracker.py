@@ -312,10 +312,14 @@ class TestSlotContextManager:
     def test_slot_releases_on_exception(self) -> None:
         """slot() releases even when the body raises (no leak)."""
         tracker = StatusTracker(num_slots=1)
-        with pytest.raises(ValueError):
+
+        def _raise_inside_slot() -> None:
             with tracker.slot() as slot_id:
                 assert slot_id is not None
                 raise ValueError("boom")
+
+        with pytest.raises(ValueError):
+            _raise_inside_slot()
         assert tracker.get_active_count() == 0  # no leak
 
     def test_slot_sets_initial_message(self) -> None:

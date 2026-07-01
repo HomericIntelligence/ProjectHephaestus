@@ -231,7 +231,11 @@ class DriveGreenArmingCoordinator:
     def _capture_learn(
         self, issue_number: int, pr_number: int, record: dict[str, Any]
     ) -> WorkerResult:
-        logger.info("Issue #%s: PR #%s detected as MERGED; capturing /learn", issue_number, pr_number)
+        logger.info(
+            "Issue #%s: PR #%s detected as MERGED; capturing /learn",
+            issue_number,
+            pr_number,
+        )
         self._status().update_slot(0, f"{issue_ref(issue_number)}: capturing post-merge /learn")
         learn_succeeded = self._run_learn(issue_number, pr_number)
         self._run_compact(issue_number, pr_number)

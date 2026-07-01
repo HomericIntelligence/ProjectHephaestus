@@ -14,7 +14,7 @@ from .auto_merge_coordinator import (
     without_auto_merge_policy,
 )
 from .git_utils import issue_ref, pr_ref
-from .models import CIDriverOptions, WorkerResult
+from .models import WorkerResult
 
 logger = logging.getLogger(__name__)
 
@@ -154,13 +154,17 @@ class CIDriveRunCoordinator:
                 if armed is not None:
                     return armed
                 if self._options().enable_mechanical_rebase and not self._options().dry_run:
-                    self._auto_merge._attempt_mechanical_rebase(issue_number, pr_number, acquired_slot)
+                    self._auto_merge._attempt_mechanical_rebase(
+                        issue_number, pr_number, acquired_slot
+                    )
                 self._status.update_slot(acquired_slot, f"{pr_ref(pr_number)}: fetching checks")
                 poll_result = self.poll_ci_until_concluded(
                     issue_number, pr_number, acquired_slot, self._options().poll_max_wait
                 )
                 if poll_result is None:
-                    return WorkerResult(issue_number=issue_number, success=True, pr_number=pr_number)
+                    return WorkerResult(
+                        issue_number=issue_number, success=True, pr_number=pr_number
+                    )
                 _checks, required_checks = poll_result
                 all_green = all(
                     c.get("conclusion") in ("success", "skipped", "neutral")
@@ -173,9 +177,17 @@ class CIDriveRunCoordinator:
                             issue_number,
                             pr_number,
                         )
-                        return WorkerResult(issue_number=issue_number, success=True, pr_number=pr_number)
-                    return self._auto_merge.arm_and_wait_for_merge(issue_number, pr_number, acquired_slot)
-                return self.handle_failing_pr(issue_number, pr_number, acquired_slot, required_checks)
+                        return WorkerResult(
+                            issue_number=issue_number,
+                            success=True,
+                            pr_number=pr_number,
+                        )
+                    return self._auto_merge.arm_and_wait_for_merge(
+                        issue_number, pr_number, acquired_slot
+                    )
+                return self.handle_failing_pr(
+                    issue_number, pr_number, acquired_slot, required_checks
+                )
             except Exception as exc:
                 logger.error("Issue #%s: unexpected error: %s", issue_number, exc)
                 return WorkerResult(issue_number=issue_number, success=False, error=str(exc)[:200])
@@ -231,7 +243,10 @@ class CIDriveRunCoordinator:
             return self._auto_merge.arm_and_wait_for_merge(issue_number, pr_number, acquired_slot)
         fix_result = self._fix_flow.attempt_ci_fixes(issue_number, pr_number, acquired_slot)
         if fix_result is not None and fix_result.success:
-            return self.recheck_and_arm_after_fix(issue_number, pr_number, acquired_slot) or fix_result
+            return (
+                self.recheck_and_arm_after_fix(issue_number, pr_number, acquired_slot)
+                or fix_result
+            )
         if fix_result is not None:
             return fix_result
         return WorkerResult(

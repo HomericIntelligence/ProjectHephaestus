@@ -119,7 +119,10 @@ class AutoMergeCoordinator:
         if outcome == "FAILING":
             fix_result = self._fix_flow.attempt_ci_fixes(issue_number, pr_number, acquired_slot)
             if fix_result is not None and fix_result.success:
-                return self._recheck_and_arm_after_fix(issue_number, pr_number, acquired_slot) or fix_result
+                return (
+                    self._recheck_and_arm_after_fix(issue_number, pr_number, acquired_slot)
+                    or fix_result
+                )
             return fix_result or WorkerResult(
                 issue_number=issue_number,
                 success=False,
@@ -171,7 +174,11 @@ class AutoMergeCoordinator:
             if merge_status == "BLOCKED" and not failing:
                 pending = self._pending_required_check_names(pr_number)
                 if not pending:
-                    logger.warning("Issue #%s: PR #%s is BLOCKED by branch protection", issue_number, pr_number)
+                    logger.warning(
+                        "Issue #%s: PR #%s is BLOCKED by branch protection",
+                        issue_number,
+                        pr_number,
+                    )
                     return "BLOCKED"
             if merge_status == "BLOCKED" and policy_only_failure:
                 logger.info(
@@ -207,7 +214,9 @@ class AutoMergeCoordinator:
             rearmed = self._recheck_and_arm_after_fix(
                 issue_number, pr_number, acquired_slot, resolve_dirty=False
             )
-            return rearmed or WorkerResult(issue_number=issue_number, success=True, pr_number=pr_number)
+            return rearmed or WorkerResult(
+                issue_number=issue_number, success=True, pr_number=pr_number
+            )
         base_branch = "main"
         try:
             result = self._gh_call(
@@ -270,5 +279,9 @@ class AutoMergeCoordinator:
             result = self._gh_call(["pr", "view", str(pr_number), "--json", "labels"], check=False)
             return pr_has_implementation_go_label(dict(json.loads(result.stdout or "{}")))
         except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-            logger.warning("Could not fetch PR #%s labels for implementation-GO gate: %s", pr_number, exc)
+            logger.warning(
+                "Could not fetch PR #%s labels for implementation-GO gate: %s",
+                pr_number,
+                exc,
+            )
             return False

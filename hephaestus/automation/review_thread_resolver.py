@@ -7,12 +7,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ._review_utils import log_file_path
 from .address_review import (
     _parse_addressed_block,
     resolve_addressed_threads,
     run_address_fix_session,
 )
-from ._review_utils import log_file_path
 from .git_utils import pr_ref
 from .models import CIDriverOptions, WorkerResult
 

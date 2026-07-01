@@ -1071,6 +1071,9 @@ def _filter_open_issues(repo: str, issue_numbers: list[int]) -> list[int]:
 # like `pyproject.toml` or symbol refs like `os.replace` are not treated as
 # in-tree paths (over-match → needless deferral; the slash requirement keeps
 # the key tight to actual source paths).
+# NOTE: Bare top-level file paths without a directory prefix (e.g., `errors.py`)
+# are intentionally NOT captured — overlap goes undetected and both plans dispatch
+# concurrently, falling back to pre-#1623 behavior (acceptable tradeoff for regex tightness).
 _PLAN_FILE_RE = re.compile(r"`([A-Za-z0-9_][A-Za-z0-9_./-]*/[A-Za-z0-9_./-]+\.[A-Za-z0-9_]+)`")
 _PLAN_FILE_SECTION_RE = re.compile(r"^#{2,}\s+Files to (Modify|Create)\b", re.IGNORECASE)
 

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 from hephaestus.github.client import gh_call
 
 from ._stage_context import StageMixin
-from .claude_timeouts import plan_stage_timeout
+from .agent_config import plan_stage_timeout
 from .git_utils import run
 from .planner_state import _comments_contain_plan
 

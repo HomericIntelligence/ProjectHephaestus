@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from hephaestus.automation.claude_timeouts import (
+from hephaestus.automation.agent_config import (
     DEFAULT_AGENT_TIMEOUT,
     DEFAULT_CI_POLL_MAX_WAIT,
     DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT,

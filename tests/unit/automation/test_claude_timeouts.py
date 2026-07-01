@@ -10,7 +10,7 @@ import pytest
 from hephaestus.automation import claude_timeouts
 
 TWO_HOURS_S = 7200
-MIN_THROUGHPUT_TIMEOUT_S = 1200
+DEFAULT_THROUGHPUT_TIMEOUT_S = 1200
 
 
 def _clear_planner_timeout_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -29,7 +29,7 @@ def test_planner_timeout_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """Planner timeout uses the documented default when unset."""
     _clear_planner_timeout_env(monkeypatch)
 
-    assert claude_timeouts.planner_claude_timeout() == MIN_THROUGHPUT_TIMEOUT_S
+    assert claude_timeouts.planner_claude_timeout() == DEFAULT_THROUGHPUT_TIMEOUT_S
 
 
 def test_plan_stage_timeout_default_stays_long(
@@ -79,13 +79,13 @@ def test_plan_stage_timeout_legacy_env(
             "HEPH_AGENT_PLAN_TIMEOUT",
             "HEPH_PLANNER_CLAUDE_TIMEOUT",
             claude_timeouts.planner_claude_timeout,
-            MIN_THROUGHPUT_TIMEOUT_S,
+            DEFAULT_THROUGHPUT_TIMEOUT_S,
         ),
         (
             "HEPH_AGENT_REVIEW_TIMEOUT",
             "HEPH_PLAN_REVIEWER_CLAUDE_TIMEOUT",
             claude_timeouts.plan_reviewer_claude_timeout,
-            MIN_THROUGHPUT_TIMEOUT_S,
+            DEFAULT_THROUGHPUT_TIMEOUT_S,
         ),
         (
             "HEPH_AGENT_IMPL_TIMEOUT",
@@ -103,7 +103,7 @@ def test_plan_stage_timeout_legacy_env(
             "HEPH_AGENT_REVIEW_TIMEOUT",
             "HEPH_PR_REVIEWER_CLAUDE_TIMEOUT",
             claude_timeouts.pr_reviewer_claude_timeout,
-            MIN_THROUGHPUT_TIMEOUT_S,
+            DEFAULT_THROUGHPUT_TIMEOUT_S,
         ),
         (
             "HEPH_ADDRESS_REVIEW_AGENT_TIMEOUT",
@@ -121,7 +121,7 @@ def test_plan_stage_timeout_legacy_env(
             "HEPH_AGENT_LEARN_TIMEOUT",
             "HEPH_LEARN_CLAUDE_TIMEOUT",
             claude_timeouts.learn_claude_timeout,
-            MIN_THROUGHPUT_TIMEOUT_S,
+            DEFAULT_THROUGHPUT_TIMEOUT_S,
         ),
         (
             "HEPH_FOLLOW_UP_AGENT_TIMEOUT",
@@ -133,7 +133,7 @@ def test_plan_stage_timeout_legacy_env(
             "HEPH_GIT_MESSAGE_AGENT_TIMEOUT",
             "HEPH_GIT_MESSAGE_CLAUDE_TIMEOUT",
             claude_timeouts.git_message_agent_timeout,
-            MIN_THROUGHPUT_TIMEOUT_S,
+            DEFAULT_THROUGHPUT_TIMEOUT_S,
         ),
     ],
 )
@@ -237,7 +237,7 @@ def test_planner_timeout_invalid_agent_env_logs_and_defaults(
     monkeypatch.setenv("HEPH_AGENT_PLAN_TIMEOUT", "slow")
 
     with caplog.at_level(logging.WARNING, logger="hephaestus.constants"):
-        assert claude_timeouts.planner_claude_timeout() == MIN_THROUGHPUT_TIMEOUT_S
+        assert claude_timeouts.planner_claude_timeout() == DEFAULT_THROUGHPUT_TIMEOUT_S
 
     assert any("HEPH_AGENT_PLAN_TIMEOUT" in record.message for record in caplog.records)
 
@@ -267,7 +267,7 @@ def test_ci_poll_max_wait_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """CI poll max wait uses the documented throughput-friendly default when unset."""
     monkeypatch.delenv("HEPH_CI_POLL_MAX_WAIT", raising=False)
 
-    assert claude_timeouts.ci_poll_max_wait() == MIN_THROUGHPUT_TIMEOUT_S
+    assert claude_timeouts.ci_poll_max_wait() == DEFAULT_THROUGHPUT_TIMEOUT_S
 
 
 def test_ci_poll_max_wait_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -285,6 +285,6 @@ def test_ci_poll_max_wait_invalid_env_logs_and_defaults(
     monkeypatch.setenv("HEPH_CI_POLL_MAX_WAIT", "soon")
 
     with caplog.at_level(logging.WARNING, logger="hephaestus.automation.claude_timeouts"):
-        assert claude_timeouts.ci_poll_max_wait() == MIN_THROUGHPUT_TIMEOUT_S
+        assert claude_timeouts.ci_poll_max_wait() == DEFAULT_THROUGHPUT_TIMEOUT_S
 
     assert any("HEPH_CI_POLL_MAX_WAIT" in record.message for record in caplog.records)

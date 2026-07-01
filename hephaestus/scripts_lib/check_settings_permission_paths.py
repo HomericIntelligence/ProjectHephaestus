@@ -69,9 +69,9 @@ def main(argv: list[str] | None = None) -> int:
         argv: Unused; present for the standard console-entry-point signature.
 
     Returns:
-        ``0`` when every permission path is canonical (or the file is absent
-        with no defect), ``1`` when a non-canonical path is found or the
-        tracked settings file cannot be located.
+        ``0`` when every permission path is canonical. ``1`` when a
+        non-canonical path is found, or when the tracked settings file is
+        absent or cannot be located.
 
     """
     settings_path = repo_root() / ".claude" / "settings.json"

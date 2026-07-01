@@ -159,6 +159,7 @@ bypass a misfiring hook locally use
 | `hephaestus-check-repo-analyze-skills` | Internal | Repo CI repo-analyze skill generator validator |
 | `hephaestus-check-cli-tier-docs` | Internal | Enforces this very table; added in #766 |
 | `hephaestus-check-api-table-docs` | Internal | Enforces per-symbol `__all__` documentation in COMPATIBILITY.md |
+| `hephaestus-check-unlinked-todo` | Internal | Repo CI tech-debt-marker linkage validator; added in #1492 |
 
 ## Public API
 

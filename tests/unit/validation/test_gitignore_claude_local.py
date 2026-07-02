@@ -8,7 +8,7 @@ automation-loop permission artifacts and must be ignored by the *repo's own*
 import subprocess
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_claude_settings_local_ignored_by_repo_gitignore() -> None:

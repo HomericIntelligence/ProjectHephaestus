@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field as dataclass_field, fields as dataclass_fields
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 # Valid JetStream first-subscription deliver policies. These string values match
 # nats.js.api.DeliverPolicy's enum values, so the subscriber can build the enum
@@ -28,9 +28,7 @@ DeliverPolicyStr = Literal[
 # Runtime allowlist mirroring DeliverPolicyStr. pydantic enforced the Literal at
 # construction; a stdlib dataclass does not, so __post_init__ checks membership
 # explicitly (subscriber.py builds a DeliverPolicy enum from this string).
-_DELIVER_POLICIES = frozenset(
-    {"all", "last", "new", "by_start_sequence", "by_start_time", "last_per_subject"}
-)
+_DELIVER_POLICIES = frozenset(get_args(DeliverPolicyStr))
 
 
 @dataclass

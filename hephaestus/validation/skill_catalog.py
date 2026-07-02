@@ -425,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
         "--claude-md",
         type=Path,
         default=None,
-        help="Path to CLAUDE.md (default: CLAUDE.md when present)",
+        help="Path to CLAUDE.md (default: repo-root/CLAUDE.md)",
     )
     args = parser.parse_args(argv)
 

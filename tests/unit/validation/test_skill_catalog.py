@@ -298,11 +298,61 @@ class TestMainExitCodes:
 
         assert result == 1
 
+    def test_returns_nonzero_for_default_claude_md_drift_with_explicit_table_and_skills_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """Explicit table/skills paths must not disable the default CLAUDE.md guard."""
+        table = make_table(tmp_path, ["alpha"])
+        skills_dir = make_skills_dir(tmp_path, ["alpha"])
+        (skills_dir / "alpha" / "SKILL.md").write_text(
+            "---\n"
+            "name: alpha\n"
+            "description: Test skill alpha\n"
+            "argument-hint: <expected argument>\n"
+            "---\n\n"
+            "# alpha\n"
+        )
+        make_claude_md(tmp_path, {"alpha": "`<documented argument>`"})
+
+        result = main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--table",
+                str(table),
+                "--skills-dir",
+                str(skills_dir),
+            ]
+        )
+
+        assert result == 1
+
+    def test_returns_nonzero_when_default_claude_md_is_missing(self, tmp_path: Path) -> None:
+        """A missing default CLAUDE.md must fail as catalog drift."""
+        table = make_table(tmp_path, ["alpha"])
+        skills_dir = make_skills_dir(tmp_path, ["alpha"])
+
+        result = main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--table",
+                str(table),
+                "--skills-dir",
+                str(skills_dir),
+            ]
+        )
+
+        assert result == 1
+
     def test_returns_zero_when_complete(self, tmp_path: Path) -> None:
         """Main exits 0 when the table matches the skills directory."""
         table = make_table(tmp_path, ["alpha", "beta"])
         skills_dir = make_skills_dir(tmp_path, ["alpha", "beta"])
-        result = main(["--table", str(table), "--skills-dir", str(skills_dir)])
+        claude_md = make_claude_md(tmp_path, {"alpha": "—", "beta": "—"})
+        result = main(
+            ["--table", str(table), "--skills-dir", str(skills_dir), "--claude-md", str(claude_md)]
+        )
         assert result == 0
 
     def test_returns_nonzero_when_missing(self, tmp_path: Path) -> None:
@@ -346,6 +396,7 @@ class TestMainJsonOutput:
         """--json + sync produces {status: ok, exit_code: 0, ...}."""
         table = make_table(tmp_path, ["alpha"])
         skills_dir = make_skills_dir(tmp_path, ["alpha"])
+        claude_md = make_claude_md(tmp_path, {"alpha": "—"})
         buf = StringIO()
         with patch("sys.stdout", buf):
             code = main(
@@ -354,6 +405,8 @@ class TestMainJsonOutput:
                     str(table),
                     "--skills-dir",
                     str(skills_dir),
+                    "--claude-md",
+                    str(claude_md),
                     "--json",
                 ]
             )
@@ -424,7 +477,10 @@ class TestMainTextOutput:
         """Sync run prints an OK message."""
         table = make_table(tmp_path, ["alpha"])
         skills_dir = make_skills_dir(tmp_path, ["alpha"])
-        main(["--table", str(table), "--skills-dir", str(skills_dir)])
+        claude_md = make_claude_md(tmp_path, {"alpha": "—"})
+        main(
+            ["--table", str(table), "--skills-dir", str(skills_dir), "--claude-md", str(claude_md)]
+        )
         captured = capsys.readouterr()
         assert "OK" in captured.out
 

@@ -436,14 +436,9 @@ def main(argv: list[str] | None = None) -> int:
 
     missing, extra = check_skill_catalog(table_path, skills_dir)
     frontmatter_errors = check_skill_frontmatter(skills_dir)
-    claude_missing: set[str] = set()
-    claude_extra: set[str] = set()
-    claude_argument_mismatches: dict[str, tuple[str | None, str | None]] = {}
-    check_default_claude_md = args.table is None and args.skills_dir is None
-    if args.claude_md is not None or (check_default_claude_md and claude_md_path.exists()):
-        claude_missing, claude_extra, claude_argument_mismatches = check_claude_skill_arguments(
-            claude_md_path, skills_dir
-        )
+    claude_missing, claude_extra, claude_argument_mismatches = check_claude_skill_arguments(
+        claude_md_path, skills_dir
+    )
     ok = (
         not missing
         and not extra

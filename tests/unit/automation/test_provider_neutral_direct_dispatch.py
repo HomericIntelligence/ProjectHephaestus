@@ -12,7 +12,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PROVIDER_NEUTRAL_FILES = [
     "hephaestus/automation/agent_stage.py",
     "hephaestus/automation/planner.py",
-    "hephaestus/automation/planner_claude.py",
     "hephaestus/automation/plan_reviewer.py",
     "hephaestus/automation/_implement_phase.py",
     "hephaestus/automation/implementer_phase_runner.py",
@@ -30,7 +29,7 @@ PROVIDER_NEUTRAL_FILES = [
     "hephaestus/automation/follow_up.py",
     "hephaestus/automation/pr_manager.py",
     "hephaestus/github/tidy.py",
-    "hephaestus/github/fleet_sync.py",
+    "hephaestus/github/fleet_sync/conflict_resolver.py",
 ]
 
 CODEX_ONLY_NAMES = {

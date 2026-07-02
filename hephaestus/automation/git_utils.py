@@ -9,6 +9,7 @@ Provides helpers for:
 
 import logging
 import subprocess
+from collections.abc import Collection
 from pathlib import Path
 
 # ``get_repo_root`` is re-exported (not redefined) so that the single canonical
@@ -17,6 +18,7 @@ from pathlib import Path
 # import path for the automation package and its tests. The ``X as X`` form
 # marks it an explicit re-export so mypy does not flag ``attr-defined`` at the
 # 13 import sites under --no-implicit-reexport.
+from hephaestus.utils.cache import ThreadSafeCache
 from hephaestus.utils.helpers import (
     get_repo_root as get_repo_root,
     local_branch_exists as _shared_local_branch_exists,
@@ -25,6 +27,8 @@ from hephaestus.utils.helpers import (
 from hephaestus.utils.retry import retry_with_backoff
 
 logger = logging.getLogger(__name__)
+
+COMMIT_POLICY_REWRITE_EXEC = "git commit --amend --no-edit -S -s"
 
 
 def run(
@@ -68,7 +72,7 @@ def run(
     )
 
 
-_repo_info_cache: dict[Path | None, tuple[str, str]] = {}
+_repo_info_cache: ThreadSafeCache[Path | None, tuple[str, str]] = ThreadSafeCache()
 
 
 def get_repo_info(repo_root: Path | None = None) -> tuple[str, str]:
@@ -88,46 +92,45 @@ def get_repo_info(repo_root: Path | None = None) -> tuple[str, str]:
         repo_root = get_repo_root()
 
     key = repo_root.resolve() if repo_root is not None else None
-    cached = _repo_info_cache.get(key)
-    if cached is not None:
-        return cached
 
-    try:
-        result = run(
-            ["git", "remote", "get-url", "origin"],
-            cwd=repo_root,
-            capture_output=True,
-            check=True,
-        )
-        remote_url = result.stdout.strip()
+    def _compute() -> tuple[str, str]:
+        try:
+            result = run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=repo_root,
+                capture_output=True,
+                check=True,
+            )
+            remote_url = result.stdout.strip()
 
-        # Parse various git URL formats
-        # SSH: git@github.com:owner/repo.git
-        # HTTPS: https://github.com/owner/repo.git
-        if "@" in remote_url and ":" in remote_url:
-            # SSH format
-            parts = remote_url.split(":")[-1].replace(".git", "").split("/")
-            owner, repo = parts[-2], parts[-1]
-        elif remote_url.startswith("https://"):
-            # HTTPS format
-            parts = remote_url.replace(".git", "").split("/")
-            owner, repo = parts[-2], parts[-1]
-        else:
-            raise RuntimeError(f"Unable to parse git remote URL: {remote_url}")
+            # Parse various git URL formats
+            # SSH: git@github.com:owner/repo.git
+            # HTTPS: https://github.com/owner/repo.git
+            if "@" in remote_url and ":" in remote_url:
+                # SSH format
+                parts = remote_url.split(":")[-1].replace(".git", "").split("/")
+                owner, repo = parts[-2], parts[-1]
+            elif remote_url.startswith("https://"):
+                # HTTPS format
+                parts = remote_url.replace(".git", "").split("/")
+                owner, repo = parts[-2], parts[-1]
+            else:
+                raise RuntimeError(f"Unable to parse git remote URL: {remote_url}")
 
-        logger.debug("Detected repo: %s/%s", owner, repo)
-        _repo_info_cache[key] = (owner, repo)
-        return owner, repo
+            logger.debug("Detected repo: %s/%s", owner, repo)
+            return owner, repo
 
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Failed to get git remote URL: {e}") from e
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to get git remote URL: {e}") from e
+
+    return _repo_info_cache.get_or_compute(key, _compute)
 
 
 # Keyed by the *resolved* repo_root path so a process that iterates multiple
 # repositories (the automation loop, the myrmidon swarm) gets the right slug
 # per repo instead of the first-cached one for all of them. The ``None`` key
 # holds the result of the auto-detect branch.
-_repo_slug_cache: dict[Path | None, str] = {}
+_repo_slug_cache: ThreadSafeCache[Path | None, str] = ThreadSafeCache()
 
 
 def get_repo_slug(repo_root: Path | None = None) -> str:
@@ -146,15 +149,15 @@ def get_repo_slug(repo_root: Path | None = None) -> str:
 
     """
     key = repo_root.resolve() if repo_root is not None else None
-    cached = _repo_slug_cache.get(key)
-    if cached is not None:
-        return cached
-    try:
-        _, repo = get_repo_info(repo_root)
-    except (RuntimeError, subprocess.CalledProcessError):
-        repo = "repo"
-    _repo_slug_cache[key] = repo
-    return repo
+
+    def _compute() -> str:
+        try:
+            _, repo = get_repo_info(repo_root)
+        except (RuntimeError, subprocess.CalledProcessError):
+            return "repo"
+        return repo
+
+    return _repo_slug_cache.get_or_compute(key, _compute)
 
 
 def clear_repo_caches() -> None:
@@ -171,6 +174,66 @@ def issue_ref(issue_number: int | str) -> str:
 def pr_ref(pr_number: int | str) -> str:
     """Return a ``<repo>#<number>`` reference string for PRs (same format as issues)."""
     return f"{get_repo_slug()}#{pr_number}"
+
+
+def commit_if_changes(
+    issue_number: int,
+    worktree_path: Path,
+    agent: str = "claude",
+    *,
+    committed_log_message: str = "Committed changes for issue #%s",
+    allowed_paths: Collection[str] | None = None,
+) -> bool:
+    """Commit pending changes in *worktree_path* if the worktree is dirty.
+
+    Args:
+        issue_number: GitHub issue number used by the commit helper.
+        worktree_path: Path to the git worktree to inspect.
+        agent: Agent name forwarded to the commit helper.
+        committed_log_message: ``logging`` format string for a successful commit.
+        allowed_paths: Optional exact path allowlist forwarded to the commit
+            helper. When set, only those porcelain paths may be staged.
+
+    Returns:
+        True if a commit was created, otherwise False.
+
+    """
+    result = run(
+        ["git", "status", "--porcelain"],
+        cwd=worktree_path,
+        capture_output=True,
+    )
+    if not result.stdout.strip():
+        logger.info("No changes to commit for issue #%s", issue_number)
+        return False
+
+    try:
+        from .pr_manager import commit_changes
+
+        commit_changes(issue_number, worktree_path, agent, allowed_paths=allowed_paths)
+        logger.info(committed_log_message, issue_number)
+        return True
+    except RuntimeError as e:
+        logger.warning("Commit skipped for issue #%s: %s", issue_number, e)
+        return False
+
+
+def push_branch(branch_name: str, worktree_path: Path) -> None:
+    """Push *branch_name* to ``origin``.
+
+    Args:
+        branch_name: Branch name to push.
+        worktree_path: Path to the git worktree.
+
+    Raises:
+        RuntimeError: If the push fails.
+
+    """
+    try:
+        run(["git", "push", "origin", branch_name], cwd=worktree_path)
+        logger.info("Pushed branch %s to origin", branch_name)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to push branch {branch_name}: {e}") from e
 
 
 def safe_git_fetch(repo_root: Path, retries: int = 3) -> bool:
@@ -499,17 +562,19 @@ def rebase_worktree_onto(
     """Mechanically rebase the worktree at ``cwd`` onto ``<remote>/<base_branch>``.
 
     This is the cheap, deterministic path for PRs that are merely *behind* the
-    base branch (or have textually non-overlapping changes): a plain ``git
-    rebase`` resolves them with no agent involvement. Only when the rebase hits a
-    real conflict do we hand off to the CI-fix agent.
+    base branch (or have textually non-overlapping changes): a policy-aware
+    ``git rebase --exec`` resolves them with no agent involvement while
+    re-signing each replayed commit and adding a DCO sign-off. Only when the
+    rebase hits a real conflict do we hand off to the CI-fix agent.
 
     Two steps in ``cwd``:
 
     1. ``git fetch <remote> <base_branch>`` — refresh the remote-tracking ref so
        the rebase target is current.
-    2. ``git rebase <remote>/<base_branch>`` — replay the PR's commits on top of
-       the latest base. On conflict, ``git rebase --abort`` restores the
-       pre-rebase HEAD so the worktree is left clean for the agent path.
+    2. ``git rebase <remote>/<base_branch> --exec ...`` — replay the PR's commits
+       on top of the latest base and run ``git commit --amend --no-edit -S -s``
+       after each replayed commit. On conflict, ``git rebase --abort`` restores
+       the pre-rebase HEAD so the worktree is left clean for the agent path.
 
     The caller is expected to push the rebased HEAD with
     :func:`push_current_branch_with_lease_on_divergence` (the rebase rewrites
@@ -536,7 +601,7 @@ def rebase_worktree_onto(
     run(["git", "fetch", remote, base_branch], cwd=cwd)
     _remove_untracked_files_tracked_by_ref(cwd, base_ref)
     try:
-        run(["git", "rebase", base_ref], cwd=cwd)
+        run(["git", "rebase", base_ref, "--exec", COMMIT_POLICY_REWRITE_EXEC], cwd=cwd)
         logger.info("Rebased worktree at %s onto %s/%s cleanly", cwd, remote, base_branch)
         return True
     except subprocess.CalledProcessError:

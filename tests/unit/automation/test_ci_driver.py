@@ -66,6 +66,7 @@ def mock_options() -> CIDriverOptions:
         dry_run=False,
         enable_ui=False,
         enable_advise=False,
+        enable_mechanical_rebase=False,
         max_fix_iterations=1,
     )
 
@@ -81,6 +82,25 @@ def driver(mock_options: CIDriverOptions, tmp_path: Path) -> CIDriver:
         d = CIDriver(mock_options)
         d.state_dir = tmp_path
         return d
+
+
+@pytest.fixture(autouse=True)
+def _mock_default_pr_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep CI-driver unit tests from querying live GitHub PR state."""
+    monkeypatch.setattr(
+        CIDriver,
+        "_gh_pr_state",
+        lambda self, pr_number: {
+            "state": "OPEN",
+            "headRefOid": f"test-head-{pr_number}",
+            "mergeStateStatus": "CLEAN",
+        },
+    )
+    monkeypatch.setattr(
+        CIDriver,
+        "_get_pr_branch",
+        lambda self, pr_number: f"test-branch-{pr_number}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +270,15 @@ class TestParseJsonBlock:
         """Returns {} for unparseable input."""
         result = driver._parse_json_block("not json at all")
         assert result == {}
+
+    def test_first_invalid_block_does_not_parse_later_valid_block(self, driver: CIDriver) -> None:
+        """First-block mode does not skip ahead to a later valid block."""
+        text = '```json\n{bad}\n```\n```json\n{"fixed": true}\n```'
+        assert driver._parse_json_block(text) == {}
+
+    def test_raw_json_scalar_returns_empty_dict(self, driver: CIDriver) -> None:
+        """Raw JSON fallback must still return a dict shape."""
+        assert driver._parse_json_block("42") == {}
 
 
 def test_codex_ci_fix_session_falls_back_to_fresh_on_resume_failure(
@@ -449,7 +478,9 @@ class TestDiscoverPrsDedupe:
 
     def test_single_issue_per_pr_unchanged(self, driver: CIDriver) -> None:
         """The 1:1 mapping case is unchanged: every input issue resolves to a PR."""
-        with patch.object(driver, "_find_pr_for_issue", side_effect=[100, 101, 102]):
+        with patch(
+            "hephaestus.automation.ci_driver.find_pr_for_issue", side_effect=[100, 101, 102]
+        ):
             result = driver._discover_prs([1, 2, 3])
         assert result == {1: 100, 2: 101, 3: 102}
 
@@ -458,9 +489,8 @@ class TestDiscoverPrsDedupe:
         # Reproduces the ProjectNestor failure: PR #103 closes nine issues.
         # Without dedupe the driver would race nine workers against the same
         # branch and the eight losers would fail `git worktree add`.
-        with patch.object(
-            driver,
-            "_find_pr_for_issue",
+        with patch(
+            "hephaestus.automation.ci_driver.find_pr_for_issue",
             side_effect=[103] * 9,
         ):
             result = driver._discover_prs([64, 59, 39, 37, 29, 28, 23, 22, 12])
@@ -470,9 +500,8 @@ class TestDiscoverPrsDedupe:
     def test_mixed_shared_and_unique_prs(self, driver: CIDriver) -> None:
         """Mix of shared and unique PRs: each PR appears once, shared via lowest issue."""
         # 1,2 → PR 100 (shared); 3 → PR 200 (unique); 4,5 → PR 300 (shared)
-        with patch.object(
-            driver,
-            "_find_pr_for_issue",
+        with patch(
+            "hephaestus.automation.ci_driver.find_pr_for_issue",
             side_effect=[100, 100, 200, 300, 300],
         ):
             result = driver._discover_prs([1, 2, 3, 4, 5])
@@ -481,7 +510,9 @@ class TestDiscoverPrsDedupe:
     def test_no_pr_skipped_separately_from_shared(self, driver: CIDriver) -> None:
         """Issues with no PR are dropped; remaining issues still get deduped."""
         # 1 → PR 100; 2 → no PR; 3 → PR 100 (shared with 1)
-        with patch.object(driver, "_find_pr_for_issue", side_effect=[100, None, 100]):
+        with patch(
+            "hephaestus.automation.ci_driver.find_pr_for_issue", side_effect=[100, None, 100]
+        ):
             result = driver._discover_prs([1, 2, 3])
         assert result == {1: 100}
 
@@ -493,7 +524,7 @@ class TestDiscoverPrsDedupe:
         # /learn on merge and the other 8 lose their lessons.
         siblings_for_103 = [12, 22, 23, 28, 29, 37, 39, 59, 64]
         side_effect = [103] * len(siblings_for_103) + [200]
-        with patch.object(driver, "_find_pr_for_issue", side_effect=side_effect):
+        with patch("hephaestus.automation.ci_driver.find_pr_for_issue", side_effect=side_effect):
             driver._discover_prs([*siblings_for_103, 99])
         assert driver.shared_pr_issues[103] == siblings_for_103
         assert driver.shared_pr_issues[200] == [99]
@@ -656,7 +687,7 @@ class TestNoPrFound:
 
     def test_no_pr_found_skips(self, driver: CIDriver) -> None:
         """No PR for any issue → run() returns {} without launching any workers."""
-        with patch.object(driver, "_find_pr_for_issue", return_value=None):
+        with patch("hephaestus.automation.ci_driver.find_pr_for_issue", return_value=None):
             results = driver.run()
 
         assert results == {}
@@ -783,28 +814,29 @@ class TestRequiredVsNonRequired:
             _make_check("required-test", required=True, conclusion="failure"),
         ]
         with (
-            patch.object(driver, "_find_pr_for_issue", return_value=42),
+            patch("hephaestus.automation.ci_driver.find_pr_for_issue", return_value=42),
             patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch.object(driver, "_get_failing_ci_logs", return_value="error log"),
             patch.object(driver, "_load_impl_session_id", return_value=None),
             patch.object(driver, "_get_worktree_path", return_value=Path("/tmp/wt")),
             patch.object(driver, "_run_ci_fix_session", return_value=True) as mock_fix,
+            patch.object(driver, "_record_ci_fix_head"),
+            patch.object(driver, "_reply_and_resolve_bot_threads"),
+            patch.object(driver, "_recheck_and_arm_after_fix", return_value=None),
         ):
             result = driver._drive_issue(123, 456, 0)
 
         mock_fix.assert_called_once()
         assert result.success is True
 
-    def test_pending_checks_skip_fix(
-        self, driver: CIDriver, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_pending_checks_skip_fix(self, driver: CIDriver) -> None:
         """All checks pending (not completed) → no fix attempted."""
         checks = [
             _make_check("test", status="in_progress", conclusion="", required=True),
         ]
-        monkeypatch.setenv("HEPH_CI_POLL_MAX_WAIT", "0")
+        driver.options.poll_max_wait = 0
         with (
-            patch.object(driver, "_find_pr_for_issue", return_value=42),
+            patch("hephaestus.automation.ci_driver.find_pr_for_issue", return_value=42),
             patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch.object(driver, "_run_ci_fix_session") as mock_fix,
         ):
@@ -833,6 +865,8 @@ class TestCiDriverAdvise:
                 driver, "_run_advise", return_value="## Findings\n- mind X"
             ) as mock_advise,
             patch.object(driver, "_run_ci_fix_session", return_value=True) as mock_fix,
+            patch.object(driver, "_record_ci_fix_head"),
+            patch.object(driver, "_reply_and_resolve_bot_threads"),
         ):
             driver._attempt_ci_fixes(123, 456, 0)
 
@@ -849,6 +883,8 @@ class TestCiDriverAdvise:
             patch.object(driver, "_get_worktree_path", return_value=Path("/tmp/wt")),
             patch.object(driver, "_run_advise") as mock_advise,
             patch.object(driver, "_run_ci_fix_session", return_value=True) as mock_fix,
+            patch.object(driver, "_record_ci_fix_head"),
+            patch.object(driver, "_reply_and_resolve_bot_threads"),
         ):
             driver._attempt_ci_fixes(123, 456, 0)
 
@@ -878,7 +914,7 @@ class TestDryRunWithFailingChecks:
 
         checks = [_make_check("test", required=True, conclusion="failure")]
         with (
-            patch.object(dry_driver, "_find_pr_for_issue", return_value=42),
+            patch("hephaestus.automation.ci_driver.find_pr_for_issue", return_value=42),
             patch("hephaestus.automation.ci_driver.gh_pr_checks", return_value=checks),
             patch.object(dry_driver, "_get_failing_ci_logs", return_value="log"),
             patch.object(dry_driver, "_load_impl_session_id", return_value=None),
@@ -1386,7 +1422,7 @@ class TestDriveGreenLearnings:
         prompt = mock_codex.call_args.kwargs["prompt"]
         assert prompt.startswith("/learn ")
         assert "/skills-registry-commands:learn" not in prompt
-        assert "Only push skills to ProjectMnemosyne" in prompt
+        assert "Only push skills to the resolved ProjectMnemosyne" in prompt
         assert mock_codex.call_args.kwargs["cwd"] == tmp_path
         mock_invoke.assert_not_called()
         # The learn-evidence cache moved into PostMergeProcessor (#1357).
@@ -1610,24 +1646,6 @@ class TestNoDeadTempfile:
 # ---------------------------------------------------------------------------
 
 
-class TestBodySearch:
-    """Tests that _find_pr_for_issue uses 'Closes #N in:body' (#382/A4-10)."""
-
-    def test_body_search_uses_closes_pattern(self, driver: CIDriver) -> None:
-        """The search string must use 'Closes #<N> in:body'."""
-        # _find_pr_for_issue now delegates to _review_utils.find_pr_for_issue;
-        # patch _gh_call at its actual call site there.
-        with patch("hephaestus.automation._review_utils._gh_call") as mock_gh:
-            mock_gh.return_value = MagicMock(stdout="[]")
-            driver._find_pr_for_issue(42)
-
-        # The second gh call should be the body search
-        body_search_calls = [c for c in mock_gh.call_args_list if "search" in str(c)]
-        assert body_search_calls, "No gh call with --search found"
-        search_arg = str(body_search_calls[0])
-        assert "Closes #42" in search_arg
-
-
 # ---------------------------------------------------------------------------
 # #846: no-commit retry + review-thread injection
 # ---------------------------------------------------------------------------
@@ -1733,8 +1751,8 @@ class TestForceEngagementPrompt:
         # The branch invariant is restated — agent must not switch branches.
         assert "1-fix" in prompt
         assert "DO NOT create a new branch" in prompt
-        # Signed-commits and no --no-verify re-stated (user requirement).
-        assert "git commit -S" in prompt
+        # Signed/DCO commits and no --no-verify re-stated (repo policy).
+        assert "git commit -S -s" in prompt
         assert "--no-verify" in prompt
         # Bug 4: the agent must NOT be told to commit a blocker file (a new
         # Markdown file fails the repo's markdownlint and turns 1 red check into
@@ -2103,7 +2121,7 @@ class TestBotPrDiscovery:
         """
         driver.options.issues = []  # unscoped — bot PRs are in scope
         with (
-            patch.object(driver, "_find_pr_for_issue", return_value=500),
+            patch("hephaestus.automation.ci_driver.find_pr_for_issue", return_value=500),
             patch.object(driver, "_discover_bot_prs", return_value={900: 900, 901: 901}),
             # failing-PR discovery also runs on an unscoped run; keep it empty
             # so this test isolates the bot-PR union.
@@ -2118,7 +2136,7 @@ class TestBotPrDiscovery:
     ) -> None:
         driver.options.include_bot_prs = False
         with (
-            patch.object(driver, "_find_pr_for_issue", return_value=500),
+            patch("hephaestus.automation.ci_driver.find_pr_for_issue", return_value=500),
             patch.object(driver, "_discover_bot_prs") as mock_bots,
         ):
             result = driver._discover_prs([42])
@@ -2131,7 +2149,7 @@ class TestBotPrDiscovery:
         """A bot-PR collision with an issue-driven PR must not displace the issue key."""
         driver.options.issues = []  # unscoped so bot discovery actually runs
         with (
-            patch.object(driver, "_find_pr_for_issue", return_value=900),
+            patch("hephaestus.automation.ci_driver.find_pr_for_issue", return_value=900),
             patch.object(driver, "_discover_bot_prs", return_value={900: 900}),
             patch.object(driver, "_discover_failing_prs", return_value={}),
         ):
@@ -2383,6 +2401,8 @@ class TestAdviseBotShortCircuit:
             patch.object(driver, "_run_ci_fix_session", return_value=True),
             patch.object(driver, "_run_advise") as mock_advise,
             patch.object(driver, "_enable_auto_merge", return_value=True),
+            patch.object(driver, "_record_ci_fix_head"),
+            patch.object(driver, "_reply_and_resolve_bot_threads"),
         ):
             driver._attempt_ci_fixes(issue_number=900, pr_number=900, acquired_slot=0)
         mock_advise.assert_not_called()
@@ -2397,6 +2417,8 @@ class TestAdviseBotShortCircuit:
             patch.object(driver, "_run_ci_fix_session", return_value=True),
             patch.object(driver, "_run_advise", return_value="") as mock_advise,
             patch.object(driver, "_enable_auto_merge", return_value=True),
+            patch.object(driver, "_record_ci_fix_head"),
+            patch.object(driver, "_reply_and_resolve_bot_threads"),
         ):
             driver._attempt_ci_fixes(issue_number=42, pr_number=900, acquired_slot=0)
         mock_advise.assert_called_once_with(42)
@@ -3183,6 +3205,28 @@ class TestEvaluateRunResult:
         remaining = [{"number": 10, "autoMergeRequest": {"enabledAt": "now"}}]
         assert _evaluate_run_result(results, remaining, issues=[1], as_json=False) == 0
 
+    def test_failed_issue_same_armed_pending_pr_is_zero(self) -> None:
+        # A no-commit CI-fix turn can leave a stale failed WorkerResult after
+        # the same PR has become armed and is only waiting on GitHub. The final
+        # repo gate should trust the current PR state and not fail the loop.
+        results = {
+            1: WorkerResult(
+                issue_number=1,
+                success=False,
+                pr_number=10,
+                error="CI fix failed after 1 attempt(s)",
+            )
+        }
+        remaining = [
+            {
+                "number": 10,
+                "autoMergeRequest": {"enabledAt": "now"},
+                "mergeStateStatus": "BLOCKED",
+                "mergeable": "MERGEABLE",
+            }
+        ]
+        assert _evaluate_run_result(results, remaining, issues=[1], as_json=False) == 0
+
     def test_unarmed_go_labeled_pr_is_needs_action(self) -> None:
         # #1576: an un-armed PR that HAS state:implementation-go (review approved
         # but somehow not armed) is a genuine anomaly needing action → rc=1.
@@ -3664,9 +3708,10 @@ class TestPushCiFix:
         post_sha = MagicMock(stdout="deadbeef\n")
         # Unmerged index entries → not pushable
         unmerged = MagicMock(stdout="UU conflict.py\n", stderr="", returncode=0)
+        unmerged_status = MagicMock(stdout="UU conflict.py\n", stderr="", returncode=0)
         with patch(
             "hephaestus.automation.ci_fix_orchestrator.run",
-            side_effect=[post_sha, unmerged],
+            side_effect=[post_sha, unmerged, unmerged_status],
         ):
             result = driver._push_ci_fix(
                 worktree_path=tmp_path,

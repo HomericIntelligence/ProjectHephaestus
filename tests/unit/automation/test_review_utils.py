@@ -2,19 +2,85 @@
 
 import argparse
 import json
+import logging
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hephaestus.automation import _review_utils as review_utils, models
 from hephaestus.automation._review_utils import (
+    _discover_prs_simple,
     add_max_workers_arg,
     close_issue_as_covered,
+    drain_completed_futures,
     find_merged_closing_pr,
     find_pr_for_issue,
     get_pr_head_branch,
+    load_impl_session_id,
+    load_state_file,
+    log_file_path,
     parse_json_block,
+    print_worker_summary,
+    save_state_file,
 )
+from hephaestus.automation.models import DEFAULT_WORKER_COUNT, ImplementationState, WorkerResult
+
+# ---------------------------------------------------------------------------
+# log_file_path
+# ---------------------------------------------------------------------------
+
+
+class TestLogFilePath:
+    """Tests for standard per-issue automation log paths."""
+
+    def test_without_iteration(self, tmp_path: Path) -> None:
+        assert log_file_path(tmp_path, "learn", 42) == tmp_path / "learn-42.log"
+
+    def test_with_iteration(self, tmp_path: Path) -> None:
+        assert log_file_path(tmp_path, "review", 42, iteration=3) == tmp_path / "review-42-r3.log"
+
+    def test_prefix_can_include_hyphen(self, tmp_path: Path) -> None:
+        assert (
+            log_file_path(tmp_path, "pr-review-analysis", 42)
+            == tmp_path / "pr-review-analysis-42.log"
+        )
+
+
+class TestSetupReviewLogging:
+    """setup_review_logging routes through the canonical constants (#1427)."""
+
+    def test_uses_canonical_format(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import hephaestus.constants as constants
+
+        captured: dict[str, Any] = {}
+
+        def fake_basic_config(**kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        monkeypatch.setattr(
+            "hephaestus.automation._review_utils.logging.basicConfig", fake_basic_config
+        )
+        review_utils.setup_review_logging(verbose=False)
+
+        assert captured["format"] == constants.AUTOMATION_LOG_FORMAT
+        assert captured["datefmt"] == constants.LOG_DATEFMT
+        assert captured["level"] == logging.INFO
+
+    def test_verbose_sets_debug_level(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_basic_config(**kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        monkeypatch.setattr(
+            "hephaestus.automation._review_utils.logging.basicConfig", fake_basic_config
+        )
+        review_utils.setup_review_logging(verbose=True)
+
+        assert captured["level"] == logging.DEBUG
+
 
 # ---------------------------------------------------------------------------
 # parse_json_block
@@ -53,6 +119,241 @@ class TestParseJsonBlock:
         result = parse_json_block(text)
         assert result["summary"] == "ok"
         assert len(result["comments"]) == 1
+
+    def test_invalid_json_with_custom_default_writes_trace(self, tmp_path: Path) -> None:
+        """Malformed JSON with trace_dir writes the diagnostic payload."""
+        default: dict[str, Any] = {"addressed": [], "replies": {}}
+        text = "before\n```json\n{broken!!}\n```\nafter"
+
+        result = parse_json_block(
+            text,
+            default=default,
+            trace_dir=tmp_path,
+            trace_name="address-123.parse-error.log",
+        )
+
+        assert result == default
+        trace = tmp_path / "address-123.parse-error.log"
+        assert trace.exists()
+        payload = trace.read_text()
+        assert "reason: json.JSONDecodeError:" in payload
+        assert "=== last fenced block (if any) ===\n{broken!!}" in payload
+        assert "=== full response ===\n" in payload
+        assert text in payload
+
+    def test_raw_json_fallback_invalid_returns_custom_default(self) -> None:
+        """Invalid raw JSON fallback returns the caller's shape."""
+        assert parse_json_block("{bad", default={}, raw_json_fallback=True) == {}
+
+    def test_first_block_invalid_with_raw_fallback_does_not_use_later_block(self) -> None:
+        """First-block mode preserves CI-driver semantics on invalid first blocks."""
+        text = '```json\n{bad}\n```\n```json\n{"fixed": true}\n```'
+        assert (
+            parse_json_block(text, default={}, raw_json_fallback=True, use_last_block=False) == {}
+        )
+
+    def test_scalar_json_returns_parse_error_default(self) -> None:
+        """Scalar JSON is not a dict result and uses the parse-error default."""
+        result = parse_json_block("```json\n42\n```")
+        assert result["summary"].startswith("Failed to parse")
+
+
+class TestPrintWorkerSummary:
+    """Tests for the shared worker summary logger."""
+
+    @staticmethod
+    def _worker_result(issue_number: int, success: bool, error: str | None = None) -> WorkerResult:
+        return WorkerResult(issue_number=issue_number, success=success, error=error)
+
+    def test_empty_results_logs_zero_counts_without_failures(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Empty result sets log zero totals and omit the failure block."""
+        with caplog.at_level(logging.INFO):
+            print_worker_summary("PR Review Summary", {})
+
+        text = "\n".join(caplog.messages)
+        assert "PR Review Summary" in text
+        assert "Total issues: 0" in text
+        assert "Successful: 0" in text
+        assert "Failed: 0" in text
+        assert "Failed issues:" not in text
+
+    def test_all_successful_results_log_success_count(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Successful result sets log the expected success tally."""
+        results = {
+            1: self._worker_result(1, True),
+            2: self._worker_result(2, True),
+        }
+
+        with caplog.at_level(logging.INFO):
+            print_worker_summary("Plan Review Summary", results)
+
+        text = "\n".join(caplog.messages)
+        assert "Plan Review Summary" in text
+        assert "Total issues: 2" in text
+        assert "Successful: 2" in text
+        assert "Failed: 0" in text
+
+    def test_mixed_results_log_failed_errors(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Failed results are listed with their issue numbers and error text."""
+        results = {
+            1: self._worker_result(1, True),
+            2: self._worker_result(2, False, "boom"),
+        }
+
+        with caplog.at_level(logging.INFO):
+            print_worker_summary("CI Driver Summary", results)
+
+        text = "\n".join(caplog.messages)
+        assert "CI Driver Summary" in text
+        assert "Successful: 1" in text
+        assert "Failed: 1" in text
+        assert "Failed issues:" in text
+        assert "  #2: boom" in text
+
+    def test_custom_count_noun_preserves_pr_summary_text(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Callers can preserve the existing PR-specific total label."""
+        results = {1: self._worker_result(1, True)}
+
+        with caplog.at_level(logging.INFO):
+            print_worker_summary("PR Review Summary", results, count_noun="PRs")
+
+        assert "Total PRs: 1" in caplog.messages
+
+    def test_custom_failed_header_preserves_leading_newline(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Callers can preserve summary methods that logged a blank line first."""
+        results = {1: self._worker_result(1, False, "x")}
+
+        with caplog.at_level(logging.INFO):
+            print_worker_summary(
+                "Address Review Summary",
+                results,
+                failed_header="\nFailed issues:",
+            )
+
+        assert "\nFailed issues:" in caplog.messages
+
+
+class TestEnsureStateDir:
+    """Tests for the canonical automation state-dir helper."""
+
+    def test_ensure_state_dir_creates_default_state_dir_under_repo_root(
+        self, tmp_path: Path
+    ) -> None:
+        """Default state dir is created under the provided repo root."""
+        state_dir = review_utils.ensure_state_dir(tmp_path)
+
+        assert models.DEFAULT_STATE_DIR == "build/.issue_implementer"
+        assert state_dir == tmp_path / Path(models.DEFAULT_STATE_DIR)
+        assert state_dir.is_dir()
+
+    def test_ensure_state_dir_accepts_custom_subdir(self, tmp_path: Path) -> None:
+        """Callers can override the subdir while reusing mkdir behavior."""
+        state_dir = review_utils.ensure_state_dir(tmp_path, subdir="custom/state")
+
+        assert state_dir == tmp_path / "custom" / "state"
+        assert state_dir.is_dir()
+
+
+# ---------------------------------------------------------------------------
+# _discover_prs_simple
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoverPrsSimple:
+    """Tests for the shared issue-to-PR discovery helper."""
+
+    def test_empty_input_returns_empty_without_calling_find(self) -> None:
+        """Empty issue list returns an empty map without lookup calls."""
+        find_fn = MagicMock(return_value=123)
+
+        result = _discover_prs_simple([], find_fn)
+
+        assert result == {}
+        find_fn.assert_not_called()
+
+    def test_discovers_prs_and_reports_missing_issues_in_order(self) -> None:
+        """Found PRs are mapped while missing issues invoke the callback."""
+        calls: list[int] = []
+        missing: list[int] = []
+
+        def find_fn(issue_number: int) -> int | None:
+            calls.append(issue_number)
+            return {1: 101, 3: 103}.get(issue_number)
+
+        result = _discover_prs_simple([1, 2, 3], find_fn, on_missing=missing.append)
+
+        assert result == {1: 101, 3: 103}
+        assert calls == [1, 2, 3]
+        assert missing == [2]
+
+
+# ---------------------------------------------------------------------------
+# load_impl_session_id
+# ---------------------------------------------------------------------------
+
+
+class TestLoadImplSessionId:
+    """Tests for the shared load_impl_session_id helper."""
+
+    def test_returns_session_id_for_matching_claude(self, tmp_path: Path) -> None:
+        """Legacy state without session_agent belongs to Claude."""
+        (tmp_path / "issue-123.json").write_text(json.dumps({"session_id": "abc"}))
+
+        assert load_impl_session_id(tmp_path, 123, "claude") == "abc"
+
+    def test_skips_legacy_claude_session_for_codex(self, tmp_path: Path) -> None:
+        """Legacy Claude session must not resume as Codex."""
+        (tmp_path / "issue-123.json").write_text(json.dumps({"session_id": "abc"}))
+
+        assert load_impl_session_id(tmp_path, 123, "codex") is None
+
+    def test_returns_matching_codex_session(self, tmp_path: Path) -> None:
+        """Codex sessions resume when the selected agent is Codex."""
+        (tmp_path / "issue-123.json").write_text(
+            json.dumps({"session_id": "codex-sess", "session_agent": "codex"})
+        )
+
+        assert load_impl_session_id(tmp_path, 123, "codex") == "codex-sess"
+
+    def test_missing_file_returns_none(self, tmp_path: Path) -> None:
+        """Missing implementer state returns None."""
+        assert load_impl_session_id(tmp_path, 123, "claude") is None
+
+    def test_null_session_id_returns_none(self, tmp_path: Path) -> None:
+        """State with a null session_id returns None."""
+        (tmp_path / "issue-123.json").write_text(json.dumps({"session_id": None}))
+
+        assert load_impl_session_id(tmp_path, 123, "claude") is None
+
+    def test_no_session_id_key_returns_none(self, tmp_path: Path) -> None:
+        """State without session_id returns None."""
+        (tmp_path / "issue-123.json").write_text(json.dumps({"phase": "completed"}))
+
+        assert load_impl_session_id(tmp_path, 123, "claude") is None
+
+    def test_malformed_json_returns_none(self, tmp_path: Path) -> None:
+        """Unreadable JSON state returns None."""
+        (tmp_path / "issue-123.json").write_text("{not json")
+
+        assert load_impl_session_id(tmp_path, 123, "claude") is None
+
+    def test_reads_issue_filename_not_legacy_state_name(self, tmp_path: Path) -> None:
+        """Only the implementer-written issue filename is read."""
+        (tmp_path / "state-123.json").write_text(json.dumps({"session_id": "legacy"}))
+
+        assert load_impl_session_id(tmp_path, 123, "claude") is None
+
+        (tmp_path / "issue-123.json").write_text(json.dumps({"session_id": "real"}))
+
+        assert load_impl_session_id(tmp_path, 123, "claude") == "real"
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +475,19 @@ class TestFindPrForIssue:
 
         assert result is None
 
+    def test_body_search_query_uses_closes_in_body(self) -> None:
+        """The body-search strategy queries exact Closes lines in PR bodies."""
+        with patch(
+            "hephaestus.automation._review_utils._gh_call",
+            return_value=_make_gh_result([]),
+        ) as mock_gh:
+            result = find_pr_for_issue(42)
+
+        assert result is None
+        search_calls = [call for call in mock_gh.call_args_list if "--search" in call.args[0]]
+        assert search_calls
+        assert "Closes #42 in:body" in search_calls[0].args[0]
+
     def test_extra_strategies_uses_review_state(self) -> None:
         """extra_strategies=True checks review state when branch-name fails."""
         # Branch-name returns empty; review-state lookup succeeds
@@ -283,11 +597,13 @@ class TestAddMaxWorkersArg:
     """Tests for the shared add_max_workers_arg helper."""
 
     def test_default_help_and_value(self) -> None:
-        """Default case: uses standard help text and default=3."""
+        """Default case: uses the shared worker default."""
         parser = argparse.ArgumentParser()
         add_max_workers_arg(parser)
         args = parser.parse_args([])
-        assert args.max_workers == 3
+
+        assert args.max_workers == DEFAULT_WORKER_COUNT
+        assert f"default: {DEFAULT_WORKER_COUNT}" in parser.format_help()
 
     def test_custom_help_text(self) -> None:
         """Custom help_text is used in the parser."""
@@ -317,6 +633,57 @@ class TestAddMaxWorkersArg:
         add_max_workers_arg(parser, default=8)
         args = parser.parse_args([])
         assert args.max_workers == 8
+
+
+# ---------------------------------------------------------------------------
+# state file helpers
+# ---------------------------------------------------------------------------
+
+
+class TestStateFileHelpers:
+    """Tests for shared issue/review state file persistence helpers."""
+
+    def test_load_state_file_missing_returns_none(self, tmp_path: Path) -> None:
+        assert load_state_file(tmp_path, "issue", 123) is None
+
+    def test_load_state_file_returns_raw_dict(self, tmp_path: Path) -> None:
+        (tmp_path / "issue-123.json").write_text(json.dumps({"session_id": "abc"}))
+
+        assert load_state_file(tmp_path, "issue", 123) == {"session_id": "abc"}
+
+    def test_load_state_file_validates_pydantic_model(self, tmp_path: Path) -> None:
+        state = ImplementationState(issue_number=123)
+        (tmp_path / "issue-123.json").write_text(state.model_dump_json())
+
+        loaded = load_state_file(tmp_path, "issue", 123, ImplementationState)
+
+        assert isinstance(loaded, ImplementationState)
+        assert loaded.issue_number == 123
+
+    def test_load_state_file_rejects_non_object_payload(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        (tmp_path / "issue-123.json").write_text(json.dumps([["session_id", "would-coerce"]]))
+        caplog.set_level("WARNING")
+
+        assert load_state_file(tmp_path, "issue", 123) is None
+        assert "expected JSON object" in caplog.text
+
+    def test_load_state_file_invalid_json_returns_none(self, tmp_path: Path) -> None:
+        (tmp_path / "issue-123.json").write_text("{not valid json")
+
+        assert load_state_file(tmp_path, "issue", 123) is None
+
+    def test_save_state_file_uses_secure_write(self, tmp_path: Path) -> None:
+        state = ImplementationState(issue_number=123)
+
+        with patch("hephaestus.automation._review_utils.write_secure") as mock_write:
+            save_state_file(tmp_path, "issue", 123, state)
+
+        mock_write.assert_called_once_with(
+            tmp_path / "issue-123.json",
+            state.model_dump_json(indent=2),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -433,3 +800,55 @@ class TestCloseIssueAsCovered:
             result = close_issue_as_covered(1357, 1358)
 
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# drain_completed_futures
+# ---------------------------------------------------------------------------
+
+
+class TestDrainCompletedFutures:
+    """Tests for the shared concurrent-futures drain helper (#1463)."""
+
+    def test_yields_all_completed_futures(self) -> None:
+        from concurrent.futures import Future, ThreadPoolExecutor
+
+        def _identity(n: int) -> int:
+            return n
+
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            futures: dict[Future[Any], int] = {ex.submit(_identity, n): n for n in (1, 2, 3)}
+            seen = []
+            for fut in drain_completed_futures(futures, timeout=0.1):
+                seen.append(futures.pop(fut))
+            assert sorted(seen) == [1, 2, 3]
+            assert futures == {}
+
+    def test_backs_off_and_logs_on_wait_failure(self, caplog: pytest.LogCaptureFixture) -> None:
+        from concurrent.futures import Future
+
+        # First wait() raises, then succeeds -> one WARNING, one sleep, no busy-loop.
+        fut = MagicMock(spec=Future)
+        futures: dict[Future[Any], int] = {fut: 1}
+
+        calls = {"n": 0}
+
+        def fake_wait(_keys: Any, timeout: float, return_when: Any) -> tuple[set[Any], set[Any]]:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("transient")
+            futures.pop(fut)  # caller's pop, simulated
+            return ({fut}, set())
+
+        with (
+            patch("hephaestus.automation._review_utils.wait", side_effect=fake_wait),
+            patch("hephaestus.automation._review_utils.time.sleep") as sleep_mock,
+            caplog.at_level(logging.WARNING),
+        ):
+            list(drain_completed_futures(futures, timeout=0.1))
+
+        sleep_mock.assert_called_once_with(0.1)
+        assert any("futures.wait() raised RuntimeError" in r.message for r in caplog.records)
+
+    def test_empty_futures_yields_nothing(self) -> None:
+        assert list(drain_completed_futures({})) == []

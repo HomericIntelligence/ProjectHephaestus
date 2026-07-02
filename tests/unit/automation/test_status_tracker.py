@@ -3,6 +3,8 @@
 import threading
 import time
 
+import pytest
+
 from hephaestus.automation.status_tracker import StatusTracker
 
 
@@ -121,6 +123,7 @@ class TestStatusTracker:
         tracker.release_slot(slot1)
         assert tracker.get_active_count() == 1
 
+    @pytest.mark.slow
     def test_wait_for_available(self) -> None:
         """Test waiting for slot availability."""
         tracker = StatusTracker(num_slots=1)
@@ -154,6 +157,7 @@ class TestStatusTracker:
         result = tracker.wait_for_available(timeout=0.1)
         assert result is False
 
+    @pytest.mark.slow
     def test_wait_all_complete(self) -> None:
         """Test waiting for all slots to complete."""
         tracker = StatusTracker(num_slots=2)
@@ -206,6 +210,7 @@ class TestStatusTracker:
         assert all(slot is None for slot in tracker.slots)
         assert tracker.get_active_count() == 0
 
+    @pytest.mark.slow
     def test_concurrent_acquire_release(self) -> None:
         """Test concurrent slot acquisition and release."""
         tracker = StatusTracker(num_slots=5)
@@ -232,6 +237,7 @@ class TestStatusTracker:
         # All slots should be released
         assert tracker.get_active_count() == 0
 
+    @pytest.mark.slow
     def test_notify_all_on_release(self) -> None:
         """Test that release_slot wakes all waiting threads."""
         tracker = StatusTracker(num_slots=1)
@@ -264,6 +270,7 @@ class TestStatusTracker:
         # All waiters should have been notified
         assert len(results) == 3
 
+    @pytest.mark.slow
     def test_notify_all_on_clear(self) -> None:
         """Test that clear wakes waiting threads."""
         tracker = StatusTracker(num_slots=1)
@@ -289,3 +296,51 @@ class TestStatusTracker:
         thread.join()
 
         assert result == [True]
+
+
+class TestSlotContextManager:
+    """Tests for StatusTracker.slot() context manager (#1437)."""
+
+    def test_slot_yields_and_releases(self) -> None:
+        """Slot is acquired in the block and released on exit."""
+        tracker = StatusTracker(num_slots=2)
+        with tracker.slot() as slot_id:
+            assert slot_id is not None
+            assert tracker.get_active_count() == 1
+        assert tracker.get_active_count() == 0
+
+    def test_slot_releases_on_exception(self) -> None:
+        """Slot is released even when the block raises."""
+        tracker = StatusTracker(num_slots=2)
+        # Explicit try/except avoids the unreachable-code false positive from pytest.raises.
+        # The test asserts cleanup AFTER the exception is caught, not that it escapes.
+        try:
+            with tracker.slot() as slot_id:
+                assert slot_id is not None
+                raise ValueError("boom")
+        except ValueError:
+            pass
+        assert tracker.get_active_count() == 0
+
+    def test_slot_sets_initial_msg(self) -> None:
+        """A non-empty initial_msg is set as the slot status."""
+        tracker = StatusTracker(num_slots=2)
+        with tracker.slot("Starting") as slot_id:
+            assert slot_id is not None
+            assert tracker.slots[slot_id] == "Starting"
+
+    def test_slot_no_msg_leaves_acquired_marker(self) -> None:
+        """Without initial_msg the slot keeps the 'acquired' marker."""
+        tracker = StatusTracker(num_slots=2)
+        with tracker.slot() as slot_id:
+            assert slot_id is not None
+            assert tracker.slots[slot_id] == "acquired"
+
+    def test_slot_yields_none_on_timeout(self) -> None:
+        """When acquisition times out, slot() yields None and releases nothing."""
+        tracker = StatusTracker(num_slots=1)
+        tracker.acquire_slot()  # exhaust the only slot
+        with tracker.slot(timeout=0.1) as slot_id:
+            assert slot_id is None
+        # The still-held real slot must not be spuriously released.
+        assert tracker.get_active_count() == 1

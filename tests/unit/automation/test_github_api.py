@@ -32,9 +32,10 @@ from hephaestus.automation.github_api import (
     is_issue_closed,
     parse_issue_dependencies,
     prefetch_issue_states,
-    write_secure,
+    skip_epics,
 )
 from hephaestus.automation.models import IssueState
+from hephaestus.io import utils as io_utils
 
 # Circuit-breaker reset is now an autouse package-scope fixture in
 # ``tests/unit/automation/conftest.py`` (#708), so it applies to every test
@@ -72,6 +73,52 @@ class TestGhIssueJson:
 
         with pytest.raises(RuntimeError, match="Failed to fetch issue"):
             gh_issue_json(123)
+
+    @patch("hephaestus.automation.github_api._gh_call")
+    def test_strips_null_bytes_from_title_and_body(self, mock_gh_call: Any) -> None:
+        """#1661: NUL bytes in title/body are stripped at the source."""
+        mock_result = Mock()
+        mock_result.stdout = json.dumps(
+            {
+                "number": 1509,
+                "title": "bad\x00title",
+                "state": "OPEN",
+                "labels": [],
+                "body": "bad\x00body",
+            }
+        )
+        mock_gh_call.return_value = mock_result
+
+        data = gh_issue_json(1509)
+
+        assert data["title"] == "badtitle"
+        assert data["body"] == "badbody"
+        assert "\x00" not in data["title"]
+        assert "\x00" not in data["body"]
+
+    @patch("hephaestus.automation.github_api._gh_call")
+    def test_strip_tolerates_missing_and_non_string_fields(self, mock_gh_call: Any) -> None:
+        """#1661: the .get/isinstance guard skips missing or non-string fields.
+
+        Exercises the defensive branch — a payload with ``body`` absent and a
+        non-string ``title`` must not raise (None/int have no ``.replace``).
+        """
+        mock_result = Mock()
+        mock_result.stdout = json.dumps(
+            {
+                "number": 1509,
+                "title": 123,  # non-string — isinstance guard must skip it
+                "state": "OPEN",
+                "labels": [],
+                # body intentionally omitted — .get returns None, guard skips it
+            }
+        )
+        mock_gh_call.return_value = mock_result
+
+        data = gh_issue_json(1509)
+
+        assert data["title"] == 123
+        assert "body" not in data
 
 
 class TestParseIssueDependencies:
@@ -924,6 +971,19 @@ class TestGhIssueCreate:
         assert isinstance(call_args[5], str) and call_args[5]
         assert "Test body" not in call_args
 
+    @patch("hephaestus.automation.github_api._gh_call")
+    def test_title_null_byte_stripped_from_argv(self, mock_gh_call: Any) -> None:
+        """#1661: a NUL in the title must not reach the --title argv element."""
+        mock_result = Mock()
+        mock_result.stdout = "https://github.com/owner/repo/issues/791"
+        mock_gh_call.return_value = mock_result
+
+        gh_issue_create(title="bad\x00title", body="Body")
+
+        call_args = mock_gh_call.call_args[0][0]
+        assert call_args[:4] == ["issue", "create", "--title", "badtitle"]
+        assert all("\x00" not in str(arg) for arg in call_args)
+
     @patch("hephaestus.automation.github_api.gh_list_labels", return_value={"bug", "enhancement"})
     @patch("hephaestus.automation.github_api._gh_call")
     def test_creation_with_labels(self, mock_gh_call: Any, mock_labels: Any) -> None:
@@ -1146,6 +1206,37 @@ class TestGhIssueAddLabels:
         assert args.count("--add-label") == 2
         assert "state:plan-go" in args
         assert "state:plan-no-go" in args
+
+
+class TestSkipEpics:
+    """Tests for skip_epics — idempotent ``state:skip`` tagging of excluded epics."""
+
+    def teardown_method(self) -> None:
+        _github_api_module._label_cache = None
+
+    @patch("hephaestus.automation.github_api.gh_issue_add_labels")
+    def test_tags_unskipped_epics(self, mock_add: Any) -> None:
+        """Each epic without state:skip gets exactly one add-label call."""
+        skip_epics({10: ["epic"], 11: ["roadmap", "bug"]})
+        assert mock_add.call_count == 2
+        mock_add.assert_any_call(10, ["state:skip"])
+        mock_add.assert_any_call(11, ["state:skip"])
+
+    @patch("hephaestus.automation.github_api.gh_issue_add_labels")
+    def test_skips_already_skipped_epic(self, mock_add: Any) -> None:
+        """An epic already carrying state:skip is not re-tagged (no API write)."""
+        skip_epics({10: ["epic", "state:skip"]})
+        mock_add.assert_not_called()
+
+    @patch("hephaestus.automation.github_api.gh_issue_add_labels")
+    def test_mixed_skipped_and_unskipped(self, mock_add: Any) -> None:
+        skip_epics({10: ["epic", "state:skip"], 11: ["roadmap"]})
+        mock_add.assert_called_once_with(11, ["state:skip"])
+
+    @patch("hephaestus.automation.github_api.gh_issue_add_labels")
+    def test_empty_mapping_is_noop(self, mock_add: Any) -> None:
+        skip_epics({})
+        mock_add.assert_not_called()
 
 
 class TestGhIssueRemoveLabels:
@@ -1547,82 +1638,40 @@ class TestAssertBranchCommitsSignedApiFallback:
         mock_verified.assert_not_called()
 
 
-class TestWriteSecure:
-    """Tests for write_secure function."""
+class TestGhCommitIsVerified:
+    """``_gh_commit_is_verified`` fail-safe behavior (#1426)."""
 
-    def test_write_new_file(self, tmp_path: Any) -> None:
-        """Test writing to a new file."""
-        test_file = tmp_path / "test.txt"
-        content = "test content"
+    @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
+    @patch("hephaestus.automation.github_api._gh_call")
+    def test_returns_true_when_github_reports_verified(self, mock_gh: Any, _mock_info: Any) -> None:
+        from hephaestus.automation.github_api import _gh_commit_is_verified
 
-        write_secure(test_file, content)
+        mock_gh.return_value = Mock(stdout="true\n")
+        assert _gh_commit_is_verified("deadbeef") is True
 
-        assert test_file.exists()
-        assert test_file.read_text() == content
+    @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
+    @patch(
+        "hephaestus.automation.github_api._gh_call",
+        side_effect=RuntimeError("api down"),
+    )
+    def test_returns_false_on_lookup_failure(self, _mock_gh: Any, _mock_info: Any) -> None:
+        """#1426: a gh lookup failure is logged and fail-safe returns False.
 
-    def test_overwrite_existing_file(self, tmp_path: Any) -> None:
-        """Test overwriting an existing file."""
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("old content")
-
-        write_secure(test_file, "new content")
-
-        assert test_file.read_text() == "new content"
-
-    def test_create_parent_directories(self, tmp_path: Any) -> None:
-        """Test that parent directories are created."""
-        test_file = tmp_path / "subdir" / "nested" / "test.txt"
-
-        write_secure(test_file, "content")
-
-        assert test_file.exists()
-        assert test_file.read_text() == "content"
-
-    def test_atomic_write(self, tmp_path: Any) -> None:
-        """Test that write is atomic (uses temp file + rename)."""
-        test_file = tmp_path / "test.txt"
-
-        # Write initial content
-        test_file.write_text("original")
-
-        # Verify temp file pattern during write
-        write_secure(test_file, "updated")
-
-        # Should have no temp files left
-        temp_files = list(tmp_path.glob(".test.txt.*.tmp"))
-        assert len(temp_files) == 0
-
-        # Content should be updated
-        assert test_file.read_text() == "updated"
-
-    def test_cleanup_on_error(self, tmp_path: Any) -> None:
-        """Test that temp files are cleaned up on error."""
-        test_file = tmp_path / "test.txt"
-
-        # Make parent directory read-only to cause error
-        test_file.parent.chmod(0o444)
-
-        try:
-            with pytest.raises(OSError):
-                write_secure(test_file, "content")
-
-            # Temp files should be cleaned up
-            temp_files = list(tmp_path.glob(".test.txt.*.tmp"))
-            assert len(temp_files) == 0
-        finally:
-            # Restore permissions for cleanup
-            test_file.parent.chmod(0o755)
-
-    def test_writes_with_restrictive_permissions(self, tmp_path: Any) -> None:
-        """github_api.write_secure delegates to io.write_secure → 0o600 perms.
-
-        Regression for #443: the automation copy of write_secure used to write
-        with default permissions; consolidating onto hephaestus.io.write_secure
-        means state files are owner-only.
+        Covers the formerly ``# pragma: no cover`` fallback handler; the caller
+        falls back to the strict local verdict (treated as unverified).
         """
-        test_file = tmp_path / "state.json"
-        write_secure(test_file, "{}")
-        assert oct(test_file.stat().st_mode & 0o777) == oct(0o600)
+        from hephaestus.automation.github_api import _gh_commit_is_verified
+
+        assert _gh_commit_is_verified("deadbeef") is False
+
+
+class TestWriteSecureCompatibility:
+    """Compatibility coverage for the historical github_api import path."""
+
+    def test_import_path_is_canonical_io_helper(self) -> None:
+        """The historical named import should resolve to the canonical helper."""
+        module = __import__("hephaestus.automation.github_api", fromlist=["write_secure"])
+        assert module.write_secure is io_utils.write_secure
 
 
 class TestGhCallThrottle:
@@ -1662,15 +1711,12 @@ class TestGhCallThrottle:
         monkeypatch.setenv("GH_RATE_LIMIT_PER_SEC", "0")
         mock_run.return_value = Mock(stdout="", stderr="", returncode=0)
 
-        import time as _time
+        with patch("hephaestus.github.client.time.sleep") as mock_sleep:
+            for _ in range(5):
+                _gh_call(["api", "/rate_limit"])
 
-        t0 = _time.monotonic()
-        for _ in range(5):
-            _gh_call(["api", "/rate_limit"])
-        elapsed = _time.monotonic() - t0
-
-        # 5 calls with no throttle should finish well under one min-interval.
-        assert elapsed < 0.05, f"unexpected delay with throttle off; elapsed={elapsed:.3f}s"
+        assert mock_run.call_count == 5
+        mock_sleep.assert_not_called()
 
     @patch("hephaestus.github.client.run_subprocess")
     def test_buckets_are_per_thread(self, mock_run: Any) -> None:
@@ -2180,9 +2226,9 @@ class TestGhPrReviewPost:
 
     @staticmethod
     def _posted_comments(mock_write: Any) -> list[dict[str, Any]]:
-        """Extract the ``comments`` array from the review body io_write_secure saw."""
+        """Extract the ``comments`` array from the review body write_secure saw."""
         for call in mock_write.call_args_list:
-            # io_write_secure(path, body) — body is the JSON review payload.
+            # write_secure(path, body) — body is the JSON review payload.
             body = call.args[1] if len(call.args) > 1 else call.kwargs.get("content", "")
             if isinstance(body, str) and '"comments"' in body:
                 comments = json.loads(body)["comments"]
@@ -2190,7 +2236,7 @@ class TestGhPrReviewPost:
                 return comments
         raise AssertionError("no review body was written")
 
-    @patch("hephaestus.automation.github_api.io_write_secure")
+    @patch("hephaestus.automation.github_api.write_secure")
     @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
     @patch("hephaestus.automation.github_api._gh_call")
     def test_out_of_hunk_comment_is_filtered_summary_still_posts(
@@ -2220,7 +2266,7 @@ class TestGhPrReviewPost:
         bodies = {c["body"] for c in posted}
         assert bodies == {"valid"}
 
-    @patch("hephaestus.automation.github_api.io_write_secure")
+    @patch("hephaestus.automation.github_api.write_secure")
     @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
     @patch("hephaestus.automation.github_api._gh_call")
     def test_all_comments_out_of_hunk_posts_summary_only(
@@ -2242,7 +2288,7 @@ class TestGhPrReviewPost:
         # The review POST was still sent.
         self._review_post_call(mock_gh_call)
 
-    @patch("hephaestus.automation.github_api.io_write_secure")
+    @patch("hephaestus.automation.github_api.write_secure")
     @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
     @patch("hephaestus.automation.github_api._gh_call")
     def test_empty_diff_fails_open_posts_all_comments(
@@ -2271,7 +2317,7 @@ class TestGhPrReviewPost:
 
     @patch("hephaestus.automation.github_api.gh_pr_update_review_comment")
     @patch("hephaestus.automation.github_api.gh_pr_inline_comment_index")
-    @patch("hephaestus.automation.github_api.io_write_secure")
+    @patch("hephaestus.automation.github_api.write_secure")
     @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
     @patch("hephaestus.automation.github_api._gh_call")
     def test_existing_line_comment_is_edited_not_duplicated(
@@ -2319,7 +2365,7 @@ class TestGhPrReviewPost:
 
     @patch("hephaestus.automation.github_api.gh_pr_update_review_comment")
     @patch("hephaestus.automation.github_api.gh_pr_inline_comment_index")
-    @patch("hephaestus.automation.github_api.io_write_secure")
+    @patch("hephaestus.automation.github_api.write_secure")
     @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
     @patch("hephaestus.automation.github_api._gh_call")
     def test_same_line_duplicate_comment_is_skipped_not_appended(
@@ -2374,7 +2420,7 @@ class TestGhPrReviewPost:
 
     @patch("hephaestus.automation.github_api.gh_pr_update_review_comment")
     @patch("hephaestus.automation.github_api.gh_pr_inline_comment_index")
-    @patch("hephaestus.automation.github_api.io_write_secure")
+    @patch("hephaestus.automation.github_api.write_secure")
     @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
     @patch("hephaestus.automation.github_api._gh_call")
     def test_semantic_same_line_duplicate_comment_is_skipped_not_appended(
@@ -2429,7 +2475,7 @@ class TestGhPrReviewPost:
 
     @patch("hephaestus.automation.github_api.gh_pr_update_review_comment")
     @patch("hephaestus.automation.github_api.gh_pr_inline_comment_index")
-    @patch("hephaestus.automation.github_api.io_write_secure")
+    @patch("hephaestus.automation.github_api.write_secure")
     @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
     @patch("hephaestus.automation.github_api._gh_call")
     def test_finding_matching_only_a_resolved_thread_is_reposted(
@@ -2482,7 +2528,7 @@ class TestGhPrReviewPost:
 
     @patch("hephaestus.automation.github_api.gh_pr_update_review_comment")
     @patch("hephaestus.automation.github_api.gh_pr_inline_comment_index")
-    @patch("hephaestus.automation.github_api.io_write_secure")
+    @patch("hephaestus.automation.github_api.write_secure")
     @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
     @patch("hephaestus.automation.github_api._gh_call")
     def test_actual_1116_codex_review_restatements_are_skipped(
@@ -2557,7 +2603,7 @@ class TestGhPrReviewPost:
 
     @patch("hephaestus.automation.github_api.gh_pr_update_review_comment")
     @patch("hephaestus.automation.github_api.gh_pr_inline_comment_index")
-    @patch("hephaestus.automation.github_api.io_write_secure")
+    @patch("hephaestus.automation.github_api.write_secure")
     @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
     @patch("hephaestus.automation.github_api._gh_call")
     def test_same_line_contract_restatement_is_skipped_not_appended(
@@ -2613,7 +2659,7 @@ class TestGhPrReviewPost:
 
     @patch("hephaestus.automation.github_api.gh_pr_update_review_comment")
     @patch("hephaestus.automation.github_api.gh_pr_inline_comment_index")
-    @patch("hephaestus.automation.github_api.io_write_secure")
+    @patch("hephaestus.automation.github_api.write_secure")
     @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
     @patch("hephaestus.automation.github_api._gh_call")
     def test_dedupe_disabled_posts_everything(
@@ -2642,7 +2688,7 @@ class TestGhPrReviewPost:
 
     @patch("hephaestus.automation.github_api.gh_pr_update_review_comment")
     @patch("hephaestus.automation.github_api.gh_pr_inline_comment_index")
-    @patch("hephaestus.automation.github_api.io_write_secure")
+    @patch("hephaestus.automation.github_api.write_secure")
     @patch("hephaestus.automation.github_api.get_repo_info", return_value=("owner", "repo"))
     @patch("hephaestus.automation.github_api._gh_call")
     def test_edit_in_place_falls_back_to_fresh_on_error(

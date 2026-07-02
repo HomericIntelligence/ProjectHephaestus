@@ -18,6 +18,11 @@ from pydantic import BaseModel, Field
 # comment is now defined in :mod:`hephaestus.automation.protocol` together
 # with :data:`PLAN_REVIEW_PREFIX`. Re-exported here for backward compatibility
 # with the historical ``from .models import PLAN_COMMENT_MARKER`` import path.
+from .agent_config import (
+    DEFAULT_AGENT_TIMEOUT,
+    DEFAULT_CI_POLL_MAX_WAIT,
+    DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT,
+)
 from .protocol import PLAN_COMMENT_MARKER as PLAN_COMMENT_MARKER
 
 __all__ = ["PLAN_COMMENT_MARKER"]
@@ -142,7 +147,29 @@ class PlanResult(BaseModel):
     plan_already_exists: bool = False
 
 
-class PlannerOptions(BaseModel):
+DEFAULT_WORKER_COUNT = 3
+DEFAULT_STATE_DIR = "build/.issue_implementer"
+
+
+class WorkerOptionsBase(BaseModel):
+    """Shared options for automation worker stages."""
+
+    dry_run: bool = False
+
+
+class ParallelWorkerOptionsBase(WorkerOptionsBase):
+    """Shared options for stages that expose ``max_workers``."""
+
+    max_workers: int = DEFAULT_WORKER_COUNT
+
+
+class VerboseParallelWorkerOptionsBase(ParallelWorkerOptionsBase):
+    """Shared worker options for stages with verbose logging."""
+
+    verbose: bool = False
+
+
+class PlannerOptions(WorkerOptionsBase):
     """Options for the Planner."""
 
     issues: list[int]
@@ -152,15 +179,17 @@ class PlannerOptions(BaseModel):
     # (legitimately empty) stays quiet.
     issues_explicit: bool = False
     agent: str = "claude"
-    dry_run: bool = False
     force: bool = False
-    parallel: int = 3
+    parallel: int = DEFAULT_WORKER_COUNT
     system_prompt_file: Path | None = None
     skip_closed: bool = True
     enable_advise: bool = True
+    agent_timeout: int = DEFAULT_AGENT_TIMEOUT
+    advise_timeout: int = DEFAULT_AGENT_TIMEOUT
+    git_message_timeout: int = DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT
 
 
-class ImplementerOptions(BaseModel):
+class ImplementerOptions(ParallelWorkerOptionsBase):
     """Options for the Implementer."""
 
     epic_number: int = 0
@@ -169,10 +198,8 @@ class ImplementerOptions(BaseModel):
     analyze_only: bool = False
     health_check: bool = False
     resume: bool = False
-    max_workers: int = 3
     skip_closed: bool = True
     auto_merge: bool = True
-    dry_run: bool = False
     enable_advise: bool = True
     enable_learn: bool = True
     enable_follow_up: bool = True
@@ -182,6 +209,11 @@ class ImplementerOptions(BaseModel):
     # #1083: when False (default) the reviewer omits nitpick-severity comments;
     # --nitpick re-enables them.
     include_nitpicks: bool = False
+    agent_timeout: int = DEFAULT_AGENT_TIMEOUT
+    advise_timeout: int = DEFAULT_AGENT_TIMEOUT
+    git_message_timeout: int = DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT
+    learn_timeout: int = DEFAULT_AGENT_TIMEOUT
+    follow_up_timeout: int = DEFAULT_AGENT_TIMEOUT
 
 
 class ReviewPhase(str, Enum):
@@ -217,41 +249,37 @@ class ReviewState(BaseModel):
     addressed_thread_ids: list[str] = Field(default_factory=list)  # thread IDs Claude addressed
 
 
-class ReviewerOptions(BaseModel):
+class ReviewerOptions(ParallelWorkerOptionsBase):
     """Options for the PRReviewer."""
 
     issues: list[int] = Field(default_factory=list)
     agent: str = "claude"
-    max_workers: int = 3
-    dry_run: bool = False
     enable_learn: bool = True
     enable_ui: bool = True
+    agent_timeout: int = DEFAULT_AGENT_TIMEOUT
 
 
-class PlanReviewerOptions(BaseModel):
+class PlanReviewerOptions(VerboseParallelWorkerOptionsBase):
     """Options for the PlanReviewer."""
 
     issues: list[int] = Field(default_factory=list)
     agent: str = "claude"
-    max_workers: int = 3
-    dry_run: bool = False
     enable_ui: bool = True
-    verbose: bool = False
+    agent_timeout: int = DEFAULT_AGENT_TIMEOUT
 
 
-class AddressReviewOptions(BaseModel):
+class AddressReviewOptions(VerboseParallelWorkerOptionsBase):
     """Options for the AddressReview workflow."""
 
     issues: list[int] = Field(default_factory=list)
     agent: str = "claude"
-    max_workers: int = 3
-    dry_run: bool = False
     enable_ui: bool = True
-    verbose: bool = False
     resume_impl_session: bool = True  # attempt to resume implementer's saved agent session
+    agent_timeout: int = DEFAULT_AGENT_TIMEOUT
+    advise_timeout: int = DEFAULT_AGENT_TIMEOUT
 
 
-class CIDriverOptions(BaseModel):
+class CIDriverOptions(VerboseParallelWorkerOptionsBase):
     """Options for the CIDriver workflow."""
 
     issues: list[int] = Field(default_factory=list)
@@ -260,12 +288,9 @@ class CIDriverOptions(BaseModel):
     # PRs do not use a strict ``Closes #N`` link (e.g. ``Refs #N``).
     prs: list[int] = Field(default_factory=list)
     agent: str = "claude"
-    max_workers: int = 3
-    dry_run: bool = False
     enable_advise: bool = True
     enable_learn: bool = True
     enable_ui: bool = True
-    verbose: bool = False
     max_fix_iterations: int = 1  # number of fix attempts before giving up
     force_merge_on_stall: bool = False  # attempt squash-merge fallback if auto-merge fails
     # When True, _discover_prs unions the issue-driven set with every open
@@ -284,6 +309,10 @@ class CIDriverOptions(BaseModel):
     # the result with --force-with-lease — no agent spend. Only PRs whose rebase
     # hits real conflicts fall through to the Claude/Codex agent (#871).
     enable_mechanical_rebase: bool = True
+    agent_timeout: int = DEFAULT_AGENT_TIMEOUT
+    advise_timeout: int = DEFAULT_AGENT_TIMEOUT
+    learn_timeout: int = DEFAULT_AGENT_TIMEOUT
+    poll_max_wait: int = DEFAULT_CI_POLL_MAX_WAIT
 
 
 class DependencyGraph(BaseModel):

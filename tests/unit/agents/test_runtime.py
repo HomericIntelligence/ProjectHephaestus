@@ -124,6 +124,7 @@ class _FakeCodexPopen:
         final_message: str = "",
         hang: bool = False,
         returncode: int = 0,
+        captured_input: list[str | None] | None = None,
         **_: Any,
     ) -> None:
         self.cmd = cmd
@@ -133,13 +134,16 @@ class _FakeCodexPopen:
         self.returncode = returncode
         self.killed = False
         self.terminated = False
+        self._captured_input = captured_input
         output_path = Path(cmd[cmd.index("--output-last-message") + 1])
         output_path.write_text(final_message, encoding="utf-8")
 
     def communicate(
         self, input: str | None = None, timeout: float | None = None
     ) -> tuple[str, str]:
-        del input, timeout
+        if self._captured_input is not None:
+            self._captured_input.append(input)
+        del timeout
         if self.hang and not (self.killed or self.terminated):
             raise subprocess.TimeoutExpired(self.cmd, 1)
         return self.stdout, self.stderr
@@ -182,6 +186,58 @@ def test_run_codex_session_returns_session_id_and_last_message(tmp_path: Path) -
 
     assert result.session_id == "019e1e57-7652-7892-b1ca-c31c93d4b160"
     assert result.stdout == "final answer"
+
+
+def test_run_claude_text_strips_null_byte_from_stdin(tmp_path: Path) -> None:
+    """#1661: a NUL in the prompt must not crash the Claude-text stdin path.
+
+    subprocess.run marshals ``input=`` as text stdin and raises
+    ``ValueError: embedded null byte`` on a stray NUL — the same crash the
+    claude_invoke chokepoint guards against, on a sibling runner path.
+    """
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        captured["input"] = kwargs.get("input")
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    with patch("hephaestus.agents.runtime.subprocess.run", side_effect=fake_run):
+        agent_runtime.run_claude_text("plan this\x00issue", cwd=tmp_path, timeout=30)
+
+    assert captured["input"] == "plan thisissue"
+    assert "\x00" not in captured["input"]
+
+
+def test_run_codex_session_strips_null_byte_from_stdin(tmp_path: Path) -> None:
+    """#1661: a NUL in the prompt must not crash the Codex stdin path."""
+    captured_input: list[str | None] = []
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> _FakeCodexPopen:
+        stdout = (
+            '{"type":"session_meta","payload":{"id":"019e1e57-7652-7892-b1ca-c31c93d4b160"}}\n'
+            '{"type":"agent_message","message":"fallback"}\n'
+        )
+        return _FakeCodexPopen(
+            cmd,
+            proc_stdout=stdout,
+            final_message="final answer",
+            captured_input=captured_input,
+            **kwargs,
+        )
+
+    with (
+        patch("hephaestus.agents.runtime.codex_approval_args", return_value=[]),
+        patch("hephaestus.agents.runtime._codex_extra_writable_dirs", return_value=[]),
+        patch("subprocess.Popen", side_effect=fake_popen),
+    ):
+        agent_runtime.run_codex_session(
+            "plan this\x00issue",
+            cwd=tmp_path,
+            timeout=30,
+            sandbox="workspace-write",
+        )
+
+    assert captured_input == ["plan thisissue"]
 
 
 def test_run_codex_session_recovers_last_message_on_wrapper_timeout(tmp_path: Path) -> None:
@@ -444,20 +500,17 @@ def test_run_pi_session_uses_json_mode_and_captures_session(tmp_path: Path) -> N
 
     assert result.session_id == "pi-session-789"
     assert result.stdout == "pi output"
-    assert captured["cmd"][:-1] == [
-        "pi",
-        "--mode",
-        "json",
-        "--model",
-        "private-alias",
-    ]
+    assert captured["cmd"][:-1] == ["pi", "--mode", "json"]
     assert captured["cmd"][-1].startswith("@")
+    assert "--model" not in captured["cmd"]
+    assert "private-alias" not in captured["cmd"]
     assert "private prompt content" not in captured["cmd"]
     assert captured["prompt_text"] == "private prompt content"
     assert captured["prompt_mode"] == 0o600
     assert captured["kwargs"]["cwd"] == tmp_path
     assert captured["kwargs"]["timeout"] == 30
     assert captured["kwargs"]["check"] is True
+    assert captured["kwargs"]["env"]["HEPH_PI_MODEL"] == "private-alias"
     assert captured["kwargs"]["env"]["PI_TELEMETRY"] == "0"
     assert captured["kwargs"]["env"]["PI_SKIP_VERSION_CHECK"] == "1"
 
@@ -573,7 +626,7 @@ def test_run_pi_session_read_only_restricts_tools(tmp_path: Path) -> None:
     assert "review prompt" not in captured_cmd
 
 
-def test_resume_pi_session_passes_resume_id(tmp_path: Path) -> None:
+def test_resume_pi_session_passes_resume_id_without_alias_argv_leak(tmp_path: Path) -> None:
     """Pi feedback loops should resume the captured session id."""
     captured: dict[str, Any] = {}
     stdout = "\n".join(
@@ -584,8 +637,8 @@ def test_resume_pi_session_passes_resume_id(tmp_path: Path) -> None:
     )
 
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        del kwargs
         captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
         prompt_arg = next(arg for arg in cmd if arg.startswith("@"))
         captured["prompt_text"] = Path(prompt_arg[1:]).read_text(encoding="utf-8")
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
@@ -599,12 +652,16 @@ def test_resume_pi_session_passes_resume_id(tmp_path: Path) -> None:
             "private feedback content",
             cwd=tmp_path,
             timeout=30,
+            model="private-alias",
         )
 
     assert captured["cmd"][:-1] == ["pi", "--mode", "json", "--session", "pi-session-789"]
     assert captured["cmd"][-1].startswith("@")
+    assert "--model" not in captured["cmd"]
+    assert "private-alias" not in captured["cmd"]
     assert "private feedback content" not in captured["cmd"]
     assert captured["prompt_text"] == "private feedback content"
+    assert captured["kwargs"]["env"]["HEPH_PI_MODEL"] == "private-alias"
     assert result.stdout == "resumed"
     assert result.session_id == "pi-session-789"
 
@@ -771,6 +828,25 @@ def test_is_agent_authenticated_pi_rejects_missing_model_config(tmp_path: Path) 
         ),
     ):
         assert not agent_runtime.is_agent_authenticated("pi")
+
+
+def test_is_agent_authenticated_uses_env_configured_status_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auth status probes use the centralized call-time timeout reader."""
+    monkeypatch.setenv("HEPH_AGENT_AUTH_STATUS_TIMEOUT", "77")
+    with (
+        patch("hephaestus.agents.runtime.shutil.which", return_value="/bin/claude"),
+        patch(
+            "subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                ["claude", "auth", "status"], 0, stdout="", stderr=""
+            ),
+        ) as mock_run,
+    ):
+        assert agent_runtime.is_agent_authenticated("claude")
+
+    assert mock_run.call_args.kwargs["timeout"] == 77
 
 
 def test_resolve_agent_uses_pi_when_claude_and_codex_absent(tmp_path: Path) -> None:

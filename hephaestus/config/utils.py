@@ -14,7 +14,6 @@ Usage:
 import contextlib
 import json
 import os
-import warnings
 from pathlib import Path
 from typing import Any, cast
 
@@ -45,7 +44,8 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
 
     Raises:
         FileNotFoundError: If config file doesn't exist
-        ValueError: If config file format is unsupported
+        ValueError: If config file format is unsupported (e.g. .toml)
+        RuntimeError: If a .yaml/.yml file is given but PyYAML is not installed
 
     """
     config_path = Path(config_path)
@@ -53,10 +53,13 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
+    suffix = config_path.suffix.lower()
     with open(config_path) as f:
-        if config_path.suffix.lower() in [".yml", ".yaml"] and YAML_AVAILABLE:
+        if suffix in (".yml", ".yaml"):
+            if not YAML_AVAILABLE:
+                raise RuntimeError("PyYAML is required for YAML config support")
             return cast(dict[str, Any], yaml.safe_load(f) or {})
-        elif config_path.suffix.lower() == ".json":
+        elif suffix == ".json":
             return cast(dict[str, Any], json.load(f))
         else:
             raise ValueError(f"Unsupported config format: {config_path.suffix}")
@@ -283,73 +286,3 @@ def merge_with_env(
         key_provenance[leaf_path] = key
 
     return merge_configs(config, env_config)
-
-
-def get_config_value(
-    key_path: str,
-    default: Any | None = None,
-    config_files: list[str] | None = None,
-    convert_bools: bool = False,
-) -> Any:
-    """High-level convenience wrapper — **deprecated**, use :func:`get_setting` instead.
-
-    ``get_config_value`` and ``get_setting`` have overlapping apparent purpose,
-    violating POLA.  ``get_setting`` is the canonical function for retrieving a
-    value from an already-loaded config dict using dot-notation.
-
-    Migration path::
-
-        # Old (deprecated):
-        value = get_config_value("database.host", default="localhost",
-                                 config_files=["config.yaml"])
-
-        # New (explicit pipeline — preferred):
-        config = load_config("config.yaml")
-        config = merge_with_env(config)
-        value = get_setting(config, "database.host", default="localhost")
-
-    This wrapper will be removed in a future release.
-
-    .. deprecated::
-        Use :func:`load_config`, :func:`merge_with_env`, and :func:`get_setting`
-        together to build an explicit, auditable configuration pipeline.
-
-    Args:
-        key_path: Dot-separated path to setting
-        default: Default value if not found
-        config_files: List of config files to load in order
-        convert_bools: If True, convert boolean-like string values from
-            environment variables (true/false/yes/no/on/off/1/0,
-            case-insensitive) to Python bool before merging.
-
-    Returns:
-        Configuration value or default
-
-    """
-    warnings.warn(
-        "get_config_value() is deprecated and will be removed in a future release. "
-        "Use load_config(), merge_with_env(), and get_setting() to build an explicit "
-        "configuration pipeline instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
-    config: dict[str, Any] = {}
-
-    # Load default config if exists
-    default_config_path = Path("config/default.yaml")
-    if default_config_path.exists() and YAML_AVAILABLE:
-        config = load_config(default_config_path)
-
-    # Load user configs
-    if config_files:
-        for config_file in config_files:
-            if Path(config_file).exists():
-                user_config = load_config(config_file)
-                config = merge_configs(config, user_config)
-
-    # Merge with environment
-    config = merge_with_env(config, convert_bools=convert_bools)
-
-    # Get the specific value
-    return get_setting(config, key_path, default)

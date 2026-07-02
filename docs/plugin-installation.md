@@ -74,9 +74,11 @@ codex plugin add hephaestus@project-hephaestus
 
 The Codex marketplace entry is declared in
 [`.agents/plugins/marketplace.json`](../.agents/plugins/marketplace.json). It points
-Codex at `plugins/hephaestus`, which is a lightweight compatibility wrapper around the
-canonical [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) manifest and
-shared [`skills/`](../skills) directory.
+Codex at `plugins/hephaestus`, which is a materialized compatibility wrapper. It
+contains a physical copy of the canonical
+[`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) manifest and shared
+[`skills/`](../skills) directory so marketplace installs do not depend on symlink
+traversal.
 
 ## Enabling in a Claude Code Project
 
@@ -114,8 +116,15 @@ enabled.
 
 ## Usage Examples
 
+Skills that accept an argument declare it in their `argument-hint` frontmatter;
+pass it inline after the skill name. Skills without an `argument-hint` take no
+argument and are invoked bare.
+
 ```
 /advise implement retry logic with exponential backoff
+/brainstorm a plugin manifest validator
+/systematic-debugging pytest hangs on the NATS subscriber teardown
+/git-worktrees 1496-skill-argument-hints
 /repo-analyze
 /repo-analyze-strict
 /repo-analyze-quick

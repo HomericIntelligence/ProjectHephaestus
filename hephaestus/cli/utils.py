@@ -12,12 +12,16 @@ Follows development principles:
 
 import argparse
 import json
+import logging
 import math
 import sys
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 from hephaestus._version_lookup import get_version
+from hephaestus.constants import AUTOMATION_LOG_FORMAT, LOG_DATEFMT
+from hephaestus.utils.helpers import resolve_repo_root as _resolve_repo_root
 
 __version__ = get_version()
 
@@ -25,18 +29,27 @@ __all__ = [
     "COMMAND_REGISTRY",
     "DRY_RUN_HELP_CAVEAT",
     "CommandRegistry",
+    "add_advise_timeout_arg",
+    "add_agent_timeout_arg",
     "add_dry_run_arg",
+    "add_follow_up_timeout_arg",
+    "add_git_message_timeout_arg",
     "add_github_throttle_args",
     "add_json_arg",
+    "add_learn_timeout_arg",
     "add_logging_args",
+    "add_poll_max_wait_arg",
     "add_version_arg",
+    "configure_cli_logging",
     "configure_github_throttle_from_args",
     "confirm_action",
     "create_parser",
+    "create_validation_parser",
     "emit_json_status",
     "format_output",
     "format_table",
     "register_command",
+    "resolve_repo_root",
 ]
 
 
@@ -72,11 +85,31 @@ class CommandRegistry:
         return self.commands.get(name)
 
 
-def create_parser(prog_name: str = "hephaestus") -> argparse.ArgumentParser:
+_DEFAULT_CREATE_PARSER_EPILOG = """
+Examples:
+  %(prog)s command --help     Show help for a specific command
+  %(prog)s --version          Show version information
+""".strip()
+
+
+def create_parser(
+    prog_name: str | None = "hephaestus",
+    *,
+    description: str | None = None,
+    epilog: str | None = _DEFAULT_CREATE_PARSER_EPILOG,
+    usage: str | None = None,
+    formatter_class: type[argparse.HelpFormatter] = argparse.RawDescriptionHelpFormatter,
+    add_help: bool = True,
+) -> argparse.ArgumentParser:
     """Create a standardized argument parser with common options.
 
     Args:
         prog_name: Program name for the parser
+        description: Parser description text
+        epilog: Parser epilog text
+        usage: Optional usage string override
+        formatter_class: Help formatter class
+        add_help: Whether to add argparse's default help option
 
     Returns:
         Configured ArgumentParser instance
@@ -84,12 +117,11 @@ def create_parser(prog_name: str = "hephaestus") -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         prog=prog_name,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s command --help     Show help for a specific command
-  %(prog)s --version          Show version information
-        """.strip(),
+        description=description,
+        epilog=epilog,
+        usage=usage,
+        formatter_class=formatter_class,
+        add_help=add_help,
     )
 
     # Add standard options
@@ -144,6 +176,70 @@ def add_json_arg(parser: argparse.ArgumentParser) -> None:
         "--json",
         action="store_true",
         help="Emit machine-readable JSON output instead of human-readable text",
+    )
+
+
+def create_validation_parser(
+    description: str | None = None,
+    *,
+    include_repo_root: bool = True,
+    prog: str | None = None,
+    usage: str | None = None,
+    epilog: str | None = None,
+    formatter_class: type[argparse.HelpFormatter] = argparse.HelpFormatter,
+) -> argparse.ArgumentParser:
+    """Create a standardized parser for validation-style CLIs.
+
+    Args:
+        description: Parser description text.
+        include_repo_root: Whether to add the standard ``--repo-root`` option.
+        prog: Optional program name override.
+        usage: Optional usage string override.
+        epilog: Optional parser epilog text.
+        formatter_class: Argparse help formatter class.
+
+    Returns:
+        Configured ArgumentParser instance with shared validation flags.
+
+    """
+    parser = create_parser(
+        prog_name=prog,
+        usage=usage,
+        description=description,
+        epilog=epilog,
+        formatter_class=formatter_class,
+    )
+    if include_repo_root:
+        parser.add_argument(
+            "--repo-root",
+            type=Path,
+            default=None,
+            help="Repository root (default: auto-detect)",
+        )
+    add_json_arg(parser)
+    return parser
+
+
+def resolve_repo_root(args: argparse.Namespace) -> Path:
+    """Return the explicit CLI repository root or auto-detect it."""
+    return _resolve_repo_root(args.repo_root)
+
+
+def configure_cli_logging(*, verbose: bool = False) -> None:
+    """Configure standard stderr-safe logging for a ``hephaestus-*`` CLI.
+
+    Centralizes the ``logging.basicConfig(...)`` boilerplate repeated across
+    CLI entry points so the log level and format stay consistent. Use this
+    in a CLI ``main()`` instead of calling ``logging.basicConfig`` directly.
+
+    Args:
+        verbose: When True, set the root level to ``DEBUG``; otherwise ``INFO``.
+
+    """
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format=AUTOMATION_LOG_FORMAT,
+        datefmt=LOG_DATEFMT,
     )
 
 
@@ -357,7 +453,14 @@ def format_output(data: Any, format_type: str = "text") -> str:
 
     Args:
         data: Data to format
-        format_type: Output format ('text', 'json', 'table')
+        format_type: Output format. One of ``"json"``, ``"table"``, or
+            ``"text"`` (the default). The match is exact and case-sensitive
+            (e.g. ``"JSON"`` is NOT recognized and falls back to ``"text"``).
+            ``"table"`` applies only when ``data`` is a list or tuple; for any
+            other ``data`` type a ``"table"`` request falls back to ``"text"``.
+            Any unrecognized ``format_type`` (a typo, ``""``, etc.) also falls
+            back to the ``"text"`` format rather than raising — callers wanting
+            strict validation must check ``format_type`` before calling.
 
     Returns:
         Formatted string representation
@@ -406,3 +509,117 @@ def register_command(
 
     """
     return COMMAND_REGISTRY.register(name, description, aliases)
+
+
+def add_agent_timeout_arg(
+    parser: argparse.ArgumentParser,
+    *,
+    flag: str = "--agent-timeout",
+    dest: str = "agent_timeout",
+    default_doc: int = 7200,
+    help_extra: str = "",
+) -> None:
+    """Add an optional agent subprocess timeout flag to a CLI parser.
+
+    Args:
+        parser: ArgumentParser instance to add the flag to
+        flag: The CLI flag name (default: ``--agent-timeout``)
+        dest: The argparse destination attribute (default: ``agent_timeout``)
+        default_doc: Default value shown in help text (default: 7200)
+        help_extra: Optional extra help text appended after the default note
+
+    """
+    extra = f" {help_extra}" if help_extra else ""
+    parser.add_argument(
+        flag,
+        dest=dest,
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help=f"Agent subprocess timeout in seconds (default: {default_doc}).{extra}",
+    )
+
+
+def add_advise_timeout_arg(parser: argparse.ArgumentParser) -> None:
+    """Add ``--advise-timeout`` flag to a CLI parser.
+
+    Args:
+        parser: ArgumentParser instance to add the flag to
+
+    """
+    parser.add_argument(
+        "--advise-timeout",
+        dest="advise_timeout",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="Timeout for the advise sub-agent in seconds (default: 7200).",
+    )
+
+
+def add_poll_max_wait_arg(parser: argparse.ArgumentParser) -> None:
+    """Add ``--poll-max-wait`` flag to a CLI parser.
+
+    Args:
+        parser: ArgumentParser instance to add the flag to
+
+    """
+    parser.add_argument(
+        "--poll-max-wait",
+        dest="poll_max_wait",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="Max wall-clock seconds to poll CI before backing off (default: 1200).",
+    )
+
+
+def add_git_message_timeout_arg(parser: argparse.ArgumentParser) -> None:
+    """Add ``--git-message-timeout`` flag to a CLI parser.
+
+    Args:
+        parser: ArgumentParser instance to add the flag to
+
+    """
+    parser.add_argument(
+        "--git-message-timeout",
+        dest="git_message_timeout",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="Timeout for the lightweight commit/PR message agent (default: 1200).",
+    )
+
+
+def add_learn_timeout_arg(parser: argparse.ArgumentParser) -> None:
+    """Add ``--learn-timeout`` flag to a CLI parser.
+
+    Args:
+        parser: ArgumentParser instance to add the flag to
+
+    """
+    parser.add_argument(
+        "--learn-timeout",
+        dest="learn_timeout",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="Timeout for the /learn agent session (default: 7200).",
+    )
+
+
+def add_follow_up_timeout_arg(parser: argparse.ArgumentParser) -> None:
+    """Add ``--follow-up-timeout`` flag to a CLI parser.
+
+    Args:
+        parser: ArgumentParser instance to add the flag to
+
+    """
+    parser.add_argument(
+        "--follow-up-timeout",
+        dest="follow_up_timeout",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="Timeout for the follow-up-issue agent session (default: 7200).",
+    )

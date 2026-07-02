@@ -1,7 +1,9 @@
 """Unit tests for hephaestus.github.tidy — focusing on parse_problem_branches and timeouts."""
 
+import argparse
 import asyncio
 import importlib
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -178,6 +180,43 @@ def test_dispatch_swarm_runs_codex_agents_in_threads(
     assert calls[0][1][0] == "codex"
 
 
+class TestTidyHandlers:
+    """Tests for extracted tidy workflow handlers."""
+
+    def test_run_tidy_and_find_problem_branches_parses_even_after_gh_tidy_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """gh-tidy failures still return parseable problem branches."""
+        monkeypatch.setattr(tidy_module, "_run_gh_tidy", lambda trunk, dry_run: (2, ONE_PROBLEM))
+
+        assert tidy_module._run_tidy_and_find_problem_branches("main", False) == [
+            "feature/my-branch"
+        ]
+
+    def test_handle_problem_branches_dry_run_json(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        tmp_path: Path,
+    ) -> None:
+        """Dry-run problem branches emit the existing ok JSON envelope."""
+        args = argparse.Namespace(no_swarm=False, dry_run=True, json=True, max_concurrent=5)
+
+        assert (
+            tidy_module._handle_problem_branches(
+                args,
+                ["feature/a"],
+                "main",
+                tmp_path,
+                "owner/repo",
+                "claude",
+            )
+            == 0
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["status"] == "ok"
+        assert payload["problem_branches"] == ["feature/a"]
+
+
 class TestMain:
     """Smoke tests for hephaestus.github.tidy.main() covering --json branches."""
 
@@ -236,6 +275,34 @@ class TestMain:
         assert tidy_module.main() == 1
         payload = json.loads(capsys.readouterr().out)
         assert payload["status"] == "error"
+        assert payload["swarm"] == "skipped"
+
+    def test_handle_problem_branches_no_swarm_json(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        tmp_path: Path,
+    ) -> None:
+        """Extracted problem-branch handler emits the existing no-swarm JSON."""
+        import json
+
+        args = tidy_module._build_arg_parser().parse_args(
+            ["--json", "--no-swarm", "--agent", "claude"]
+        )
+
+        assert (
+            tidy_module._handle_tidy_problem_branches(
+                args=args,
+                agent="claude",
+                problem_branches=["feature/a"],
+                trunk="main",
+                repo_path=tmp_path,
+                repo_slug="owner/repo",
+            )
+            == 1
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["status"] == "error"
+        assert payload["problem_branches"] == ["feature/a"]
         assert payload["swarm"] == "skipped"
 
     def test_dry_run_with_problems_json(
@@ -324,44 +391,56 @@ class TestTimeoutHandling:
 
     def test_working_tree_clean_with_timeout(self) -> None:
         """_working_tree_clean propagates TimeoutExpired."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.TimeoutExpired(["git"], 10)
+        with patch("hephaestus.github.tidy._shared_working_tree_clean") as shared_clean:
+            shared_clean.side_effect = subprocess.TimeoutExpired(["git"], 10)
             with pytest.raises(subprocess.TimeoutExpired):
                 _working_tree_clean()
 
-    def test_working_tree_clean_uses_metadata_timeout(self) -> None:
-        """_working_tree_clean uses METADATA_TIMEOUT."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="")
-            _working_tree_clean()
-            assert mock_run.called
-            call_kwargs = mock_run.call_args[1]
-            assert "timeout" in call_kwargs
-            assert call_kwargs["timeout"] == tidy_module.METADATA_TIMEOUT
+    def test_working_tree_clean_uses_shared_helper(self) -> None:
+        """_working_tree_clean routes git status through the shared git helper."""
+        with patch("hephaestus.github.tidy._shared_working_tree_clean") as shared_clean:
+            shared_clean.return_value = True
+            assert _working_tree_clean() is True
+            shared_clean.assert_called_once_with()
 
     def test_in_git_repo_with_timeout(self) -> None:
         """_in_git_repo propagates TimeoutExpired."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.TimeoutExpired(["git"], 10)
+        with patch("hephaestus.github.tidy._shared_in_git_repo") as shared_in_repo:
+            shared_in_repo.side_effect = subprocess.TimeoutExpired(["git"], 10)
             with pytest.raises(subprocess.TimeoutExpired):
                 _in_git_repo()
 
-    def test_in_git_repo_uses_metadata_timeout(self) -> None:
-        """_in_git_repo uses METADATA_TIMEOUT."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            _in_git_repo()
-            assert mock_run.called
-            call_kwargs = mock_run.call_args[1]
-            assert "timeout" in call_kwargs
-            assert call_kwargs["timeout"] == tidy_module.METADATA_TIMEOUT
+    def test_in_git_repo_uses_shared_helper(self) -> None:
+        """_in_git_repo routes git rev-parse through the shared git helper."""
+        with patch("hephaestus.github.tidy._shared_in_git_repo") as shared_in_repo:
+            shared_in_repo.return_value = True
+            assert _in_git_repo() is True
+            shared_in_repo.assert_called_once_with()
 
-    def test_repo_root_uses_metadata_timeout(self) -> None:
-        """_repo_root uses METADATA_TIMEOUT."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout="/path/to/repo\n")
-            _repo_root()
-            assert mock_run.called
-            call_kwargs = mock_run.call_args[1]
-            assert "timeout" in call_kwargs
-            assert call_kwargs["timeout"] == tidy_module.METADATA_TIMEOUT
+    def test_repo_root_uses_shared_helper(self) -> None:
+        """_repo_root routes git root detection through the shared git helper."""
+        with patch("hephaestus.github.tidy._shared_repo_root") as shared_repo_root:
+            shared_repo_root.return_value = Path("/path/to/repo")
+            assert _repo_root() == Path("/path/to/repo")
+            shared_repo_root.assert_called_once_with()
+
+    def test_direct_rebase_agent_uses_env_configured_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Direct tidy conflict agents honor HEPH_AGENT_REBASE_TIMEOUT (#1417)."""
+        monkeypatch.setenv("HEPH_AGENT_REBASE_TIMEOUT", "1234")
+        with patch("hephaestus.github.tidy.run_agent_text") as run_agent:
+            run_agent.return_value = MagicMock(stdout="rebased")
+
+            tidy_module._run_direct_rebase_agent("codex", "prompt", "feature/a", Path("/repo"))
+
+        assert run_agent.call_args.kwargs["timeout"] == 1234
+
+    def test_direct_rebase_agent_default_timeout(self) -> None:
+        """Default rebase-agent timeout is AGENT_REBASE_TIMEOUT (2400)."""
+        with patch("hephaestus.github.tidy.run_agent_text") as run_agent:
+            run_agent.return_value = MagicMock(stdout="rebased")
+
+            tidy_module._run_direct_rebase_agent("codex", "prompt", "feature/a", Path("/repo"))
+
+        assert run_agent.call_args.kwargs["timeout"] == 2400

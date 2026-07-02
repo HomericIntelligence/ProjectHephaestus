@@ -33,14 +33,19 @@ from hephaestus.agents.runtime import (
 from hephaestus.cli.utils import (
     add_github_throttle_args,
     add_json_arg,
-    add_version_arg,
     configure_github_throttle_from_args,
+    create_parser,
     emit_json_status,
 )
+from hephaestus.constants import agent_rebase_timeout
 from hephaestus.github.client import gh_call
+from hephaestus.github.git_ops import (
+    in_git_repo as _shared_in_git_repo,
+    repo_root as _shared_repo_root,
+    working_tree_clean as _shared_working_tree_clean,
+)
 from hephaestus.github.pr_merge import detect_repo_from_remote
 from hephaestus.logging.utils import get_logger
-from hephaestus.utils.helpers import METADATA_TIMEOUT
 
 logger = get_logger(__name__)
 
@@ -92,14 +97,7 @@ def _detect_default_branch(override: str | None) -> str:
 def _working_tree_clean() -> bool:
     """Return True if the git working tree has no uncommitted changes."""
     try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=METADATA_TIMEOUT,
-        )
-        return result.returncode == 0 and result.stdout.strip() == ""
+        return _shared_working_tree_clean()
     except subprocess.TimeoutExpired as e:
         logger.error("git status timed out: %s", e)
         raise
@@ -108,15 +106,7 @@ def _working_tree_clean() -> bool:
 def _in_git_repo() -> bool:
     """Return True if cwd is inside a git repository."""
     try:
-        return (
-            subprocess.run(
-                ["git", "rev-parse", "--git-dir"],
-                capture_output=True,
-                check=False,
-                timeout=METADATA_TIMEOUT,
-            ).returncode
-            == 0
-        )
+        return _shared_in_git_repo()
     except subprocess.TimeoutExpired as e:
         logger.error("git rev-parse --git-dir timed out: %s", e)
         raise
@@ -130,14 +120,7 @@ def _repo_root() -> Path:
     CalledProcessError path: both failures propagate as unhandled exceptions to
     the CLI entrypoint.
     """
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=METADATA_TIMEOUT,
-    )
-    return Path(result.stdout.strip())
+    return _shared_repo_root()
 
 
 def parse_problem_branches(output: str) -> list[str]:
@@ -276,28 +259,7 @@ do NOT push, do NOT delete anything.
 git -C {worktree_path} push --force-with-lease --force-if-includes origin {branch}
 ```
 
-### 7. Re-arm auto-merge (if a PR exists)
-```bash
-GH_BIN="hephaestus-gh"
-PR=$("$GH_BIN" pr list --repo {repo_slug} --head {branch} --json number --jq '.[0].number // empty')
-if [ -n "$PR" ]; then
-  HELPER=""
-  for cand in \
-      "$(git rev-parse --show-toplevel 2>/dev/null)/scripts/choose_merge_flag.sh" \
-      "$HOME/Projects/ProjectHephaestus/scripts/choose_merge_flag.sh"; do
-    if [ -r "$cand" ]; then HELPER="$cand"; break; fi
-  done
-  if [ -n "$HELPER" ]; then
-    . "$HELPER"
-    MERGE_FLAG=$(choose_merge_flag --gh-bin "$GH_BIN" {repo_slug}) || MERGE_FLAG="--squash"
-  else
-    MERGE_FLAG="--squash"
-  fi
-  "$GH_BIN" pr merge --auto "$MERGE_FLAG" "$PR"
-fi
-```
-
-### 8. Clean up worktree (no --force)
+### 7. Clean up worktree (no --force)
 ```bash
 git -C {repo_path} worktree remove {worktree_path}
 ```
@@ -402,7 +364,7 @@ def _run_direct_rebase_agent(agent: str, prompt: str, branch: str, repo_path: Pa
             agent=agent,
             prompt=prompt,
             cwd=repo_path,
-            timeout=2400,
+            timeout=agent_rebase_timeout(),
             model=direct_agent_model(agent, "HEPH_IMPLEMENTER_MODEL"),
             sandbox="workspace-write",
         )
@@ -438,11 +400,12 @@ async def _run_claude_rebase_agent(
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = create_parser(
+        prog_name="hephaestus-tidy",
         description=(
             "Tidy the current repo's branches and fix failed rebases with a Myrmidon swarm"
         ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=None,
     )
     parser.add_argument(
         "--dry-run",
@@ -470,7 +433,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--verbose", "-v", action="store_true", help="Debug logging")
     add_github_throttle_args(parser)
     add_json_arg(parser)
-    add_version_arg(parser)
     return parser
 
 
@@ -526,71 +488,63 @@ def _print_summary(results: dict[str, str]) -> int:
     return 0 if not failed else 1
 
 
-def main() -> int:  # noqa: C901  # CLI dispatch: many command branches for tidy workflow stages
-    """Entry point for hephaestus-tidy."""
-    args = _build_arg_parser().parse_args()
-    configure_github_throttle_from_args(args)
-    agent = resolve_agent(args.agent)
-
+def _configure_logging(verbose: bool) -> None:
+    """Configure CLI logging for tidy output."""
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
+        level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
         datefmt="%H:%M:%S",
     )
 
-    env = _validate_environment()
-    if env is None:
-        if args.json:
-            emit_json_status(1, message="environment validation failed")
-        return 1
-    repo_slug, _, repo_path = env
-    trunk = _detect_default_branch(args.trunk)
 
-    logger.info("Repo: %s  |  Trunk: %s  |  Path: %s", repo_slug, trunk, repo_path)
+def _emit_tidy_environment_failure(json_output: bool) -> int:
+    if json_output:
+        emit_json_status(1, message="environment validation failed")
+    return 1
 
-    # --- Phase 1: run gh tidy interactively ---
-    exit_code, output = _run_gh_tidy(trunk, args.dry_run)
-    if exit_code != 0 and not args.dry_run:
+
+def _run_tidy_and_find_problem_branches(trunk: str, dry_run: bool) -> list[str]:
+    exit_code, output = _run_gh_tidy(trunk, dry_run)
+    if exit_code != 0 and not dry_run:
         logger.warning(
             "gh tidy exited with code %d — proceeding to parse output anyway",
             exit_code,
         )
+    return parse_problem_branches(output)
 
-    problem_branches = parse_problem_branches(output)
 
-    if not problem_branches:
-        logger.info("\nAll branches rebased cleanly — no swarm needed.")
-        if args.json:
-            emit_json_status(0, problem_branches=0)
-        return 0
+def _handle_no_problem_branches(json_output: bool) -> int:
+    logger.info("\nAll branches rebased cleanly — no swarm needed.")
+    if json_output:
+        emit_json_status(0, problem_branches=0)
+    return 0
 
-    logger.info(
-        "\ngh tidy could not rebase %d branch(es): %s",
-        len(problem_branches),
-        ", ".join(problem_branches),
-    )
 
-    if args.no_swarm:
-        logger.info("--no-swarm: skipping Myrmidon dispatch. Fix manually:")
-        for b in problem_branches:
-            logger.info("  git rebase origin/%s  (on branch %s)", trunk, b)
-        if args.json:
-            emit_json_status(1, problem_branches=problem_branches, swarm="skipped")
-        return 1
+def _handle_no_swarm(problem_branches: list[str], trunk: str, json_output: bool) -> int:
+    logger.info("--no-swarm: skipping Myrmidon dispatch. Fix manually:")
+    for branch in problem_branches:
+        logger.info("  git rebase origin/%s  (on branch %s)", trunk, branch)
+    if json_output:
+        emit_json_status(1, problem_branches=problem_branches, swarm="skipped")
+    return 1
 
-    logger.info(
-        "Dispatching Myrmidon swarm (%d agent(s), cap=%d)...",
-        len(problem_branches),
-        args.max_concurrent,
-    )
 
-    if args.dry_run:
-        for b in problem_branches:
-            logger.info("[dry-run] Would spawn selected agent for branch: %s", b)
-        if args.json:
-            emit_json_status(0, dry_run=True, problem_branches=problem_branches)
-        return 0
+def _handle_dry_run_problem_branches(problem_branches: list[str], json_output: bool) -> int:
+    for branch in problem_branches:
+        logger.info("[dry-run] Would spawn selected agent for branch: %s", branch)
+    if json_output:
+        emit_json_status(0, dry_run=True, problem_branches=problem_branches)
+    return 0
 
+
+def _dispatch_tidy_swarm(
+    args: argparse.Namespace,
+    problem_branches: list[str],
+    trunk: str,
+    repo_path: Path,
+    repo_slug: str,
+    agent: str,
+) -> int:
     results = asyncio.run(
         _dispatch_swarm(
             problem_branches,
@@ -602,11 +556,73 @@ def main() -> int:  # noqa: C901  # CLI dispatch: many command branches for tidy
             agent=agent,
         )
     )
-
     exit_code = _print_summary(results)
     if args.json:
         emit_json_status(exit_code, results=results)
     return exit_code
+
+
+def _handle_problem_branches(
+    args: argparse.Namespace,
+    problem_branches: list[str],
+    trunk: str,
+    repo_path: Path,
+    repo_slug: str,
+    agent: str,
+) -> int:
+    logger.info(
+        "\ngh tidy could not rebase %d branch(es): %s",
+        len(problem_branches),
+        ", ".join(problem_branches),
+    )
+
+    if args.no_swarm:
+        return _handle_no_swarm(problem_branches, trunk, args.json)
+
+    logger.info(
+        "Dispatching Myrmidon swarm (%d agent(s), cap=%d)...",
+        len(problem_branches),
+        args.max_concurrent,
+    )
+
+    if args.dry_run:
+        return _handle_dry_run_problem_branches(problem_branches, args.json)
+
+    return _dispatch_tidy_swarm(args, problem_branches, trunk, repo_path, repo_slug, agent)
+
+
+def _handle_tidy_problem_branches(
+    args: argparse.Namespace,
+    agent: str,
+    problem_branches: list[str],
+    trunk: str,
+    repo_path: Path,
+    repo_slug: str,
+) -> int:
+    """Compatibility wrapper for the pre-extraction tidy handler name."""
+    return _handle_problem_branches(args, problem_branches, trunk, repo_path, repo_slug, agent)
+
+
+def main() -> int:
+    """Entry point for hephaestus-tidy."""
+    args = _build_arg_parser().parse_args()
+    configure_github_throttle_from_args(args)
+    agent = resolve_agent(args.agent)
+    _configure_logging(args.verbose)
+
+    env = _validate_environment()
+    if env is None:
+        return _emit_tidy_environment_failure(args.json)
+    repo_slug, _, repo_path = env
+    trunk = _detect_default_branch(args.trunk)
+
+    logger.info("Repo: %s  |  Trunk: %s  |  Path: %s", repo_slug, trunk, repo_path)
+
+    problem_branches = _run_tidy_and_find_problem_branches(trunk, args.dry_run)
+    if not problem_branches:
+        return _handle_no_problem_branches(args.json)
+
+    return _handle_problem_branches(args, problem_branches, trunk, repo_path, repo_slug, agent)
 
 
 if __name__ == "__main__":

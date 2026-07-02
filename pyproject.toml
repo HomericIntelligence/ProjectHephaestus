@@ -28,16 +28,17 @@ keywords = ["utilities", "helpers", "tooling", "homericintelligence"]
 dependencies = [
     "packaging>=21.0,<27",
     "pyyaml>=6.0,<7",
-    "pydantic>=2.12.5,<3",
     # IANA timezone data is bundled with Python on POSIX but not on Windows;
     # rate_limit.py uses ZoneInfo which needs it on Windows.
     "tzdata; platform_system == 'Windows'",
 ]
 
 # Optional-dependency groups. The `all` aggregator below intentionally lists
-# only runtime extras (github, nats, toml, xml, schema) — `dev` is kept separate
-# so production installs of `[all]` do not pull pytest/ruff/mypy. If you change
-# this convention, update the "Optional dependencies" section in README.md.
+# all runtime extras (automation, github, nats, toml, xml, schema) — `dev` is
+# kept separate so production installs of `[all]` do not pull pytest/ruff/mypy.
+# `automation` is the product layer (hephaestus.automation) and pulls pydantic;
+# see docs/adr/0001-automation-library-boundary.md. If you change this
+# convention, update the "Optional dependencies" section in README.md.
 [project.optional-dependencies]
 dev = [
     # pytest 9.x and pytest-cov 7.x are the latest majors; tight floors are
@@ -57,7 +58,15 @@ dev = [
     # tests/unit/scripts/test_dependency_floor_consistency.py.
     "mypy>=1.8.0,<3",
     "build>=1.0,<2",
+    # tests/integration/test_sdist_contents.py builds with --no-isolation, so
+    # pip-based dev installs need the backend requirements in the runtime env.
+    "hatchling>=1.27.0,<2",
+    "hatch-vcs>=0.4.0,<1",
     "pip-audit>=2.7,<3",
+    # Property-based fuzz testing of LLM-output parsers (issue #1470). Floor
+    # kept in lockstep with pixi.toml [feature.dev]. hypothesis is on conda-forge,
+    # so the matching pixi entry is a conda dependency, not pypi-dependencies.
+    "hypothesis>=6.0,<7",
     "tomli>=2.0,<3;python_version<'3.11'",
 ]
 github = [
@@ -76,11 +85,11 @@ nats = [
     "nats-py>=2.6,<3",
 ]
 # Product layer (hephaestus.automation). See docs/adr/0001-automation-library-boundary.md.
-# Explicitly declares the deps automation needs at runtime even though some are
-# also currently base deps (pydantic is pulled in transitionally via hephaestus.nats).
-# Listing them here means the extra is honest and forward-compatible: when the
-# base dep list shrinks, this extra remains load-bearing. CI verifies the
-# library-side import surface stays clean via tests/unit/test_import_surface.py.
+# pydantic is the runtime dependency of hephaestus/automation/models.py. As of
+# issue #1458 it is NO LONGER a base dependency (hephaestus.nats moved to stdlib
+# dataclasses), so this extra is now load-bearing: a base install does not get
+# pydantic. CI verifies the library-side import surface stays clean via
+# tests/unit/validation/test_import_surface.py.
 automation = [
     "pydantic>=2.12.5,<3",
 ]
@@ -139,6 +148,7 @@ hephaestus-github-stats = "hephaestus.github.stats:main"
 hephaestus-agent-stats = "hephaestus.agents.stats:main"
 hephaestus-validate-agents = "hephaestus.agents.frontmatter:validate_agents_main"
 hephaestus-check-cli-tier-docs = "hephaestus.validation.cli_tier_docs:main"
+hephaestus-check-api-table-docs = "hephaestus.validation.api_table_docs:main"
 
 [project.urls]
 Homepage = "https://github.com/HomericIntelligence/ProjectHephaestus"
@@ -231,6 +241,15 @@ implicit_reexport = false
 # Allow scripts/ (no __init__.py) to be discovered without "found twice" errors
 explicit_package_bases = true
 
+# Incremental type-checking (issue #1503). The pre-commit hook runs mypy over the
+# whole tree (hephaestus/ scripts/ tests/) on any .py change because
+# explicit_package_bases + duplicate basenames make per-file invocation unsafe
+# (see hephaestus/validation/mypy_per_file.py). Making incremental mode explicit
+# — rather than relying on mypy's default — keeps the full scan fast locally and
+# gives CI a single canonical cache path to persist.
+incremental = true
+cache_dir = ".mypy_cache"
+
 # Relax strict typing requirements for test and script code
 [[tool.mypy.overrides]]
 module = ["tests.*", "scripts.*"]
@@ -248,8 +267,10 @@ omit = [
     "*/__init__.py",
     # Full orchestration loops require a live claude/gh CLI — integration test territory.
     # Pure-function helpers in these modules are tested in tests/unit/automation/ instead.
-    # The allowlist of these 17 modules is frozen in tests/unit/validation/test_omit_allowlist.py
-    # to prevent silent growth of the omit list, and their importability is guarded by
+    # The membership of this list is frozen in tests/unit/validation/test_omit_allowlist.py
+    # to prevent silent growth; tests/unit/validation/test_omit_justification.py enforces
+    # (via ast import-parsing) that each omitted module has a backing unit-test suite
+    # (issue #1422); and their importability is guarded by
     # tests/integration/test_orchestration_smoke.py.
     "hephaestus/automation/implementer.py",
     # implementer_cli.py holds main()/CLI parsing extracted from implementer.py (#468);

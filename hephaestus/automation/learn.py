@@ -24,9 +24,11 @@ from hephaestus.agents.runtime import (
     uses_direct_agent_runner,
 )
 from hephaestus.github.rate_limit import resolve_quota_reset_epoch, wait_until
+from hephaestus.io.utils import write_secure
 
+from ._review_utils import log_file_path
+from .agent_config import DEFAULT_AGENT_TIMEOUT, learn_claude_timeout
 from .claude_models import learn_model
-from .claude_timeouts import learn_claude_timeout
 from .git_utils import run
 from .session_naming import session_uuid
 
@@ -42,10 +44,13 @@ _LEARN_RATE_LIMIT_MAX_RETRIES = 5
 # transient/secondary limit clear without busy-looping on an unknown deadline.
 _LEARN_UNKNOWN_RESET_BACKOFF_SECONDS = 300
 
+# Owner-agnostic: the Mnemosyne target may be the upstream
+# (HomericIntelligence/ProjectMnemosyne) or any user's fork
+# (<login>/ProjectMnemosyne). Only the repo name is fixed.
 _MNEMOSYNE_URL_RE = re.compile(
-    r"https://github\.com/HomericIntelligence/ProjectMnemosyne/(?:pull|commit)/[A-Za-z0-9._/-]+"
+    r"https://github\.com/[A-Za-z0-9._-]+/ProjectMnemosyne/(?:pull|commit)/[A-Za-z0-9._/-]+"
 )
-_MNEMOSYNE_PR_REF_RE = re.compile(r"\bHomericIntelligence/ProjectMnemosyne#(?P<number>\d+)\b")
+_MNEMOSYNE_PR_REF_RE = re.compile(r"\b[A-Za-z0-9._-]+/ProjectMnemosyne#(?P<number>\d+)\b")
 
 
 def mnemosyne_update_evidence(output: str) -> dict[str, Any]:
@@ -98,7 +103,7 @@ def _write_learn_record(
         record["error"] = error
     record_file = state_dir / f"learn-{issue_number}.json"
     try:
-        record_file.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        write_secure(record_file, json.dumps(record, indent=2, sort_keys=True) + "\n")
     except OSError as exc:
         logger.warning("Learn record write failed for issue #%s: %s", issue_number, exc)
 
@@ -112,7 +117,9 @@ def build_learn_prompt(context: str) -> str:
         " EXECUTE the /learn skill-creation workflow for ProjectMnemosyne."
         " Do NOT return a plan. Do NOT ask for approval."
         " Commit the results and create a PR."
-        " IMPORTANT: Only push skills to ProjectMnemosyne."
+        " IMPORTANT: Only push skills to the resolved ProjectMnemosyne"
+        " repository (the gh user's own fork when available, else upstream),"
+        " and open the PR against that same repository."
         " Do NOT create files under .claude-plugin/ in this repo."
         f"{suffix}"
     )
@@ -123,7 +130,7 @@ def _record_learn_failure(
 ) -> None:
     """Write the FAILED: log + record for a non-recoverable ``/learn`` failure."""
     logger.warning("Learn failed for issue #%s: %s", issue_number, error)
-    log_file.write_text(log_text)
+    write_secure(log_file, log_text)
     _write_learn_record(
         state_dir,
         issue_number,
@@ -137,7 +144,7 @@ def _record_learn_success(
     state_dir: Path, issue_number: int, log_file: Path, *, stdout: str
 ) -> None:
     """Write the log + record for a successful ``/learn`` run."""
-    log_file.write_text(stdout)
+    write_secure(log_file, stdout)
     _write_learn_record(
         state_dir,
         issue_number,
@@ -186,6 +193,8 @@ def run_learn(
     agent: str = "claude",
     session_agent: str | None = None,
     model: str | None = None,
+    *,
+    timeout: int = DEFAULT_AGENT_TIMEOUT,
 ) -> bool:
     """Resume agent session to run /learn.
 
@@ -208,14 +217,14 @@ def run_learn(
 
     """
     state_dir.mkdir(parents=True, exist_ok=True)
-    log_file = state_dir / f"learn-{issue_number}.log"
+    log_file = log_file_path(state_dir, "learn", issue_number)
     if not session_agent_matches(session_agent, agent):
         message = (
             f"Session belongs to {session_agent or 'claude'}, "
             f"but selected agent is {agent}; skipping learn resume"
         )
         logger.warning("Learn skipped for issue #%s: %s", issue_number, message)
-        log_file.write_text(f"FAILED: {message}\n")
+        write_secure(log_file, f"FAILED: {message}\n")
         _write_learn_record(
             state_dir,
             issue_number,
@@ -234,7 +243,7 @@ def run_learn(
                     session_id=session_id,
                     prompt=build_learn_prompt(""),
                     cwd=worktree_path,
-                    timeout=learn_claude_timeout(),
+                    timeout=timeout,
                     model=direct_agent_model(agent, "HEPH_LEARN_MODEL"),
                 ).stdout
                 or ""
@@ -269,7 +278,7 @@ def run_learn(
     ]
 
     def _invoke_claude() -> str:
-        return run(learn_command, cwd=worktree_path, timeout=learn_claude_timeout()).stdout or ""
+        return run(learn_command, cwd=worktree_path, timeout=timeout).stdout or ""
 
     return _run_learn_with_retry(
         _invoke_claude, state_dir=state_dir, issue_number=issue_number, log_file=log_file
@@ -323,7 +332,7 @@ def _run_learn_with_retry(
             # reset and re-invoke. Only a genuine failure records FAILED:.
             reset_epoch = resolve_quota_reset_epoch(err_stderr, err_stdout, str(e))
             if reset_epoch is not None:
-                log_file.write_text(error_output)
+                write_secure(log_file, error_output)
                 _wait_for_quota_reset(reset_epoch, issue_number)
                 continue
             _record_learn_failure(
@@ -337,7 +346,7 @@ def _run_learn_with_retry(
         # a bogus success.
         reset_epoch = resolve_quota_reset_epoch(stdout)
         if reset_epoch is not None:
-            log_file.write_text(stdout)
+            write_secure(log_file, stdout)
             _wait_for_quota_reset(reset_epoch, issue_number)
             continue
         _record_learn_success(state_dir, issue_number, log_file, stdout=stdout)
@@ -363,7 +372,7 @@ def learn_needs_rerun(issue_number: int, state_dir: Path) -> bool:
         True if learn needs to be re-run (missing or failed log)
 
     """
-    log_file = state_dir / f"learn-{issue_number}.log"
+    log_file = log_file_path(state_dir, "learn", issue_number)
     if not log_file.exists():
         return True
     try:
@@ -378,7 +387,7 @@ def compact_session(
     issue: int | str,
     agent: str,
     cwd: Path,
-    timeout: int = 300,
+    timeout: int | None = None,
     model: str | None = None,
 ) -> bool:
     """Send ``/compact`` to the (repo, issue, agent, model) Claude session.
@@ -395,7 +404,7 @@ def compact_session(
         issue: Issue number
         agent: Agent identifier
         cwd: Working directory for session lookup
-        timeout: Subprocess timeout in seconds (default: 300)
+        timeout: Subprocess timeout in seconds.
 
     Returns:
         True on a zero-exit subprocess call, False on any failure including
@@ -403,6 +412,7 @@ def compact_session(
 
     """
     sid = session_uuid(repo, issue, agent, model)
+    timeout_s = learn_claude_timeout() if timeout is None else timeout
     try:
         result = subprocess.run(
             [
@@ -416,7 +426,7 @@ def compact_session(
                 "/compact",
             ],
             cwd=str(cwd),
-            timeout=timeout,
+            timeout=timeout_s,
             check=False,
             capture_output=True,
             text=True,

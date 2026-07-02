@@ -1,5 +1,8 @@
 """Utility functions for ProjectHephaestus."""
 
+# Import from cache
+from .cache import ThreadSafeCache
+
 # Import from helpers
 from .helpers import (
     flatten_dict,
@@ -18,7 +21,6 @@ from .retry import (
     is_network_error,
     retry_on_network_error,
     retry_with_backoff,
-    retry_with_jitter,
 )
 
 # Import from terminal
@@ -29,6 +31,7 @@ from .terminal import (
 )
 
 __all__ = [
+    "ThreadSafeCache",
     "flatten_dict",
     "get_proj_root",
     "get_repo_root",
@@ -41,7 +44,6 @@ __all__ = [
     "restore_terminal",
     "retry_on_network_error",
     "retry_with_backoff",
-    "retry_with_jitter",
     "run_subprocess",
     "slugify",
     "terminal_guard",

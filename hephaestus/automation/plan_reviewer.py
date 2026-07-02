@@ -15,24 +15,29 @@ import logging
 import subprocess
 import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from hephaestus.agents.runtime import (
-    add_agent_argument,
     direct_agent_model,
     resolve_agent,
     run_agent_text,
     uses_direct_agent_runner,
 )
-from hephaestus.automation._review_utils import add_max_workers_arg
-from hephaestus.cli.utils import add_dry_run_arg, add_json_arg, emit_json_status
+from hephaestus.automation._review_utils import (
+    build_automation_parser,
+    drain_completed_futures,
+    print_worker_summary,
+    work_report_context,
+)
+from hephaestus.cli.utils import add_agent_timeout_arg, emit_json_status
+from hephaestus.constants import AUTOMATION_LOG_FORMAT, LOG_DATEFMT
 from hephaestus.github.rate_limit import wait_until
 
+from .agent_config import DEFAULT_AGENT_TIMEOUT
 from .claude_invoke import invoke_claude_with_session, parse_review_verdict, scan_quota_reset
 from .claude_models import reviewer_model
-from .claude_timeouts import plan_reviewer_claude_timeout
 from .git_utils import get_repo_info, get_repo_root, get_repo_slug, issue_ref
 from .github_api import _gh_call, gh_issue_json, gh_issue_upsert_comment
 from .models import PLAN_COMMENT_MARKER, PlanReviewerOptions, WorkerResult
@@ -43,7 +48,6 @@ from .review_state import (
 )
 from .session_naming import AGENT_PLAN_REVIEWER
 from .status_tracker import StatusTracker
-from .work_report import write_work_report
 
 logger = logging.getLogger(__name__)
 
@@ -126,35 +130,28 @@ class PlanReviewer:
                 future = executor.submit(self._review_issue, issue_num, idx)
                 futures[future] = issue_num
 
-            while futures:
+            for future in drain_completed_futures(futures):
+                issue_num = futures.pop(future)
                 try:
-                    done, _pending = wait(futures.keys(), timeout=1.0, return_when=FIRST_COMPLETED)
-                except Exception:
-                    time.sleep(0.1)
-                    continue
-
-                for future in done:
-                    issue_num = futures.pop(future)
-                    try:
-                        result = future.result()
-                        with self.lock:
-                            results[issue_num] = result
-                        if result.success:
-                            logger.info("Issue %s: plan review completed", issue_ref(issue_num))
-                        else:
-                            logger.error(
-                                "Issue %s: plan review failed: %s",
-                                issue_ref(issue_num),
-                                result.error,
-                            )
-                    except Exception as e:
-                        logger.error("Issue %s raised exception: %s", issue_ref(issue_num), e)
-                        with self.lock:
-                            results[issue_num] = WorkerResult(
-                                issue_number=issue_num,
-                                success=False,
-                                error=str(e),
-                            )
+                    result = future.result()
+                    with self.lock:
+                        results[issue_num] = result
+                    if result.success:
+                        logger.info("Issue %s: plan review completed", issue_ref(issue_num))
+                    else:
+                        logger.error(
+                            "Issue %s: plan review failed: %s",
+                            issue_ref(issue_num),
+                            result.error,
+                        )
+                except Exception as e:
+                    logger.error("Issue %s raised exception: %s", issue_ref(issue_num), e)
+                    with self.lock:
+                        results[issue_num] = WorkerResult(
+                            issue_number=issue_num,
+                            success=False,
+                            error=str(e),
+                        )
 
         self._print_summary(results)
         return results
@@ -170,96 +167,101 @@ class PlanReviewer:
             WorkerResult indicating success or failure.
 
         """
-        acquired_slot: int | None = self.status_tracker.acquire_slot()
-        if acquired_slot is None:
-            return WorkerResult(
-                issue_number=issue_number,
-                success=False,
-                error="Failed to acquire worker slot",
-            )
-
-        try:
-            self.status_tracker.update_slot(acquired_slot, f"{issue_ref(issue_number)}: checking")
-
-            # --- Read-only checks (safe in dry-run) ---
-
-            # Skip only when the LATEST plan review is a GO. A NOGO verdict, or
-            # any older convention without a parseable verdict, re-runs the
-            # reviewer so an amended plan gets a fresh evaluation. (Previously
-            # this short-circuited on any prior `## 🔍 Plan Review` comment,
-            # which locked an issue out of re-review forever after the first
-            # interim verdict.)
-            if self._latest_review_is_final(issue_number):
-                logger.info(
-                    "Issue %s: latest plan review is APPROVED, skipping",
-                    issue_ref(issue_number),
+        with self.status_tracker.slot() as acquired_slot:
+            if acquired_slot is None:
+                return WorkerResult(
+                    issue_number=issue_number,
+                    success=False,
+                    error="Failed to acquire worker slot",
                 )
-                return WorkerResult(issue_number=issue_number, success=True, already_reviewed=True)
 
-            # Skip if no plan exists
-            plan_text = self._get_latest_plan(issue_number)
-            if plan_text is None:
-                logger.info("Issue %s: no plan comment found, skipping", issue_ref(issue_number))
-                return WorkerResult(issue_number=issue_number, success=True, already_reviewed=True)
-
-            # Fetch issue details for context
-            self.status_tracker.update_slot(
-                acquired_slot, f"{issue_ref(issue_number)}: fetching issue"
-            )
             try:
-                issue_data = gh_issue_json(issue_number)
-            except Exception as e:
-                return WorkerResult(
-                    issue_number=issue_number,
-                    success=False,
-                    error=f"Failed to fetch issue: {e}",
+                self.status_tracker.update_slot(
+                    acquired_slot, f"{issue_ref(issue_number)}: checking"
                 )
 
-            issue_title: str = issue_data.get("title", f"Issue #{issue_number}")
-            issue_body: str = issue_data.get("body", "")
+                # --- Read-only checks (safe in dry-run) ---
 
-            # Run Claude analysis
-            self.status_tracker.update_slot(
-                acquired_slot, f"{issue_ref(issue_number)}: running Claude"
-            )
-            review_text = self._run_claude_analysis(
-                issue_number, issue_title, issue_body, plan_text
-            )
-            if review_text is None:
-                return WorkerResult(
-                    issue_number=issue_number,
-                    success=False,
-                    error="Claude analysis returned no output",
-                )
+                # Skip only when the LATEST plan review is a GO. A NOGO verdict, or
+                # any older convention without a parseable verdict, re-runs the
+                # reviewer so an amended plan gets a fresh evaluation. (Previously
+                # this short-circuited on any prior `## 🔍 Plan Review` comment,
+                # which locked an issue out of re-review forever after the first
+                # interim verdict.)
+                if self._latest_review_is_final(issue_number):
+                    logger.info(
+                        "Issue %s: latest plan review is APPROVED, skipping",
+                        issue_ref(issue_number),
+                    )
+                    return WorkerResult(
+                        issue_number=issue_number, success=True, already_reviewed=True
+                    )
 
-            # --- DRY-RUN GUARD: no GitHub writes beyond this point ---
-            if self.options.dry_run:
-                logger.info(
-                    "[DRY RUN] Would post plan review to issue #%s:\n%s\n%s...",
-                    issue_number,
-                    _REVIEW_PREFIX,
-                    review_text[:200],
+                # Skip if no plan exists
+                plan_text = self._get_latest_plan(issue_number)
+                if plan_text is None:
+                    logger.info(
+                        "Issue %s: no plan comment found, skipping", issue_ref(issue_number)
+                    )
+                    return WorkerResult(
+                        issue_number=issue_number, success=True, already_reviewed=True
+                    )
+
+                # Fetch issue details for context
+                self.status_tracker.update_slot(
+                    acquired_slot, f"{issue_ref(issue_number)}: fetching issue"
                 )
+                try:
+                    issue_data = gh_issue_json(issue_number)
+                except Exception as e:
+                    return WorkerResult(
+                        issue_number=issue_number,
+                        success=False,
+                        error=f"Failed to fetch issue: {e}",
+                    )
+
+                issue_title: str = issue_data.get("title", f"Issue #{issue_number}")
+                issue_body: str = issue_data.get("body", "")
+
+                # Run Claude analysis
+                self.status_tracker.update_slot(
+                    acquired_slot, f"{issue_ref(issue_number)}: running Claude"
+                )
+                review_text = self._run_claude_analysis(
+                    issue_number, issue_title, issue_body, plan_text
+                )
+                if review_text is None:
+                    return WorkerResult(
+                        issue_number=issue_number,
+                        success=False,
+                        error="Claude analysis returned no output",
+                    )
+
+                # --- DRY-RUN GUARD: no GitHub writes beyond this point ---
+                if self.options.dry_run:
+                    logger.info(
+                        "[DRY RUN] Would post plan review to issue #%s:\n%s\n%s...",
+                        issue_number,
+                        _REVIEW_PREFIX,
+                        review_text[:200],
+                    )
+                    return WorkerResult(issue_number=issue_number, success=True)
+
+                # Post review comment
+                self.status_tracker.update_slot(
+                    acquired_slot, f"{issue_ref(issue_number)}: posting review"
+                )
+                self._post_review(issue_number, review_text)
+
                 return WorkerResult(issue_number=issue_number, success=True)
 
-            # Post review comment
-            self.status_tracker.update_slot(
-                acquired_slot, f"{issue_ref(issue_number)}: posting review"
-            )
-            self._post_review(issue_number, review_text)
-
-            return WorkerResult(issue_number=issue_number, success=True)
-
-        except Exception as e:
-            logger.error("Issue %s: unexpected error: %s", issue_ref(issue_number), e)
-            return WorkerResult(
-                issue_number=issue_number,
-                success=False,
-                error=str(e)[:80],
-            )
-
-        finally:
-            self.status_tracker.release_slot(acquired_slot)
+            except Exception as e:
+                logger.error("Issue %s: unexpected error: %s", issue_ref(issue_number), e)
+                return WorkerResult(
+                    issue_number=issue_number,
+                    success=False,
+                    error=str(e)[:80],
+                )
 
     def _fetch_issue_comments(self, issue_number: int) -> list[dict[str, Any]]:
         """Fetch all comments for an issue, caching the result per instance.
@@ -452,7 +454,7 @@ class PlanReviewer:
                 prompt=prompt,
                 model=reviewer_model(),
                 cwd=repo_root,
-                timeout=plan_reviewer_claude_timeout(),
+                timeout=self.options.agent_timeout,
                 allowed_tools="Read,Glob,Grep",
                 input_via_stdin=True,
             )
@@ -510,7 +512,7 @@ class PlanReviewer:
                 agent=agent,
                 prompt=prompt,
                 cwd=Path.cwd(),
-                timeout=plan_reviewer_claude_timeout(),
+                timeout=self.options.agent_timeout,
                 model=direct_agent_model(agent, "HEPH_REVIEWER_MODEL"),
                 sandbox="read-only",
             )
@@ -589,22 +591,7 @@ class PlanReviewer:
             results: Mapping of issue number to WorkerResult.
 
         """
-        total = len(results)
-        successful = sum(1 for r in results.values() if r.success)
-        failed = total - successful
-
-        logger.info("=" * 60)
-        logger.info("Plan Review Summary")
-        logger.info("=" * 60)
-        logger.info("Total issues: %s", total)
-        logger.info("Successful: %s", successful)
-        logger.info("Failed: %s", failed)
-
-        if failed > 0:
-            logger.info("Failed issues:")
-            for issue_num, result in results.items():
-                if not result.success:
-                    logger.info("  #%s: %s", issue_num, result.error)
+        print_worker_summary("Plan Review Summary", results)
 
 
 # ---------------------------------------------------------------------------
@@ -622,14 +609,14 @@ def _setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        format=AUTOMATION_LOG_FORMAT,
+        datefmt=LOG_DATEFMT,
     )
 
 
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argparse parser for plan_reviewer CLI."""
-    parser = argparse.ArgumentParser(
+    parser = build_automation_parser(
         description="Review implementation plans posted to GitHub issues using Claude",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -646,6 +633,10 @@ Examples:
   # Verbose output
   %(prog)s --issues 123 -v
         """,
+        add_github_throttle=False,
+        dry_run_prefix="Suppress GitHub mutations (no review comments posted).",
+        add_no_ui=True,
+        add_version=False,
     )
 
     parser.add_argument(
@@ -655,24 +646,7 @@ Examples:
         required=True,
         help="Issue numbers whose plans should be reviewed",
     )
-    add_agent_argument(parser)
-    add_max_workers_arg(parser)
-    add_dry_run_arg(
-        parser,
-        prefix="Suppress GitHub mutations (no review comments posted).",
-    )
-    parser.add_argument(
-        "--no-ui",
-        action="store_true",
-        help="Disable curses UI (use plain logging instead)",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging",
-    )
-    add_json_arg(parser)
+    add_agent_timeout_arg(parser)
     return parser
 
 
@@ -700,40 +674,44 @@ def main() -> int:
 
     log.info("Starting plan review for issues: %s", args.issues)
 
-    try:
-        options = PlanReviewerOptions(
-            issues=args.issues,
-            agent=agent,
-            max_workers=args.max_workers,
-            dry_run=args.dry_run,
-            enable_ui=not args.no_ui and not args.json,
-            verbose=args.verbose,
-        )
+    work_units = 0
+    with work_report_context(lambda: work_units):
+        try:
+            options = PlanReviewerOptions(
+                issues=args.issues,
+                agent=agent,
+                max_workers=args.max_workers,
+                dry_run=args.dry_run,
+                enable_ui=not args.no_ui and not args.json,
+                verbose=args.verbose,
+                agent_timeout=(
+                    args.agent_timeout if args.agent_timeout is not None else DEFAULT_AGENT_TIMEOUT
+                ),
+            )
 
-        reviewer = PlanReviewer(options)
-        results = reviewer.run()
+            reviewer = PlanReviewer(options)
+            results = reviewer.run()
 
-        # Compute work units for loop convergence (#613): non-skipped reviews
-        work_units = sum(1 for r in results.values() if r.success and not r.already_reviewed)
-        write_work_report(work_units)
+            # Compute work units for loop convergence (#613): non-skipped reviews
+            work_units = sum(1 for r in results.values() if r.success and not r.already_reviewed)
 
-        failed = [num for num, result in results.items() if not result.success]
-        if failed:
-            log.error("Failed to review %s plan(s) for issue(s): %s", len(failed), failed)
+            failed = [num for num, result in results.items() if not result.success]
+            if failed:
+                log.error("Failed to review %s plan(s) for issue(s): %s", len(failed), failed)
+                if args.json:
+                    emit_json_status(1, issues=args.issues, failed=failed)
+                return 1
+
+            log.info("Plan review complete")
             if args.json:
-                emit_json_status(1, issues=args.issues, failed=failed)
-            return 1
+                emit_json_status(0, issues=args.issues, failed=[])
+            return 0
 
-        log.info("Plan review complete")
-        if args.json:
-            emit_json_status(0, issues=args.issues, failed=[])
-        return 0
-
-    except KeyboardInterrupt:
-        log.warning("Interrupted by user")
-        if args.json:
-            emit_json_status(130, message="interrupted")
-        return 130
+        except KeyboardInterrupt:
+            log.warning("Interrupted by user")
+            if args.json:
+                emit_json_status(130, message="interrupted")
+            return 130
 
 
 if __name__ == "__main__":

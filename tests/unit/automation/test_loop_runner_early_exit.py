@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
@@ -37,74 +36,153 @@ class TestWriteWorkReport:
         """When HEPH_WORK_REPORT is unset, no file is created."""
         # Ensure env var is unset
         os.environ.pop("HEPH_WORK_REPORT", None)
-        from hephaestus.automation.work_report import write_work_report
+        from hephaestus.automation._review_utils import write_work_report
 
         # Call with env unset — this is a no-op; no file path to write to
         write_work_report(5)
 
-    def test_env_set_writes_int(self) -> None:
+    def test_env_set_writes_int(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """When HEPH_WORK_REPORT is set, writes the integer to that file."""
-        from hephaestus.automation.work_report import write_work_report
+        from hephaestus.automation._review_utils import write_work_report
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "report.txt")
-            os.environ["HEPH_WORK_REPORT"] = path
+        path = tmp_path / "report.txt"
+        monkeypatch.setenv("HEPH_WORK_REPORT", str(path))
 
-            write_work_report(42)
+        write_work_report(42)
 
-            assert Path(path).read_text(encoding="utf-8") == "42"
+        assert path.read_text(encoding="utf-8") == "42"
 
-            os.environ.pop("HEPH_WORK_REPORT", None)
-
-    def test_oserror_swallowed(self) -> None:
+    def test_oserror_swallowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """OSError (e.g., permission denied) is silently swallowed."""
-        from hephaestus.automation.work_report import write_work_report
+        from hephaestus.automation._review_utils import write_work_report
 
-        os.environ["HEPH_WORK_REPORT"] = "/nonexistent/path/report.txt"
+        monkeypatch.setenv("HEPH_WORK_REPORT", "/nonexistent/path/report.txt")
 
         # Should not raise
         write_work_report(7)
 
-        os.environ.pop("HEPH_WORK_REPORT", None)
+    def test_context_env_unset_does_not_call_work_units_fn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """work_report_context no-ops when the loop runner did not request a report."""
+        from hephaestus.automation._review_utils import work_report_context
+
+        monkeypatch.delenv("HEPH_WORK_REPORT", raising=False)
+        called = False
+
+        def work_units() -> int:
+            nonlocal called
+            called = True
+            return 5
+
+        with work_report_context(work_units):
+            pass
+
+        assert called is False
+
+    def test_context_env_set_writes_on_exit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """work_report_context writes the callback result when exiting normally."""
+        from hephaestus.automation._review_utils import work_report_context
+
+        report = tmp_path / "report.txt"
+        monkeypatch.setenv("HEPH_WORK_REPORT", str(report))
+
+        with work_report_context(lambda: 42):
+            pass
+
+        assert report.read_text(encoding="utf-8") == "42"
+
+    def test_context_writes_when_body_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """work_report_context writes even when the protected block raises."""
+        from hephaestus.automation._review_utils import work_report_context
+
+        report = tmp_path / "report.txt"
+        monkeypatch.setenv("HEPH_WORK_REPORT", str(report))
+
+        with pytest.raises(RuntimeError, match=r"^boom$"):
+            with work_report_context(lambda: 7):
+                raise RuntimeError("boom")
+
+        assert report.read_text(encoding="utf-8") == "7"
+
+    def test_context_preserves_body_exception_when_reporting_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reporting failures must not mask the protected block's exception."""
+        from hephaestus.automation._review_utils import work_report_context
+
+        report = tmp_path / "report.txt"
+        monkeypatch.setenv("HEPH_WORK_REPORT", str(report))
+
+        def work_units() -> int:
+            raise ValueError("report failed")
+
+        with pytest.raises(RuntimeError, match=r"^boom$"):
+            with work_report_context(work_units):
+                raise RuntimeError("boom")
+
+        assert not report.exists()
+
+    def test_context_suppresses_reporting_failure_on_clean_exit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Best-effort reporting failures are non-fatal on clean exit too."""
+        from hephaestus.automation._review_utils import work_report_context
+
+        report = tmp_path / "report.txt"
+        monkeypatch.setenv("HEPH_WORK_REPORT", str(report))
+
+        def work_units() -> int:
+            raise ValueError("report failed")
+
+        with work_report_context(work_units):
+            pass
+
+        assert not report.exists()
 
 
 class TestMakeWorkReportPath:
     """Tests for _make_work_report_path helper."""
 
-    def test_creates_path_under_build(self) -> None:
+    def test_creates_path_under_build(self, tmp_path: Path) -> None:
         """Path is created under build/ directory."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            build_dir = Path(tmpdir) / "build"
-            build_dir.mkdir()
+        build_dir = tmp_path / "build"
+        build_dir.mkdir()
 
-            path = _make_work_report_path(str(build_dir))
+        path = _make_work_report_path(str(build_dir))
 
-            assert Path(path).parent == build_dir
-            assert Path(path).name.startswith("work_report_")
+        assert Path(path).parent == build_dir
+        assert Path(path).name.startswith("work_report_")
 
 
 class TestReadWorkReport:
     """Tests for _read_work_report helper."""
 
-    def test_present_valid_int(self) -> None:
+    def test_present_valid_int(self, tmp_path: Path) -> None:
         """Present file with valid int is parsed correctly."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "report.txt")
-            Path(path).write_text("3", encoding="utf-8")
+        path = tmp_path / "report.txt"
+        path.write_text("3", encoding="utf-8")
 
-            result = _read_work_report(path)
+        result = _read_work_report(str(path))
 
-            assert result == 3
+        assert result == 3
 
-    def test_present_zero(self) -> None:
+    def test_present_zero(self, tmp_path: Path) -> None:
         """File containing '0' is parsed as 0."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "report.txt")
-            Path(path).write_text("0", encoding="utf-8")
+        path = tmp_path / "report.txt"
+        path.write_text("0", encoding="utf-8")
 
-            result = _read_work_report(path)
+        result = _read_work_report(str(path))
 
-            assert result == 0
+        assert result == 0
 
     def test_missing_returns_none(self) -> None:
         """Missing file returns None."""
@@ -112,35 +190,32 @@ class TestReadWorkReport:
 
         assert result is None
 
-    def test_empty_file_returns_none(self) -> None:
+    def test_empty_file_returns_none(self, tmp_path: Path) -> None:
         """Empty file returns None."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "report.txt")
-            Path(path).write_text("", encoding="utf-8")
+        path = tmp_path / "report.txt"
+        path.write_text("", encoding="utf-8")
 
-            result = _read_work_report(path)
+        result = _read_work_report(str(path))
 
-            assert result is None
+        assert result is None
 
-    def test_malformed_returns_none(self) -> None:
+    def test_malformed_returns_none(self, tmp_path: Path) -> None:
         """Malformed content (non-int) returns None."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "report.txt")
-            Path(path).write_text("not_an_int", encoding="utf-8")
+        path = tmp_path / "report.txt"
+        path.write_text("not_an_int", encoding="utf-8")
 
-            result = _read_work_report(path)
+        result = _read_work_report(str(path))
 
-            assert result is None
+        assert result is None
 
-    def test_whitespace_trimmed(self) -> None:
+    def test_whitespace_trimmed(self, tmp_path: Path) -> None:
         """Whitespace is trimmed before parsing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "report.txt")
-            Path(path).write_text("  5  \n", encoding="utf-8")
+        path = tmp_path / "report.txt"
+        path.write_text("  5  \n", encoding="utf-8")
 
-            result = _read_work_report(path)
+        result = _read_work_report(str(path))
 
-            assert result == 5
+        assert result == 5
 
 
 class TestPhaseResultProducedWork:
@@ -812,7 +887,7 @@ class TestPlanReviewerAlreadyReviewedFlag:
         mock_post.assert_called_once()
 
     def test_plan_reviewer_main_writes_correct_work_count(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """main() reports only successful, non-skipped reviews as work units."""
         from hephaestus.automation import plan_reviewer as plan_reviewer_mod
@@ -827,25 +902,19 @@ class TestPlanReviewerAlreadyReviewedFlag:
         }
         mock_reviewer = MagicMock()
         mock_reviewer.run.return_value = results
-        captured: dict[str, int] = {}
+        report = tmp_path / "report.txt"
 
+        monkeypatch.setenv("HEPH_WORK_REPORT", str(report))
         monkeypatch.setattr(
             "sys.argv",
             ["plan-reviewer", "--issues", "1", "2", "3", "4", "--agent", "claude"],
         )
-        with (
-            patch.object(plan_reviewer_mod, "PlanReviewer", return_value=mock_reviewer),
-            patch.object(
-                plan_reviewer_mod,
-                "write_work_report",
-                side_effect=lambda n: captured.__setitem__("work", n),
-            ),
-        ):
+        with patch.object(plan_reviewer_mod, "PlanReviewer", return_value=mock_reviewer):
             rc = plan_reviewer_mod.main()
 
         # issue 4 failed → rc=1, but the work report still reflects the 2 real reviews.
         assert rc == 1
-        assert captured["work"] == 2
+        assert report.read_text(encoding="utf-8") == "2"
 
 
 class TestPlannerMainWorkReport:
@@ -856,7 +925,9 @@ class TestPlannerMainWorkReport:
     existing plans reports zero work, which lets the loop converge.
     """
 
-    def test_planner_writes_new_plans_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_planner_writes_new_plans_count(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """main() writes (successful - already_planned) new plans to the report."""
         from hephaestus.automation import planner as planner_mod
         from hephaestus.automation.models import PlanResult
@@ -869,26 +940,20 @@ class TestPlannerMainWorkReport:
         }
         mock_planner = MagicMock()
         mock_planner.run.return_value = results
-        captured: dict[str, int] = {}
+        report = tmp_path / "report.txt"
 
+        monkeypatch.setenv("HEPH_WORK_REPORT", str(report))
         monkeypatch.setattr(
             "sys.argv", ["planner", "--issues", "10", "11", "12", "--agent", "claude"]
         )
-        with (
-            patch.object(planner_mod, "Planner", return_value=mock_planner),
-            patch.object(
-                planner_mod,
-                "write_work_report",
-                side_effect=lambda n: captured.__setitem__("work", n),
-            ),
-        ):
+        with patch.object(planner_mod, "Planner", return_value=mock_planner):
             rc = planner_mod.main()
 
         assert rc == 0
-        assert captured["work"] == 2
+        assert report.read_text(encoding="utf-8") == "2"
 
     def test_planner_reports_zero_when_all_plans_exist(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A pass that only re-confirms existing plans reports zero work units."""
         from hephaestus.automation import planner as planner_mod
@@ -900,21 +965,15 @@ class TestPlannerMainWorkReport:
         }
         mock_planner = MagicMock()
         mock_planner.run.return_value = results
-        captured: dict[str, int] = {}
+        report = tmp_path / "report.txt"
 
+        monkeypatch.setenv("HEPH_WORK_REPORT", str(report))
         monkeypatch.setattr("sys.argv", ["planner", "--issues", "10", "11", "--agent", "claude"])
-        with (
-            patch.object(planner_mod, "Planner", return_value=mock_planner),
-            patch.object(
-                planner_mod,
-                "write_work_report",
-                side_effect=lambda n: captured.__setitem__("work", n),
-            ),
-        ):
+        with patch.object(planner_mod, "Planner", return_value=mock_planner):
             rc = planner_mod.main()
 
         assert rc == 0
-        assert captured["work"] == 0
+        assert report.read_text(encoding="utf-8") == "0"
 
 
 # NOTE: ``TestHasPendingDriveGreenWork`` was removed when #818 promoted

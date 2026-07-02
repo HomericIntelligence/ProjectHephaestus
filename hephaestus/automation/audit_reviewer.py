@@ -21,23 +21,22 @@ from pathlib import Path
 from typing import Any
 
 from hephaestus.agents.runtime import (
-    add_agent_argument,
     direct_agent_model,
     resolve_agent,
     run_agent_text,
     uses_direct_agent_runner,
 )
 from hephaestus.cli.utils import (
-    add_github_throttle_args,
-    add_json_arg,
-    add_version_arg,
     configure_github_throttle_from_args,
     emit_json_status,
 )
+from hephaestus.constants import AUTOMATION_LOG_FORMAT, LOG_DATEFMT
+from hephaestus.io.utils import write_secure
 
+from ._review_utils import build_automation_parser, ensure_state_dir
+from .agent_config import DEFAULT_AGENT_TIMEOUT
 from .claude_invoke import invoke_claude_with_session
 from .claude_models import reviewer_model
-from .claude_timeouts import pr_reviewer_claude_timeout
 from .git_utils import get_repo_root, get_repo_slug
 from .github_api import _gh_call, fetch_open_prs, gh_pr_review_post
 from .session_naming import AGENT_PR_REVIEWER
@@ -74,7 +73,7 @@ def write_audit_report(state_dir: Path, audits: list[dict[str, Any]]) -> Path:
     state_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     path = state_dir / f"audit-report-{ts}.json"
-    path.write_text(json.dumps({"audits": audits, "generated_at": ts}, indent=2))
+    write_secure(path, json.dumps({"audits": audits, "generated_at": ts}, indent=2))
     return path
 
 
@@ -128,6 +127,7 @@ def run_audit_coordinator(
     agent: str,
     state_dir: Path,
     dry_run: bool = False,
+    timeout: int = DEFAULT_AGENT_TIMEOUT,
 ) -> list[dict[str, Any]]:
     """Dispatch the coordinator agent; return parsed audit results.
 
@@ -154,7 +154,7 @@ def run_audit_coordinator(
                 agent=agent,
                 prompt=prompt,
                 cwd=get_repo_root(),
-                timeout=pr_reviewer_claude_timeout(),
+                timeout=timeout,
                 model=direct_agent_model(agent, "HEPH_REVIEWER_MODEL"),
                 sandbox="read-only",
             )
@@ -170,7 +170,7 @@ def run_audit_coordinator(
                 prompt=prompt,
                 model=reviewer_model(),
                 cwd=get_repo_root(),
-                timeout=pr_reviewer_claude_timeout(),
+                timeout=timeout,
                 output_format="json",
                 permission_mode="dontAsk",
                 allowed_tools="Read,Glob,Grep",
@@ -180,12 +180,12 @@ def run_audit_coordinator(
                 response = json.loads(stdout or "{}").get("result", stdout or "")
             except (json.JSONDecodeError, AttributeError):
                 response = stdout or ""
-        log_file.write_text(response)
+        write_secure(log_file, response)
     except subprocess.CalledProcessError as e:
-        log_file.write_text(f"EXIT {e.returncode}\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}")
+        write_secure(log_file, f"EXIT {e.returncode}\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}")
         raise RuntimeError(f"Audit coordinator failed: {e.stderr or e.stdout}") from e
     except subprocess.TimeoutExpired as e:
-        log_file.write_text(f"TIMEOUT after {e.timeout}s\n{e.output or ''}")
+        write_secure(log_file, f"TIMEOUT after {e.timeout}s\n{e.output or ''}")
         raise RuntimeError("Audit coordinator timed out") from e
 
     audits = _parse_coordinator_results(response)
@@ -202,16 +202,17 @@ class AuditReviewer:
     pr_numbers: list[int] = field(default_factory=list)
     state_dir: Path | None = None
     dry_run: bool = False
+    timeout: int = DEFAULT_AGENT_TIMEOUT
 
     def __post_init__(self) -> None:
         """Set default state_dir if not provided."""
         if self.state_dir is None:
-            self.state_dir = get_repo_root() / "build" / ".issue_implementer"
+            self.state_dir = ensure_state_dir(get_repo_root())
 
     def run(self) -> tuple[int, list[dict[str, Any]]]:
         """Run the coordinator audit and post a summary review per PR."""
         # __post_init__ guarantees state_dir is set; narrow type for mypy.
-        if self.state_dir is None:  # pragma: no cover
+        if self.state_dir is None:  # pragma: no cover - mypy type-narrowing; unreachable, see #1426
             raise RuntimeError("state_dir unexpectedly None after __post_init__")
         prs = _fetch_prs_by_number(self.pr_numbers) if self.pr_numbers else fetch_open_prs()
         if not prs:
@@ -223,6 +224,7 @@ class AuditReviewer:
                 agent=self.agent,
                 state_dir=self.state_dir,
                 dry_run=self.dry_run,
+                timeout=self.timeout,
             )
         except RuntimeError as exc:
             logger.error("Coordinator failed: %s", exc)
@@ -246,9 +248,13 @@ class AuditReviewer:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = build_automation_parser(
         prog="hephaestus-audit-prs",
         description="Audit ALL open PRs in one coordinator agent invocation.",
+        add_max_workers=False,
+        add_github_throttle=True,
+        dry_run_help="Skip the agent call and the GitHub posting step.",
+        verbose_help="DEBUG-level logging.",
     )
     parser.add_argument(
         "--pr-numbers",
@@ -257,15 +263,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Audit only these PR numbers (default: all open).",
     )
-    add_agent_argument(parser)
     parser.add_argument("--codex", action="store_true", help="Deprecated alias for --agent codex.")
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Skip the agent call and the GitHub posting step."
-    )
-    parser.add_argument("-v", "--verbose", action="store_true", help="DEBUG-level logging.")
-    add_github_throttle_args(parser)
-    add_json_arg(parser)
-    add_version_arg(parser)
     return parser
 
 
@@ -275,7 +273,8 @@ def main(argv: list[str] | None = None) -> int:
     configure_github_throttle_from_args(args)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        format=AUTOMATION_LOG_FORMAT,
+        datefmt=LOG_DATEFMT,
     )
     selected_agent = "codex" if args.codex else args.agent
     agent = (selected_agent or "claude") if args.dry_run else resolve_agent(selected_agent)

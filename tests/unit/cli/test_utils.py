@@ -3,6 +3,8 @@
 
 import argparse
 import json
+import logging
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -13,12 +15,15 @@ from hephaestus.cli.utils import (
     add_json_arg,
     add_logging_args,
     add_version_arg,
+    configure_cli_logging,
     configure_github_throttle_from_args,
     confirm_action,
     create_parser,
+    create_validation_parser,
     emit_json_status,
     format_output,
     format_table,
+    resolve_repo_root,
 )
 
 
@@ -114,6 +119,109 @@ class TestCreateParser:
         """Prog name is set correctly."""
         parser = create_parser("myprog")
         assert parser.prog == "myprog"
+
+    def test_accepts_description_epilog_and_usage(self) -> None:
+        """Parser metadata can be preserved while using the shared factory."""
+        parser = create_parser(
+            "demo",
+            description="Demo description",
+            epilog="Demo epilog",
+            usage="demo [options]",
+        )
+
+        assert parser.description == "Demo description"
+        assert parser.epilog == "Demo epilog"
+        assert parser.usage == "demo [options]"
+
+    def test_can_suppress_default_epilog(self) -> None:
+        """Call sites can opt out of the shared examples epilog."""
+        parser = create_parser("demo", epilog=None)
+
+        assert parser.epilog is None
+
+
+class TestCreateValidationParser:
+    """Tests for create_validation_parser."""
+
+    def test_default_flags_present(self) -> None:
+        """Parser includes --repo-root, --json, and --version by default."""
+        parser = create_validation_parser("demo")
+        args = parser.parse_args([])
+        assert args.repo_root is None
+        assert args.json is False
+
+    def test_explicit_repo_root_captured(self, tmp_path: Path) -> None:
+        """Explicit --repo-root is captured as a Path in the namespace."""
+        parser = create_validation_parser("demo")
+        args = parser.parse_args(["--repo-root", str(tmp_path)])
+        assert args.repo_root == tmp_path
+
+    def test_include_repo_root_false_omits_flag(self) -> None:
+        """include_repo_root=False suppresses the --repo-root flag."""
+        parser = create_validation_parser("demo", include_repo_root=False)
+        args = parser.parse_args([])
+        assert not hasattr(args, "repo_root")
+
+    def test_parse_known_args_preserves_unknown_flags(self, tmp_path: Path) -> None:
+        """parse_known_args() does not consume passthrough args."""
+        parser = create_validation_parser("demo")
+        args, unknown = parser.parse_known_args(["--json", "--strict-equality", "pkg/a.py"])
+        assert args.json is True
+        assert unknown == ["--strict-equality", "pkg/a.py"]
+
+
+class TestConfigureCliLogging:
+    """Tests for configure_cli_logging."""
+
+    def test_default_uses_info_level(self) -> None:
+        """Without verbose, basicConfig is called at INFO level."""
+        with patch("hephaestus.cli.utils.logging.basicConfig") as basic_config:
+            configure_cli_logging()
+        assert basic_config.call_args.kwargs["level"] == logging.INFO
+
+    def test_verbose_uses_debug_level(self) -> None:
+        """verbose=True raises the configured level to DEBUG."""
+        with patch("hephaestus.cli.utils.logging.basicConfig") as basic_config:
+            configure_cli_logging(verbose=True)
+        assert basic_config.call_args.kwargs["level"] == logging.DEBUG
+
+    def test_sets_standard_format(self) -> None:
+        """A consistent stderr-safe format string is applied."""
+        with patch("hephaestus.cli.utils.logging.basicConfig") as basic_config:
+            configure_cli_logging()
+        assert "%(levelname)s" in basic_config.call_args.kwargs["format"]
+        assert "%(name)s" in basic_config.call_args.kwargs["format"]
+
+    def test_routes_through_canonical_constants(self) -> None:
+        """configure_cli_logging uses the shared AUTOMATION_LOG_FORMAT (#1427)."""
+        import hephaestus.constants as constants
+
+        with patch("hephaestus.cli.utils.logging.basicConfig") as basic_config:
+            configure_cli_logging()
+        assert basic_config.call_args.kwargs["format"] == constants.AUTOMATION_LOG_FORMAT
+        assert basic_config.call_args.kwargs["datefmt"] == constants.LOG_DATEFMT
+
+
+class TestResolveRepoRoot:
+    """Tests for resolve_repo_root."""
+
+    def test_explicit_root_returned_directly(self, tmp_path: Path) -> None:
+        """resolve_repo_root returns the explicit --repo-root without discovery."""
+        parser = create_validation_parser("demo")
+        args = parser.parse_args(["--repo-root", str(tmp_path)])
+        with patch("hephaestus.cli.utils._resolve_repo_root", return_value=tmp_path) as resolver:
+            result = resolve_repo_root(args)
+        assert result == tmp_path
+        resolver.assert_called_once_with(tmp_path)
+
+    def test_auto_detect_when_not_provided(self, tmp_path: Path) -> None:
+        """resolve_repo_root falls back to get_repo_root() when --repo-root is absent."""
+        parser = create_validation_parser("demo")
+        args = parser.parse_args([])
+        with patch("hephaestus.cli.utils._resolve_repo_root", return_value=tmp_path) as resolver:
+            result = resolve_repo_root(args)
+        assert result == tmp_path
+        resolver.assert_called_once_with(None)
 
 
 class TestAddVersionArg:
@@ -324,6 +432,32 @@ class TestFormatOutput:
     def test_scalar_text(self) -> None:
         """Text format of a scalar returns its string representation."""
         assert format_output(42) == "42"
+
+    def test_invalid_format_falls_back_to_text(self) -> None:
+        """Unrecognized format_type renders as text, not an error (POLA #1509).
+
+        Non-vacuous: if the else-branch text fallback (cli/utils.py:380-388)
+        raised instead, the bogus/yaml/"" cases would fail; the "JSON" case
+        guards format_output's case-SENSITIVITY (== "json", not .lower()).
+        """
+        data = {"name": "hephaestus", "version": "0.3.0"}
+        for bogus in ("bogus", "yaml", "", "JSON"):  # "JSON" stays case-sensitive
+            result = format_output(data, format_type=bogus)
+            assert "name: hephaestus" in result  # text branch ran
+            assert "{" not in result  # NOT json output
+
+    def test_table_format_on_dict_falls_back_to_text(self) -> None:
+        """'table' on non-sequence data falls back to text, not an error (#1509).
+
+        Non-vacuous: if the isinstance(data, (list, tuple)) guard at
+        cli/utils.py:368 were dropped, a dict would hit the table branch and
+        format differently; asserting the text 'key: value' line AND absence of
+        json's '{' pins the text path specifically.
+        """
+        data = {"name": "hephaestus", "version": "0.3.0"}
+        result = format_output(data, format_type="table")
+        assert "name: hephaestus" in result  # text branch, not table
+        assert "{" not in result  # NOT json output
 
 
 class TestCliBarrelExports:

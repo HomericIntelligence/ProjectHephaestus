@@ -22,9 +22,10 @@ Exception hierarchy::
     └── ClaudeUsageCapError       (Claude per-period cap)
 
 Out of scope for ``gh_call``: ``tidy``'s interactive ``gh tidy`` Popen
-requires direct stdin/stdout access, and ``rate_limit``'s reset probe uses a
-raw ``gh api rate_limit`` subprocess to avoid recursing back into ``gh_call``
-while ``gh_call`` is classifying a rate-limit error.
+requires direct stdin/stdout access, and ``rate_limit``'s reset probe calls
+``run_subprocess(["gh", "api", "rate_limit"])`` directly (bypassing
+``gh_call``) to avoid recursing back into ``gh_call`` while ``gh_call`` is
+classifying a rate-limit error.
 
 CLI entry points (``hephaestus-merge-prs``, ``hephaestus-fleet-sync``,
 ``hephaestus-tidy``) are intentionally NOT exported here: they are
@@ -38,6 +39,14 @@ from hephaestus.github.client import (
     GitHubRateLimitError,
     GitHubUnavailableError,
     gh_call,
+)
+from hephaestus.github.mnemosyne_repo import (
+    UPSTREAM_SLUG,
+    MnemosyneTarget,
+    fork_upstream,
+    gh_authenticated_login,
+    remote_repo_exists,
+    resolve_mnemosyne_target,
 )
 from hephaestus.github.pr_merge import detect_repo_from_remote, local_branch_exists
 from hephaestus.github.rate_limit import (
@@ -60,23 +69,29 @@ from hephaestus.github.stats import (
 )
 
 __all__ = [
+    "UPSTREAM_SLUG",
     "ClaudeUsageCapError",
     "GitHubRateLimitError",
     "GitHubUnavailableError",
+    "MnemosyneTarget",
     "collect_stats",
     "detect_claude_usage_cap",
     "detect_claude_usage_limit",
     "detect_rate_limit",
     "detect_repo_from_remote",
     "detect_session_limit",
+    "fork_upstream",
     "format_stats_table",
     "get_commits_stats",
     "get_current_repo",
     "get_issues_stats",
     "get_prs_stats",
+    "gh_authenticated_login",
     "gh_call",
     "local_branch_exists",
     "parse_reset_epoch",
+    "remote_repo_exists",
+    "resolve_mnemosyne_target",
     "resolve_quota_reset_epoch",
     "validate_date",
     "wait_until",

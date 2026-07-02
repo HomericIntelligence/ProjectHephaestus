@@ -39,7 +39,7 @@ says nothing about the Python package version and vice versa. See
 
 ## Stability Tiers
 
-ProjectHephaestus ships 19 documented subpackages with different maturity levels. Only the
+ProjectHephaestus ships 20 documented subpackages with different maturity levels. Only the
 **stable** subpackages below are covered by the [deprecation policy](#deprecation-policy);
 **provisional** subpackages may change without notice, even across minor versions.
 
@@ -81,7 +81,7 @@ may change incompatibly in a minor release.
 
 ## Console-Script Stability Tiers
 
-ProjectHephaestus installs 49 console scripts via `[project.scripts]` in
+ProjectHephaestus installs 51 console scripts via `[project.scripts]` in
 `pyproject.toml`. Each is classified into one of three tiers:
 
 - **Stable** — covered by the [deprecation policy](#deprecation-policy). CLI
@@ -158,6 +158,7 @@ bypass a misfiring hook locally use
 | `hephaestus-validate-agents` | Internal | Repo CI agent-frontmatter validator |
 | `hephaestus-check-repo-analyze-skills` | Internal | Repo CI repo-analyze skill generator validator |
 | `hephaestus-check-cli-tier-docs` | Internal | Enforces this very table; added in #766 |
+| `hephaestus-check-api-table-docs` | Internal | Enforces per-symbol `__all__` documentation in COMPATIBILITY.md |
 
 ## Public API
 
@@ -182,17 +183,10 @@ Lazy-loaded symbols (accessible via `hephaestus.<name>`): `add_logging_args`,
 `check_coverage`, `check_max_complexity`, `check_python_version_consistency`,
 `check_test_structure`, `COMMAND_REGISTRY`, `confirm_action`, `create_parser`,
 `detect_rate_limit`, `filter_audit_results`, `flatten_dict`, `format_output`,
-`format_system_info`, `format_table`, `get_config_value`, `get_proj_root`,
+`format_system_info`, `format_table`, `get_proj_root`,
 `get_repo_root`, `get_setting`, `human_readable_size`, `install_package`,
 `load_data`, `merge_configs`, `parse_reset_epoch`, `read_file`, `register_command`,
 `run_subprocess`, `safe_write`, `save_data`, `wait_until`, `write_file`, `write_secure`.
-
-**Deprecated lazy-loaded symbols** (covered by the deprecation policy until
-removal):
-
-- `retry_with_jitter` — superseded by `retry_with_backoff(jitter=True, max_delay=...)`.
-  Emits a `DeprecationWarning` both when accessed via `hephaestus.retry_with_jitter`
-  and when called. Scheduled for removal no earlier than the next major version after 1.0.
 
 ### `hephaestus.logging`
 
@@ -200,18 +194,28 @@ removal):
 |--------|-------|-------|
 | `ContextLogger` | 0.2.0 | Logger adapter with context binding |
 | `JsonFormatter` | 0.5.0 | Structured JSON log formatter |
+| `correlation_id_scope` | TBD | Context manager binding an ambient correlation ID for subprocess propagation |
+| `get_current_correlation_id` | TBD | Read the current ambient correlation ID (None if unset) |
 | `get_logger` | 0.1.0 | Get a configured logger instance |
+| `set_correlation_id` | TBD | Set the ambient correlation ID; returns a reset Token |
 | `setup_logging` | 0.1.0 | Configure root logger |
 
 ### `hephaestus.config`
 
 | Symbol | Added | Notes |
 |--------|-------|-------|
-| `get_config_value` | 0.2.0 | High-level config lookup with env overlay |
+| `check_dep_sync` | 0.3.0 | Check pixi.toml ↔ requirements drift |
+| `check_requirements_up_to_date` | 0.3.0 | Verify requirements file is current |
+| `generate_requirements_content` | 0.3.0 | Render requirements.txt content from pixi deps |
 | `get_setting` | 0.1.0 | Dot-notation access to nested config dict |
 | `load_config` | 0.1.0 | Load YAML/JSON config file |
+| `load_yaml_config` | 0.1.0 | Load a YAML config file |
 | `merge_configs` | 0.1.0 | Deep-merge multiple config dicts |
 | `merge_with_env` | 0.2.0 | Overlay env vars onto config |
+| `parse_pixi_toml` | 0.3.0 | Parse pixi.toml dependency tables |
+| `parse_requirements` | 0.3.0 | Parse a requirements.txt file |
+| `sync_requirements` | 0.3.0 | Sync requirements.txt from pixi deps |
+| `validate_config` | 0.1.0 | Validate a config dict against a schema |
 
 ### `hephaestus.io`
 
@@ -229,11 +233,76 @@ removal):
 
 | Symbol | Added | Notes |
 |--------|-------|-------|
+| `ThreadSafeCache` | 0.9.8 | Lock-protected TTL cache with `get_or_compute` |
 | `flatten_dict` | 0.1.0 | Flatten nested dict |
+| `get_proj_root` | 0.1.0 | Locate the project root directory |
+| `get_repo_root` | 0.1.0 | Locate the git repository root |
 | `human_readable_size` | 0.1.0 | Format byte count as human-readable string |
+| `install_package` | 0.2.0 | Install a Python package at runtime via pip |
+| `install_signal_handlers` | 0.3.0 | Register terminal-restoring signal handlers |
+| `is_network_error` | 0.2.0 | Classify an exception as a transient network error |
+| `local_branch_exists` | 0.9.8 | Check whether a local git branch exists |
+| `resolve_repo_root` | 0.9.8 | Return an explicit repo root or auto-detect it |
+| `restore_terminal` | 0.3.0 | Restore terminal state after a raw-mode session |
+| `retry_on_network_error` | 0.2.0 | Retry decorator scoped to network errors |
 | `retry_with_backoff` | 0.1.0 | Exponential backoff retry decorator |
 | `run_subprocess` | 0.1.0 | Execute shell commands with error handling |
 | `slugify` | 0.1.0 | Convert text to URL-friendly slug |
+| `terminal_guard` | 0.3.0 | Context manager that saves/restores terminal state |
+
+### `hephaestus.cli`
+
+> The `Added` version for pre-1.0 symbols is a best-effort historical anchor
+> (inferred from the introducing commit/PR), not an authoritative record.
+
+| Symbol | Added | Notes |
+|--------|-------|-------|
+| `Colors` | 0.1.0 | ANSI color constants for terminal output |
+| `CommandRegistry` | 0.1.0 | Registry type for CLI subcommands |
+| `COMMAND_REGISTRY` | 0.1.0 | Default shared `CommandRegistry` instance |
+| `DRY_RUN_HELP_CAVEAT` | 0.9.0 | Standard help text appended for dry-run flags |
+| `add_advise_timeout_arg` | 0.9.8 | Add an `--advise-timeout` flag to a parser |
+| `add_agent_timeout_arg` | 0.9.8 | Add an `--agent-timeout` flag to a parser |
+| `add_dry_run_arg` | 0.9.0 | Add a `--dry-run` flag to a parser |
+| `add_follow_up_timeout_arg` | 0.9.8 | Add a `--follow-up-timeout` flag to a parser |
+| `add_git_message_timeout_arg` | 0.9.8 | Add a `--git-message-timeout` flag to a parser |
+| `add_github_throttle_args` | 0.9.0 | Add GitHub API throttle flags to a parser |
+| `add_json_arg` | 0.6.0 | Add a `--json` output flag to a parser |
+| `add_learn_timeout_arg` | 0.9.8 | Add a `--learn-timeout` flag to a parser |
+| `add_logging_args` | 0.1.0 | Add `--verbose`/`--quiet` logging flags |
+| `add_poll_max_wait_arg` | 0.9.8 | Add a `--poll-max-wait` flag to a parser |
+| `add_version_arg` | 0.1.0 | Add a `--version` flag to a parser |
+| `configure_cli_logging` | 0.9.8 | Configure standard stderr-safe logging for a CLI |
+| `configure_github_throttle_from_args` | 0.9.0 | Apply parsed throttle args to the GitHub client |
+| `confirm_action` | 0.1.0 | Interactive yes/no confirmation prompt |
+| `create_parser` | 0.1.0 | Build a standard `ArgumentParser` |
+| `create_validation_parser` | 0.9.8 | Build a standardized parser for validation-style CLIs |
+| `emit_json_status` | 0.6.0 | Emit a structured JSON status envelope |
+| `format_output` | 0.1.0 | Format a value for human-readable output |
+| `format_table` | 0.1.0 | Render rows as an aligned text table |
+| `register_command` | 0.1.0 | Decorator registering a CLI subcommand |
+| `resolve_repo_root` | 0.9.8 | Return the explicit CLI repo-root arg or auto-detect it |
+
+### `hephaestus.system`
+
+> The `Added` version for pre-1.0 symbols is a best-effort historical anchor, not an authoritative record.
+
+| Symbol | Added | Notes |
+|--------|-------|-------|
+| `format_system_info` | 0.3.0 | Format collected system info for display |
+| `get_system_info` | 0.3.0 | Collect system/environment information |
+
+### `hephaestus.version`
+
+> The `Added` version for pre-1.0 symbols is a best-effort historical anchor, not an authoritative record.
+
+| Symbol | Added | Notes |
+|--------|-------|-------|
+| `VersionManager` | 0.1.0 | Read/write/bump the project version |
+| `bump_version` | 0.1.0 | Increment a semantic version component |
+| `check_package_version_consistency` | 0.1.0 | Verify installed-package versions agree |
+| `check_version_consistency` | 0.1.0 | Verify project version files agree |
+| `parse_version` | 0.1.0 | Parse a semantic version string |
 
 ## Deprecation Policy
 

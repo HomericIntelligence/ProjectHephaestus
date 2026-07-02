@@ -8,6 +8,7 @@ from typing import Any
 from unittest import mock
 
 import pytest
+from hypothesis import given, strategies as st
 
 from hephaestus.automation.audit_reviewer import (
     AuditReviewer,
@@ -349,6 +350,25 @@ class TestAuditReviewerRun:
         assert len(audits) == 1
         assert mock_post.called
 
+    def test_post_init_always_sets_state_dir(self, tmp_path: Path) -> None:
+        """#1426: ``__post_init__`` guarantees ``state_dir`` is non-None.
+
+        This invariant is what makes the ``if self.state_dir is None`` guard in
+        ``run()`` a genuinely-unreachable mypy type-narrowing branch (kept
+        behind ``# pragma: no cover - mypy type-narrowing; unreachable``).
+        """
+        # An explicitly-provided value is preserved verbatim.
+        explicit = AuditReviewer(state_dir=tmp_path)
+        assert explicit.state_dir == tmp_path
+
+        # The default path is populated via ensure_state_dir(get_repo_root()).
+        with mock.patch(
+            "hephaestus.automation.audit_reviewer.ensure_state_dir",
+            return_value=tmp_path / "state",
+        ):
+            default = AuditReviewer()
+        assert default.state_dir is not None
+
     @mock.patch("hephaestus.automation.audit_reviewer.fetch_open_prs")
     def test_no_prs_returns_zero(self, mock_fetch: mock.Mock) -> None:
         mock_fetch.return_value = []
@@ -473,3 +493,30 @@ class TestParser:
         with pytest.raises(SystemExit) as exc_info:
             parser.parse_args(["--help"])
         assert exc_info.value.code == 0
+
+
+class TestParseCoordinatorResultsProperties:
+    """Property-based fuzz coverage for _parse_coordinator_results (#1470)."""
+
+    @given(st.text())
+    def test_never_raises_returns_list_of_dicts(self, text: str) -> None:
+        result = _parse_coordinator_results(text)
+        assert isinstance(result, list)
+        assert all(isinstance(item, dict) for item in result)
+
+    @given(st.text())
+    def test_no_json_fence_returns_empty(self, text: str) -> None:
+        if "```json" not in text:
+            assert _parse_coordinator_results(text) == []
+
+    @given(st.text(max_size=200))
+    def test_malformed_fence_is_skipped_not_raised(self, junk: str) -> None:
+        # A malformed JSON fence must be dropped, never raise (audit_reviewer.py:60).
+        body = f"```json\n{junk}\n```"
+        assert isinstance(_parse_coordinator_results(body), list)
+
+    @given(st.integers(), st.text(max_size=120))
+    def test_wellformed_pr_block_parsed(self, pr_number: int, summary: str) -> None:
+        body = f'```json\n{{"pr_number": {pr_number}, "summary": {json.dumps(summary)}}}\n```'
+        result = _parse_coordinator_results(body)
+        assert result and result[0]["pr_number"] == pr_number

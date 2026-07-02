@@ -17,12 +17,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
 import subprocess
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -32,28 +31,39 @@ from hephaestus.agents.runtime import (
     resolve_agent,
     resume_agent_session,
     run_agent_session,
-    session_agent_matches,
     uses_direct_agent_runner,
 )
-from hephaestus.cli.utils import add_json_arg, emit_json_status
+from hephaestus.cli.utils import (
+    add_advise_timeout_arg,
+    add_agent_timeout_arg,
+    emit_json_status,
+)
+from hephaestus.io.utils import write_secure
 
+from . import _review_utils
 from ._review_utils import (
+    _discover_prs_simple,
     build_review_parser,
+    drain_completed_futures,
     find_pr_for_issue,
     instance_log,
+    load_impl_session_id,
+    log_file_path,
+    print_worker_summary,
     setup_review_logging,
 )
 from ._reviewer_base import BaseReviewer
+from .agent_config import DEFAULT_AGENT_TIMEOUT
 from .claude_invoke import invoke_claude_with_session
 from .claude_models import implementer_model
-from .claude_timeouts import address_review_claude_timeout
 from .comment_difficulty import classify_comments, format_todo_line
 from .curses_ui import CursesUI
 from .git_utils import (
+    commit_if_changes,
     get_repo_slug,
     issue_ref,
     pr_ref,
-    run,
+    push_branch,
 )
 from .github_api import (
     gh_pr_list_unresolved_threads,
@@ -65,12 +75,14 @@ from .session_naming import AGENT_IMPLEMENTER
 
 logger = logging.getLogger(__name__)
 
+_ADDRESS_PARSE_DEFAULT: dict[str, Any] = {"addressed": [], "replies": {}}
+
 
 def _parse_addressed_block(text: str) -> dict[str, Any]:
     """Extract the last ```json``` block as an ``{"addressed", "replies"}`` dict.
 
     Trace-free parser shared by the in-loop address step (#28). The standalone
-    :meth:`AddressReviewer._parse_json_block` wraps this with a diagnostic
+    :class:`AddressReviewer` path wraps the same parser with a diagnostic
     trace-file writer; callers that don't need the trace use this directly.
 
     Args:
@@ -81,13 +93,28 @@ def _parse_addressed_block(text: str) -> dict[str, Any]:
         if no parseable ``json`` block is present.
 
     """
-    matches = re.findall(r"```json\s*(.*?)\s*```", text, re.DOTALL)
-    if not matches:
-        return {"addressed": [], "replies": {}}
-    try:
-        return dict(json.loads(matches[-1]))
-    except json.JSONDecodeError:
-        return {"addressed": [], "replies": {}}
+    return _review_utils.parse_json_block(text, default=_ADDRESS_PARSE_DEFAULT)
+
+
+def _log_address_parse_error(
+    issue_number: int,
+    reason: str,
+    trace_path: Path | None,
+    trace_error: OSError | None,
+) -> None:
+    if trace_error is not None:
+        logger.warning(
+            "Issue #%d: address-review JSON parse failed and trace write also failed: %s",
+            issue_number,
+            trace_error,
+        )
+    elif trace_path is not None:
+        logger.warning(
+            "Issue #%d: address-review JSON parse failed (%s); trace at %s",
+            issue_number,
+            reason,
+            trace_path,
+        )
 
 
 def run_address_fix_session(
@@ -105,6 +132,8 @@ def run_address_fix_session(
     task_review_block: str = "",
     diff_text: str = "",
     unaddressed_findings: list[dict[str, Any]] | None = None,
+    timeout: int = DEFAULT_AGENT_TIMEOUT,
+    advise_timeout: int = DEFAULT_AGENT_TIMEOUT,
 ) -> dict[str, Any]:
     """Run the address-review fix session and return the agent's parsed result.
 
@@ -128,7 +157,7 @@ def run_address_fix_session(
         agent: Selected implementation agent (``"claude"`` / ``"codex"``).
         repo_root: Repo root used for session-naming githash + slug.
         parse_fn: Callable ``(text) -> dict`` used to parse the agent's output.
-            The standalone path passes its trace-writing method; the in-loop
+            The standalone path passes its trace-writing closure; the in-loop
             path passes :func:`_parse_addressed_block`.
         log_file: Path to write the raw session log to.
         dry_run: When True, skip the agent call and return empty result.
@@ -172,6 +201,7 @@ def run_address_fix_session(
         worktree_path=worktree_path,
         repo_root=repo_root,
         state_dir=log_file.parent,
+        advise_timeout=advise_timeout,
     )
     todo_block = "\n".join(
         format_todo_line(t, difficulties.get(t["id"], "medium")) for t in threads
@@ -190,7 +220,7 @@ def run_address_fix_session(
     )
 
     prompt_file = worktree_path / f".claude-address-review-{issue_number}.md"
-    prompt_file.write_text(prompt)
+    write_secure(prompt_file, prompt)
 
     try:
         if uses_direct_agent_runner(agent):
@@ -198,14 +228,14 @@ def run_address_fix_session(
                 agent=agent,
                 prompt=prompt,
                 cwd=worktree_path,
-                timeout=address_review_claude_timeout(),
+                timeout=timeout,
                 model=direct_agent_model(agent, "HEPH_IMPLEMENTER_MODEL"),
                 sandbox="workspace-write",
             )
             log = direct_result.stdout
             if direct_result.session_id:
                 log = f"SESSION_ID: {direct_result.session_id}\n\n{log}"
-            log_file.write_text(log)
+            write_secure(log_file, log)
             parsed = parse_fn(direct_result.stdout)
             logger.info(
                 "Fix session complete for PR #%s; addressed %s thread(s)",
@@ -222,7 +252,7 @@ def run_address_fix_session(
             prompt=prompt,
             model=implementer_model(),
             cwd=worktree_path,
-            timeout=address_review_claude_timeout(),
+            timeout=timeout,
             output_format="json",
             permission_mode="dontAsk",
             # Task: the session acts as a coordinator that dispatches one
@@ -233,7 +263,7 @@ def run_address_fix_session(
             allowed_tools="Read,Write,Edit,Glob,Grep,Bash,Task,Skill",
             input_via_stdin=True,
         )
-        log_file.write_text(stdout or "")
+        write_secure(log_file, stdout or "")
 
         # Extract response text from Claude's JSON wrapper
         try:
@@ -254,12 +284,12 @@ def run_address_fix_session(
         stdout = e.stdout or ""
         stderr = e.stderr or ""
         error_output = f"EXIT CODE: {e.returncode}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
-        log_file.write_text(error_output)
+        write_secure(log_file, error_output)
         raise RuntimeError(
             f"Fix session failed for PR {pr_ref(pr_number)}: {e.stderr or e.stdout}"
         ) from e
     except subprocess.TimeoutExpired as e:
-        log_file.write_text(f"TIMEOUT after {e.timeout}s\n\nOutput:\n{e.output or ''}")
+        write_secure(log_file, f"TIMEOUT after {e.timeout}s\n\nOutput:\n{e.output or ''}")
         raise RuntimeError(f"Fix session timed out for PR {pr_ref(pr_number)}") from e
     finally:
         # Narrow exception: a missing prompt file is benign cleanup,
@@ -402,14 +432,17 @@ class AddressReviewer(BaseReviewer):
             Mapping of issue_number -> pr_number for issues that have an open PR
 
         """
-        pr_map: dict[int, int] = {}
-        for issue_num in issue_numbers:
-            pr_number = self._find_pr_for_issue(issue_num)
-            if pr_number is not None:
-                pr_map[issue_num] = pr_number
-            else:
-                logger.info("Issue #%s: no open PR found, skipping", issue_num)
-        return pr_map
+        return _discover_prs_simple(
+            issue_numbers,
+            lambda issue_num: find_pr_for_issue(
+                issue_num,
+                extra_strategies=True,
+                _load_review_state_fn=lambda: self._load_review_state(issue_num),
+            ),
+            on_missing=lambda issue_num: logger.info(
+                "Issue #%s: no open PR found, skipping", issue_num
+            ),
+        )
 
     def _address_all(self, pr_map: dict[int, int]) -> dict[int, WorkerResult]:
         """Address all issues in parallel.
@@ -434,43 +467,22 @@ class AddressReviewer(BaseReviewer):
                 future = executor.submit(self._address_issue, issue_num, pr_num)
                 futures[future] = issue_num
 
-            # Backoff on repeated wait() failures so a flapping condition
-            # doesn't busy-loop silently. Resets to 0.1s on the first
-            # successful wait().
-            wait_backoff = 0.1
-            while futures:
+            for future in drain_completed_futures(futures):
+                issue_num = futures.pop(future)
                 try:
-                    done, _pending = wait(futures.keys(), timeout=1.0, return_when=FIRST_COMPLETED)
-                    wait_backoff = 0.1
-                except Exception as exc:
-                    logger.warning(
-                        "futures.wait() raised %s: %s — backing off %.1fs",
-                        type(exc).__name__,
-                        exc,
-                        wait_backoff,
+                    result = future.result()
+                    results[issue_num] = result
+                    if result.success:
+                        logger.info("Issue #%s address review completed", issue_num)
+                    else:
+                        logger.error("Issue #%s address review failed: %s", issue_num, result.error)
+                except Exception as e:
+                    logger.error("Issue #%s raised exception: %s", issue_num, e)
+                    results[issue_num] = WorkerResult(
+                        issue_number=issue_num,
+                        success=False,
+                        error=str(e),
                     )
-                    time.sleep(wait_backoff)
-                    wait_backoff = min(wait_backoff * 2, 5.0)
-                    continue
-
-                for future in done:
-                    issue_num = futures.pop(future)
-                    try:
-                        result = future.result()
-                        results[issue_num] = result
-                        if result.success:
-                            logger.info("Issue #%s address review completed", issue_num)
-                        else:
-                            logger.error(
-                                "Issue #%s address review failed: %s", issue_num, result.error
-                            )
-                    except Exception as e:
-                        logger.error("Issue #%s raised exception: %s", issue_num, e)
-                        results[issue_num] = WorkerResult(
-                            issue_number=issue_num,
-                            success=False,
-                            error=str(e),
-                        )
 
         self._print_summary(results)
         return results
@@ -618,115 +630,97 @@ class AddressReviewer(BaseReviewer):
 
     def _address_issue(self, issue_number: int, pr_number: int) -> WorkerResult:
         """Address unresolved review threads for a single issue."""
-        slot_id = self.status_tracker.acquire_slot()
-        if slot_id is None:
-            return WorkerResult(
-                issue_number=issue_number,
-                success=False,
-                error="Failed to acquire worker slot",
-            )
+        with self.status_tracker.slot(f"{issue_ref(issue_number)}: Starting") as slot_id:
+            if slot_id is None:
+                return WorkerResult(
+                    issue_number=issue_number,
+                    success=False,
+                    error="Failed to acquire worker slot",
+                )
 
-        thread_id = threading.get_ident()
-        self.status_tracker.update_slot(slot_id, f"{issue_ref(issue_number)}: Starting")
-        self._log(
-            "info",
-            f"Addressing PR {pr_ref(pr_number)} for issue {issue_ref(issue_number)}",
-            thread_id,
-        )
-
-        try:
-            threads = self._check_threads_for_address(issue_number, pr_number, thread_id)
-            if threads is None:
-                return WorkerResult(issue_number=issue_number, success=True, pr_number=pr_number)
-
-            session_id, review_state, branch_name, worktree_path = self._setup_address_state(
-                issue_number, pr_number, slot_id
-            )
-
-            self.status_tracker.update_slot(
-                slot_id, f"{issue_ref(issue_number)}: Running Claude fix"
-            )
-            fix_result = self._run_fix_session(
-                issue_number=issue_number,
-                pr_number=pr_number,
-                worktree_path=worktree_path,
-                threads=threads,
-                session_id=session_id if self.options.resume_impl_session else None,
-            )
-            addressed: list[str] = fix_result.get("addressed", [])
-            replies: dict[str, str] = fix_result.get("replies", {})
+            thread_id = threading.get_ident()
             self._log(
                 "info",
-                f"Claude addressed {len(addressed)} thread(s) on PR {pr_ref(pr_number)}",
+                f"Addressing PR {pr_ref(pr_number)} for issue {issue_ref(issue_number)}",
                 thread_id,
             )
-            self._commit_push_and_resolve(
-                issue_number=issue_number,
-                pr_number=pr_number,
-                branch_name=branch_name,
-                worktree_path=worktree_path,
-                addressed=addressed,
-                replies=replies,
-                threads=threads,
-                review_state=review_state,
-                slot_id=slot_id,
-                thread_id=thread_id,
-            )
-            return WorkerResult(
-                issue_number=issue_number,
-                success=True,
-                pr_number=pr_number,
-                branch_name=branch_name,
-                worktree_path=str(worktree_path),
-            )
 
-        except subprocess.TimeoutExpired as e:
-            error_msg = f"Timeout: {' '.join(str(c) for c in e.cmd[:3])} exceeded {e.timeout}s"
-            self._log("error", error_msg, thread_id)
-            return self._fail(issue_number, error_msg, slot_id)
+            try:
+                threads = self._check_threads_for_address(issue_number, pr_number, thread_id)
+                if threads is None:
+                    return WorkerResult(
+                        issue_number=issue_number, success=True, pr_number=pr_number
+                    )
 
-        except subprocess.CalledProcessError as e:
-            error_msg = (
-                f"Command failed (exit {e.returncode}): {' '.join(str(c) for c in e.cmd[:3])}"
-            )
-            self._log("error", error_msg, thread_id)
-            return self._fail(issue_number, error_msg, slot_id)
+                session_id, review_state, branch_name, worktree_path = self._setup_address_state(
+                    issue_number, pr_number, slot_id
+                )
 
-        except RuntimeError as e:
-            self._log("error", f"Runtime error: {e}", thread_id)
-            return self._fail(issue_number, str(e)[:80], slot_id)
+                self.status_tracker.update_slot(
+                    slot_id, f"{issue_ref(issue_number)}: Running Claude fix"
+                )
+                fix_result = self._run_fix_session(
+                    issue_number=issue_number,
+                    pr_number=pr_number,
+                    worktree_path=worktree_path,
+                    threads=threads,
+                    session_id=session_id if self.options.resume_impl_session else None,
+                )
+                addressed: list[str] = fix_result.get("addressed", [])
+                replies: dict[str, str] = fix_result.get("replies", {})
+                self._log(
+                    "info",
+                    f"Claude addressed {len(addressed)} thread(s) on PR {pr_ref(pr_number)}",
+                    thread_id,
+                )
+                self._commit_push_and_resolve(
+                    issue_number=issue_number,
+                    pr_number=pr_number,
+                    branch_name=branch_name,
+                    worktree_path=worktree_path,
+                    addressed=addressed,
+                    replies=replies,
+                    threads=threads,
+                    review_state=review_state,
+                    slot_id=slot_id,
+                    thread_id=thread_id,
+                )
+                return WorkerResult(
+                    issue_number=issue_number,
+                    success=True,
+                    pr_number=pr_number,
+                    branch_name=branch_name,
+                    worktree_path=str(worktree_path),
+                )
 
-        except Exception as e:
-            self._log("error", f"Unexpected {type(e).__name__}: {e}", thread_id)
-            return self._fail(issue_number, str(e)[:80], slot_id)
+            except subprocess.TimeoutExpired as e:
+                error_msg = f"Timeout: {' '.join(str(c) for c in e.cmd[:3])} exceeded {e.timeout}s"
+                self._log("error", error_msg, thread_id)
+                return self._fail(issue_number, error_msg, slot_id)
 
-        finally:
-            time.sleep(1)
-            self.status_tracker.release_slot(slot_id)
+            except subprocess.CalledProcessError as e:
+                error_msg = (
+                    f"Command failed (exit {e.returncode}): {' '.join(str(c) for c in e.cmd[:3])}"
+                )
+                self._log("error", error_msg, thread_id)
+                return self._fail(issue_number, error_msg, slot_id)
 
-    def _find_pr_for_issue(self, issue_number: int) -> int | None:
-        """Find the open PR for a single issue.
+            except RuntimeError as e:
+                self._log("error", f"Runtime error: {e}", thread_id)
+                return self._fail(issue_number, str(e)[:80], slot_id)
 
-        Delegates to :func:`_review_utils.find_pr_for_issue` using the
-        three-strategy variant (branch-name, on-disk review state, body
-        search) so that the stored ``pr_number`` from a previous reviewer
-        run is also consulted.
+            except Exception as e:
+                self._log("error", f"Unexpected {type(e).__name__}: {e}", thread_id)
+                return self._fail(issue_number, str(e)[:80], slot_id)
 
-        Args:
-            issue_number: GitHub issue number
-
-        Returns:
-            PR number if found, None otherwise
-
-        """
-        return find_pr_for_issue(
-            issue_number,
-            extra_strategies=True,
-            _load_review_state_fn=lambda: self._load_review_state(issue_number),
-        )
+            finally:
+                time.sleep(1)
 
     def _load_impl_session_id(self, issue_number: int) -> str | None:
         """Load the implementer's agent session ID from state file.
+
+        Thin wrapper around :func:`._review_utils.load_impl_session_id`, kept
+        as a method so existing patch-by-method test seams hold.
 
         Args:
             issue_number: GitHub issue number
@@ -735,29 +729,7 @@ class AddressReviewer(BaseReviewer):
             Session ID string if found, None otherwise
 
         """
-        state_file = self.state_dir / f"issue-{issue_number}.json"
-        if not state_file.exists():
-            logger.warning(
-                "No implementation state for issue #%s, will use fresh session", issue_number
-            )
-            return None
-        try:
-            data = json.loads(state_file.read_text())
-            session_id: str | None = data.get("session_id")
-            session_agent: str | None = data.get("session_agent")
-            if session_id and not session_agent_matches(session_agent, self.options.agent):
-                logger.info(
-                    "Skipping impl session for issue #%s: session belongs to %s, "
-                    "selected agent is %s",
-                    issue_number,
-                    session_agent or "claude",
-                    self.options.agent,
-                )
-                return None
-            return session_id
-        except Exception as e:
-            logger.warning("Could not load impl session for #%s: %s", issue_number, e)
-            return None
+        return load_impl_session_id(self.state_dir, issue_number, self.options.agent)
 
     def _load_review_state(self, issue_number: int) -> ReviewState | None:
         """Load review state from disk.
@@ -849,7 +821,21 @@ class AddressReviewer(BaseReviewer):
             Parsed dict with "addressed" and "replies" keys
 
         """
-        log_file = self.state_dir / f"address-review-{issue_number}.log"
+        log_file = log_file_path(self.state_dir, "address-review", issue_number)
+
+        def parse_with_trace(text: str) -> dict[str, Any]:
+            return _review_utils.parse_json_block(
+                text,
+                default=_ADDRESS_PARSE_DEFAULT,
+                trace_dir=self.state_dir,
+                trace_name=f"address-{issue_number}.parse-error.log",
+                on_error=lambda reason, path, error: _log_address_parse_error(
+                    issue_number,
+                    reason,
+                    path,
+                    error,
+                ),
+            )
 
         if not self.options.dry_run and uses_direct_agent_runner(self.options.agent) and session_id:
             threads_json = json.dumps(
@@ -875,7 +861,7 @@ class AddressReviewer(BaseReviewer):
                     session_id=session_id,
                     prompt=prompt,
                     cwd=worktree_path,
-                    timeout=address_review_claude_timeout(),
+                    timeout=self.options.agent_timeout,
                     model=direct_agent_model(self.options.agent, "HEPH_IMPLEMENTER_MODEL"),
                 )
             except subprocess.CalledProcessError as e:
@@ -892,8 +878,8 @@ class AddressReviewer(BaseReviewer):
                 log = direct_result.stdout
                 if direct_result.session_id:
                     log = f"SESSION_ID: {direct_result.session_id}\n\n{log}"
-                log_file.write_text(log)
-                parsed = self._parse_json_block(direct_result.stdout, issue_number=issue_number)
+                write_secure(log_file, log)
+                parsed = parse_with_trace(direct_result.stdout)
                 logger.info(
                     "Fix session complete for PR #%s; addressed %s thread(s)",
                     pr_number,
@@ -908,84 +894,12 @@ class AddressReviewer(BaseReviewer):
             threads=threads,
             agent=self.options.agent,
             repo_root=self.repo_root,
-            parse_fn=lambda text: self._parse_json_block(text, issue_number=issue_number),
+            parse_fn=parse_with_trace,
             log_file=log_file,
             dry_run=self.options.dry_run,
+            timeout=self.options.agent_timeout,
+            advise_timeout=self.options.advise_timeout,
         )
-
-    def _parse_json_block(self, text: str, issue_number: int | None = None) -> dict[str, Any]:
-        """Extract the last ```json ... ``` block from an agent response.
-
-        On parse failure or missing block, writes a trace file under the state
-        dir so an empty ``addressed`` list is distinguishable from "the agent
-        reviewed and decided no fixes were warranted". Without this the two
-        cases looked identical in logs and it was hard to know whether to
-        retry, escalate, or trust the result.
-
-        Args:
-            text: Claude's full response text
-            issue_number: Issue number for diagnostic filenames; if None, no
-                trace is written (used by tests).
-
-        Returns:
-            Parsed dict with "addressed" and "replies" keys, or defaults if not found
-
-        """
-        matches = re.findall(r"```json\s*(.*?)\s*```", text, re.DOTALL)
-        if not matches:
-            self._write_parse_trace(
-                issue_number,
-                reason="no fenced ```json block found in response",
-                text=text,
-            )
-            return {"addressed": [], "replies": {}}
-        try:
-            return dict(json.loads(matches[-1]))
-        except json.JSONDecodeError as e:
-            self._write_parse_trace(
-                issue_number,
-                reason=f"json.JSONDecodeError: {e}",
-                text=text,
-                last_block=matches[-1],
-            )
-            return {"addressed": [], "replies": {}}
-
-    def _write_parse_trace(
-        self,
-        issue_number: int | None,
-        *,
-        reason: str,
-        text: str,
-        last_block: str | None = None,
-    ) -> None:
-        """Persist a diagnostic file describing why JSON parsing failed."""
-        if issue_number is None:
-            logger.warning("Parse trace skipped (no issue_number): %s", reason)
-            return
-        trace_path = self.state_dir / f"address-{issue_number}.parse-error.log"
-        try:
-            payload = [
-                f"reason: {reason}",
-                "",
-                "=== last fenced block (if any) ===",
-                last_block or "(none)",
-                "",
-                "=== full response ===",
-                text,
-            ]
-            trace_path.write_text("\n".join(payload))
-            logger.warning(
-                "Issue #%d: address-review JSON parse failed (%s); trace at %s",
-                issue_number,
-                reason,
-                trace_path,
-            )
-        except OSError as exc:
-            logger.warning(
-                "Issue #%d: address-review JSON parse failed and trace write also failed: %s",
-                issue_number,
-                exc,
-            )
 
     def _resolve_addressed_threads(
         self,
@@ -1020,30 +934,17 @@ class AddressReviewer(BaseReviewer):
     def _commit_if_changes(self, issue_number: int, worktree_path: Path) -> None:
         """Commit any pending changes in the worktree.
 
-        Silently skips if there are no changes to commit.
-
         Args:
             issue_number: GitHub issue number (used in commit message)
             worktree_path: Path to git worktree
 
         """
-        result = run(
-            ["git", "status", "--porcelain"],
-            cwd=worktree_path,
-            capture_output=True,
+        commit_if_changes(
+            issue_number,
+            worktree_path,
+            self.options.agent,
+            committed_log_message="Committed fix changes for issue #%s",
         )
-        if not result.stdout.strip():
-            logger.info("No changes to commit for issue #%s", issue_number)
-            return
-
-        try:
-            from .pr_manager import commit_changes
-
-            commit_changes(issue_number, worktree_path, self.options.agent)
-            logger.info("Committed fix changes for issue #%s", issue_number)
-        except RuntimeError as e:
-            # commit_changes raises RuntimeError if nothing to commit; already checked above
-            logger.warning("Commit skipped for issue #%s: %s", issue_number, e)
 
     def _push_branch(self, branch_name: str, worktree_path: Path) -> None:
         """Push the branch to origin.
@@ -1056,14 +957,7 @@ class AddressReviewer(BaseReviewer):
             RuntimeError: If push fails
 
         """
-        try:
-            run(
-                ["git", "push", "origin", branch_name],
-                cwd=worktree_path,
-            )
-            logger.info("Pushed branch %s to origin", branch_name)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Failed to push branch {branch_name}: {e}") from e
+        push_branch(branch_name, worktree_path)
 
     def _print_summary(self, results: dict[int, WorkerResult]) -> None:
         """Print address review summary.
@@ -1072,22 +966,11 @@ class AddressReviewer(BaseReviewer):
             results: Mapping of issue number to WorkerResult
 
         """
-        total = len(results)
-        successful = sum(1 for r in results.values() if r.success)
-        failed = total - successful
-
-        logger.info("=" * 60)
-        logger.info("Address Review Summary")
-        logger.info("=" * 60)
-        logger.info("Total issues: %s", total)
-        logger.info("Successful: %s", successful)
-        logger.info("Failed: %s", failed)
-
-        if failed > 0:
-            logger.info("\nFailed issues:")
-            for issue_num, result in results.items():
-                if not result.success:
-                    logger.info("  #%s: %s", issue_num, result.error)
+        print_worker_summary(
+            "Address Review Summary",
+            results,
+            failed_header="\nFailed issues:",
+        )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1109,9 +992,12 @@ Examples:
   %(prog)s --issues 595 596 597 --max-workers 5
         """,
         issues_help="Issue numbers whose linked PRs should have review threads addressed",
-        dry_run_help="Show what would be done without actually resolving threads or pushing code.",
+        dry_run_prefix=(
+            "Show what would be done without actually resolving threads or pushing code."
+        ),
     )
-    add_json_arg(parser)
+    add_agent_timeout_arg(parser)
+    add_advise_timeout_arg(parser)
     return parser
 
 
@@ -1146,6 +1032,12 @@ def main() -> int:
         dry_run=args.dry_run,
         enable_ui=not args.no_ui and not args.json,
         verbose=args.verbose,
+        agent_timeout=(
+            args.agent_timeout if args.agent_timeout is not None else DEFAULT_AGENT_TIMEOUT
+        ),
+        advise_timeout=(
+            args.advise_timeout if args.advise_timeout is not None else DEFAULT_AGENT_TIMEOUT
+        ),
     )
 
     with terminal_guard():

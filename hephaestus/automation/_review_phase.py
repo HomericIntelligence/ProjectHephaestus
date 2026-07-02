@@ -26,15 +26,19 @@ from typing import TYPE_CHECKING, Any
 from hephaestus.agents.runtime import (
     direct_agent_model,
     resume_agent_session,
+    run_agent_session,
     run_agent_text,
     uses_direct_agent_runner,
 )
+from hephaestus.constants import agent_git_timeout, diff_collect_timeout
 from hephaestus.github.client import ClaudeUsageCapError, gh_call
 from hephaestus.github.rate_limit import resolve_quota_reset_epoch, wait_until
+from hephaestus.io.utils import write_secure
 
-from . import review_state
+from ._review_utils import log_file_path
 from ._stage_context import StageMixin
 from .address_review import run_address_fix_session
+from .agent_config import pr_reviewer_claude_timeout
 from .claude_invoke import (
     INFRA_ERROR_REVIEW_TEXT,
     SESSION_EXPIRED_PHRASES,
@@ -43,12 +47,13 @@ from .claude_invoke import (
     parse_review_verdict,
 )
 from .claude_models import implementer_model, reviewer_model
-from .claude_timeouts import implementer_claude_timeout
 from .git_utils import (
+    commit_if_changes,
     get_repo_info,
     get_repo_slug,
     issue_ref,
     pr_ref,
+    push_branch,
     push_current_branch_with_lease_on_divergence,
     rebase_worktree_onto,
     run,
@@ -61,7 +66,6 @@ from .github_api import (
 )
 from .models import PLAN_COMMENT_MARKER, ImplementationState
 from .pr_manager import (
-    commit_changes,
     enable_auto_merge_after_implementation_go,
     mark_pr_implementation_go,
     mark_pr_implementation_no_go,
@@ -70,6 +74,7 @@ from .pr_reviewer import gather_impl_review_context, review_pr_inline
 from .prompts import get_impl_loop_review_prompt, get_impl_resume_feedback_prompt
 from .review_validator import validate_prior_comments_addressed
 from .session_naming import AGENT_IMPLEMENTER, current_trunk_githash  # noqa: F401
+from .state import review as review_state
 from .state_labels import STATE_SKIP
 
 if TYPE_CHECKING:
@@ -145,6 +150,14 @@ def _handle_reviewer_quota_or_overload(
             delay,
         )
         time.sleep(delay)
+
+
+def _review_thread_count_decreased(
+    before: list[dict[str, Any]],
+    after: list[dict[str, Any]],
+) -> bool:
+    """Return True when an address turn reduced unresolved PR review threads."""
+    return bool(before) and len(after) < len(before)
 
 
 def _is_automation_owned_thread(thread: dict[str, Any], current_login: str | None) -> bool:
@@ -621,18 +634,9 @@ class ReviewPhase(StageMixin):
 
         # 2. Rebase still conflicts → the implementation agent resolves it. Reuse
         #    the same conflict_context wording as ci_driver._resolve_dirty_pr.
-        if session_id is None:
-            # Without an implementer session to resume there is no agent seam in
-            # this phase to drive a code-level conflict resolution; bail so the
-            # PR is treated as not-GO rather than reviewed-while-conflicted.
-            impl._log(
-                "warning",
-                f"{issue_ref(issue_number)}: {pr_ref(pr_number)} still conflicts after rebase and "
-                "has no implementer session to resume — skipping review (not-GO)",
-                thread_id,
-            )
-            return False
-
+        #    Existing-PR review can start without a saved implementer transcript;
+        #    in that case _resume_impl_with_feedback starts/uses the deterministic
+        #    implementer session instead of dead-ending the conflict gate.
         conflict_context = (
             f"This PR has a MERGE CONFLICT with `origin/{base_branch}` "
             f"(mergeStateStatus=DIRTY) — it cannot merge until the conflict is "
@@ -847,18 +851,16 @@ class ReviewPhase(StageMixin):
                     iteration += 1
                     continue
                 break
-            # A committed round: clear the retry directive (it only follows an
-            # immediately-preceding no-commit turn).
+            # A progress round clears the retry directive. Progress is either a
+            # committed code change or an observed unresolved-thread count drop.
             pending_unaddressed = []
-            # The address step resolved a fresh finding (``addressed``) without
-            # the validator re-opening a prior one (``validator_clean``): this
-            # round made real progress. Record it so the NEXT iteration can
-            # extend the budget if it would otherwise be the last — letting a PR
-            # that fixes one real bug per round converge instead of being
-            # stranded one pass short of GO and wrongly skipped (#1554). A
-            # no-commit round has ``addressed=False`` and never reaches here, so
-            # it can never set progress or extend the budget — the hard cap
-            # (MAX_REVIEW_ITERATIONS_HARD_CAP) still bounds total iterations.
+            # The address step made progress without the validator re-opening a
+            # prior one (``validator_clean``). Record it so the NEXT iteration
+            # can extend the budget if it would otherwise be the last — letting
+            # a PR that fixes one real bug or closes one real thread per round
+            # converge instead of being stranded one pass short of GO and
+            # wrongly skipped (#1554). The hard cap still bounds total
+            # iterations.
             prior_round_made_progress = addressed and validator_clean
             iteration += 1
 
@@ -1082,6 +1084,23 @@ class ReviewPhase(StageMixin):
             unaddressed_findings=unaddressed_findings,
         )
         if not addressed:
+            current_unresolved = self._list_unresolved_threads_after_address(
+                pr_number=pr_number,
+                issue_number=issue_number,
+                iteration=iteration,
+            )
+            if current_unresolved is not None and _review_thread_count_decreased(
+                prior_addressed_threads, current_unresolved
+            ):
+                impl._log(
+                    "info",
+                    f"{issue_ref(issue_number)}: address step produced no commit on "
+                    f"iteration {iteration}, but unresolved review threads decreased "
+                    f"from {len(prior_addressed_threads)} to {len(current_unresolved)}; "
+                    "re-reviewing instead of treating the turn as stuck",
+                    thread_id,
+                )
+                return prior_addressed_threads, True
             impl._log(
                 "info",
                 f"{issue_ref(issue_number)}: address step resolved no threads on "
@@ -1089,6 +1108,26 @@ class ReviewPhase(StageMixin):
                 thread_id,
             )
         return prior_addressed_threads, addressed
+
+    def _list_unresolved_threads_after_address(
+        self,
+        *,
+        pr_number: int,
+        issue_number: int,
+        iteration: int,
+    ) -> list[dict[str, Any]] | None:
+        """Best-effort post-address unresolved thread snapshot."""
+        try:
+            return gh_pr_list_unresolved_threads(pr_number, dry_run=False)
+        except Exception as exc:
+            logger.info(
+                "#%s R%s: could not refetch unresolved threads after address step on %s: %s",
+                issue_number,
+                iteration,
+                pr_ref(pr_number),
+                exc,
+            )
+            return None
 
     def _finalize_review_outcome(
         self,
@@ -1375,7 +1414,12 @@ class ReviewPhase(StageMixin):
             _, task_review_block = self.runner._fetch_plan_and_review(issue_number)
             diff_text = self.impl._collect_diff(worktree_path, branch_name)
 
-        log_file = self.state_dir / f"address-review-{issue_number}-r{iteration}.log"
+        log_file = log_file_path(
+            self.state_dir,
+            "address-review",
+            issue_number,
+            iteration=iteration,
+        )
         fix_result = run_address_fix_session(
             issue_number=issue_number,
             pr_number=pr_number,
@@ -1390,6 +1434,8 @@ class ReviewPhase(StageMixin):
             task_review_block=task_review_block,
             diff_text=diff_text,
             unaddressed_findings=unaddressed_findings,
+            timeout=self.options.agent_timeout,
+            advise_timeout=self.options.advise_timeout,
         )
         addressed: list[str] = fix_result.get("addressed", [])
 
@@ -1433,9 +1479,10 @@ class ReviewPhase(StageMixin):
         if not matches.get("addressed") and "```json" not in text:
             with contextlib.suppress(Exception):
                 trace_path = self.state_dir / f"address-{issue_number}-r{iteration}.parse-error.log"
-                trace_path.write_text(
+                write_secure(
+                    trace_path,
                     f"reason: no fenced ```json block found in response\n\n"
-                    f"=== full response ===\n{text}"
+                    f"=== full response ===\n{text}",
                 )
         return matches
 
@@ -1469,9 +1516,6 @@ class ReviewPhase(StageMixin):
     def _commit_if_changes(self, issue_number: int, worktree_path: Path) -> bool:
         """Commit any pending changes from the in-loop address step.
 
-        Silently skips when the worktree is clean. Mirrors
-        ``AddressReviewer._commit_if_changes``.
-
         Returns:
             ``True`` iff a commit was actually created. ``False`` when the
             worktree was clean (nothing to commit) or the commit failed. The
@@ -1479,41 +1523,21 @@ class ReviewPhase(StageMixin):
             change rather than the model's self-report.
 
         """
-        result = run(
-            ["git", "status", "--porcelain"],
-            cwd=worktree_path,
-            capture_output=True,
+        return commit_if_changes(
+            issue_number,
+            worktree_path,
+            self.options.agent,
+            committed_log_message="Committed in-loop address changes for issue #%s",
         )
-        if not result.stdout.strip():
-            logger.info("No changes to commit for issue #%s", issue_number)
-            return False
-        try:
-            commit_changes(issue_number, worktree_path, self.options.agent)
-            logger.info("Committed in-loop address changes for issue #%s", issue_number)
-            return True
-        except RuntimeError as e:
-            logger.warning("Commit skipped for issue #%s: %s", issue_number, e)
-            return False
 
     def _push_branch(self, branch_name: str, worktree_path: Path) -> None:
-        """Push *branch_name* to origin after an in-loop address step.
-
-        Mirrors ``AddressReviewer._push_branch``.
-
-        Raises:
-            RuntimeError: If the push fails.
-
-        """
-        try:
-            run(["git", "push", "origin", branch_name], cwd=worktree_path)
-            logger.info("Pushed branch %s to origin", branch_name)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Failed to push branch {branch_name}: {e}") from e
+        """Push *branch_name* to origin after an in-loop address step."""
+        push_branch(branch_name, worktree_path)
 
     def _resume_impl_with_feedback(
         self,
         *,
-        session_id: str,
+        session_id: str | None,
         worktree_path: Path,
         issue_number: int,
         review_text: str,
@@ -1531,19 +1555,30 @@ class ReviewPhase(StageMixin):
         )
         if uses_direct_agent_runner(self.options.agent):
             try:
-                result = resume_agent_session(
-                    agent=self.options.agent,
-                    session_id=session_id,
-                    prompt=prompt,
-                    cwd=worktree_path,
-                    timeout=implementer_claude_timeout(),
-                    model=direct_agent_model(self.options.agent, "HEPH_IMPLEMENTER_MODEL"),
+                if session_id is None:
+                    result = run_agent_session(
+                        agent=self.options.agent,
+                        prompt=prompt,
+                        cwd=worktree_path,
+                        timeout=self.options.agent_timeout,
+                        model=direct_agent_model(self.options.agent, "HEPH_IMPLEMENTER_MODEL"),
+                    )
+                else:
+                    result = resume_agent_session(
+                        agent=self.options.agent,
+                        session_id=session_id,
+                        prompt=prompt,
+                        cwd=worktree_path,
+                        timeout=self.options.agent_timeout,
+                        model=direct_agent_model(self.options.agent, "HEPH_IMPLEMENTER_MODEL"),
+                    )
+                log_file = log_file_path(
+                    self.state_dir,
+                    f"{self.options.agent}-feedback",
+                    issue_number,
+                    iteration=prev_iteration + 1,
                 )
-                log_file = (
-                    self.state_dir
-                    / f"{self.options.agent}-feedback-{issue_number}-r{prev_iteration + 1}.log"
-                )
-                log_file.write_text(result.stdout or "")
+                write_secure(log_file, result.stdout or "")
                 return True
             except subprocess.CalledProcessError as e:
                 logger.error(
@@ -1580,7 +1615,7 @@ class ReviewPhase(StageMixin):
                 prompt=prompt,
                 model=implementer_model(),
                 cwd=worktree_path,
-                timeout=implementer_claude_timeout(),
+                timeout=self.options.agent_timeout,
                 permission_mode="dontAsk",
                 allowed_tools="Read,Write,Edit,Glob,Grep,Bash",
                 recreate_on_resume_failure=False,
@@ -1642,13 +1677,14 @@ class ReviewPhase(StageMixin):
             iteration=iteration,
             prior_review=prior_review,
         )
+        review_timeout = pr_reviewer_claude_timeout()
         try:
             if uses_direct_agent_runner(self.options.agent):
                 result = run_agent_text(
                     agent=self.options.agent,
                     prompt=prompt,
                     cwd=self.repo_root,
-                    timeout=600,
+                    timeout=review_timeout,
                     model=direct_agent_model(self.options.agent, "HEPH_REVIEWER_MODEL"),
                     sandbox="read-only",
                 )
@@ -1672,7 +1708,7 @@ class ReviewPhase(StageMixin):
                 capture_output=True,
                 text=True,
                 check=True,
-                timeout=600,
+                timeout=review_timeout,
                 env=env,
             )
             output = (result.stdout or "").strip()
@@ -1698,13 +1734,14 @@ class ReviewPhase(StageMixin):
 
     def _collect_diff(self, worktree_path: Path, branch_name: str) -> str:
         """Return the cumulative diff of *branch_name* against ``origin/main``."""
+        timeout_s = diff_collect_timeout()
         try:
             result = run(
                 ["git", "diff", "origin/main...HEAD"],
                 cwd=worktree_path,
                 capture_output=True,
                 check=False,
-                timeout=60,
+                timeout=timeout_s,
             )
             diff = result.stdout or ""
             if not diff.strip():
@@ -1713,7 +1750,7 @@ class ReviewPhase(StageMixin):
                     cwd=worktree_path,
                     capture_output=True,
                     check=False,
-                    timeout=60,
+                    timeout=timeout_s,
                 )
                 diff = fb.stdout or ""
         except Exception as e:
@@ -1732,13 +1769,14 @@ class ReviewPhase(StageMixin):
 
     def _collect_changed_files(self, worktree_path: Path, branch_name: str) -> str:
         """Return a newline-separated list of changed files vs ``origin/main``."""
+        timeout_s = agent_git_timeout()
         try:
             result = run(
                 ["git", "diff", "--name-only", "origin/main...HEAD"],
                 cwd=worktree_path,
                 capture_output=True,
                 check=False,
-                timeout=30,
+                timeout=timeout_s,
             )
             files = (result.stdout or "").strip()
             if files:
@@ -1748,7 +1786,7 @@ class ReviewPhase(StageMixin):
                 cwd=worktree_path,
                 capture_output=True,
                 check=False,
-                timeout=30,
+                timeout=timeout_s,
             )
             return (fb.stdout or "").strip()
         except Exception as e:
@@ -1758,8 +1796,13 @@ class ReviewPhase(StageMixin):
     def _save_review_log(self, issue_number: int, iteration: int, review_text: str) -> None:
         """Persist a per-iteration review log for later inspection."""
         try:
-            log_file = self.state_dir / f"review-{issue_number}-r{iteration}.log"
-            log_file.write_text(review_text)
+            log_file = log_file_path(
+                self.state_dir,
+                "review",
+                issue_number,
+                iteration=iteration,
+            )
+            write_secure(log_file, review_text)
         except Exception as e:
             logger.warning("#%s: failed to save review log r%s: %s", issue_number, iteration, e)
 
@@ -1769,12 +1812,12 @@ class ReviewPhase(StageMixin):
         """Persist review loop progress for ``--resume`` continuity (A2-005)."""
         try:
             iter_file = self.state_dir / f"review-iter-{issue_number}.json"
-            iter_file.write_text(json.dumps({"iterations_run": iterations_run}))
+            write_secure(iter_file, json.dumps({"iterations_run": iterations_run}))
         except Exception as e:
             logger.warning("#%d: failed to persist review iteration count: %s", issue_number, e)
         try:
             prior_file = self.state_dir / f"review-prior-{issue_number}.txt"
-            prior_file.write_text(prior_review)
+            write_secure(prior_file, prior_review)
         except Exception as e:
             logger.warning("#%d: failed to persist prior review text: %s", issue_number, e)
 

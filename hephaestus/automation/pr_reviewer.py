@@ -22,7 +22,7 @@ import logging
 import subprocess
 import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -34,23 +34,28 @@ from hephaestus.agents.runtime import (
     uses_direct_agent_runner,
 )
 from hephaestus.cli.utils import (
-    add_json_arg,
+    add_agent_timeout_arg,
     add_version_arg,
     configure_github_throttle_from_args,
     emit_json_status,
 )
+from hephaestus.io.utils import write_secure
 
+from . import _review_utils
 from ._review_utils import (
+    _discover_prs_simple,
     build_review_parser,
+    drain_completed_futures,
     find_pr_for_issue,
     instance_log,
-    parse_json_block,
+    log_file_path,
+    print_worker_summary,
     setup_review_logging,
 )
 from ._reviewer_base import BaseReviewer
+from .agent_config import DEFAULT_AGENT_TIMEOUT
 from .claude_invoke import invoke_claude_with_session, raise_for_error_envelope
 from .claude_models import reviewer_model
-from .claude_timeouts import pr_reviewer_claude_timeout
 from .curses_ui import CursesUI
 from .git_utils import get_repo_root, get_repo_slug, issue_ref, pr_ref
 from .github_api import _gh_call, fetch_issue_info, gh_pr_review_post
@@ -59,22 +64,6 @@ from .prompts import get_pr_review_analysis_prompt
 from .session_naming import AGENT_PR_REVIEWER, reviewer_agent
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_json_block(text: str) -> dict[str, Any]:
-    """Extract the last ```json ... ``` block from an agent response.
-
-    Thin wrapper around :func:`_review_utils.parse_json_block` kept for
-    backward compatibility with existing callers and tests.
-
-    Args:
-        text: Agent response text
-
-    Returns:
-        Parsed dict with keys "comments" and "summary", or defaults if not found
-
-    """
-    return parse_json_block(text)
 
 
 def run_pr_review_analysis(
@@ -87,6 +76,7 @@ def run_pr_review_analysis(
     review_agent: str = AGENT_PR_REVIEWER,
     state_dir: Path,
     dry_run: bool = False,
+    timeout: int = DEFAULT_AGENT_TIMEOUT,
 ) -> dict[str, Any]:
     """Run a read-only reviewer session and return its parsed analysis.
 
@@ -136,9 +126,9 @@ def run_pr_review_analysis(
     )
 
     prompt_file = worktree_path / f".claude-pr-review-{issue_number}.md"
-    prompt_file.write_text(prompt)
+    write_secure(prompt_file, prompt)
 
-    log_file = state_dir / f"pr-review-analysis-{issue_number}.log"
+    log_file = log_file_path(state_dir, "pr-review-analysis", issue_number)
 
     try:
         if uses_direct_agent_runner(agent):
@@ -146,13 +136,13 @@ def run_pr_review_analysis(
                 agent=agent,
                 prompt=prompt,
                 cwd=worktree_path,
-                timeout=pr_reviewer_claude_timeout(),
+                timeout=timeout,
                 model=direct_agent_model(agent, "HEPH_REVIEWER_MODEL"),
                 sandbox="read-only",
             )
-            log_file.write_text(result.stdout or "")
+            write_secure(log_file, result.stdout or "")
             review_text = result.stdout or ""
-            parsed = _parse_json_block(review_text)
+            parsed = _review_utils.parse_json_block(review_text)
             parsed["review_text"] = review_text
             logger.info(
                 "Analysis complete for PR #%s; found %s inline comment(s)",
@@ -170,7 +160,7 @@ def run_pr_review_analysis(
             prompt=prompt,
             model=reviewer_model(),
             cwd=worktree_path,
-            timeout=pr_reviewer_claude_timeout(),
+            timeout=timeout,
             output_format="json",
             permission_mode="dontAsk",
             allowed_tools="Read,Glob,Grep",
@@ -180,7 +170,7 @@ def run_pr_review_analysis(
             # Matches the plan reviewer / address-review / ci_driver invocations.
             input_via_stdin=True,
         )
-        log_file.write_text(stdout or "")
+        write_secure(log_file, stdout or "")
 
         # The CLI can exit 0 with an ``is_error: true`` envelope carrying a 429
         # quota cap; without this guard the cap message would be parsed as
@@ -196,7 +186,7 @@ def run_pr_review_analysis(
         except (json.JSONDecodeError, AttributeError):
             response_text = stdout or ""
 
-        parsed = _parse_json_block(response_text)
+        parsed = _review_utils.parse_json_block(response_text)
         # The Verdict:/Grade: line lives in the reviewer prose, not the JSON
         # summary block. Surface it so callers parse the real verdict.
         parsed["review_text"] = response_text
@@ -211,12 +201,12 @@ def run_pr_review_analysis(
         stdout = e.stdout or ""
         stderr = e.stderr or ""
         error_output = f"EXIT CODE: {e.returncode}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
-        log_file.write_text(error_output)
+        write_secure(log_file, error_output)
         raise RuntimeError(
             f"Analysis session failed for PR {pr_ref(pr_number)}: {e.stderr or e.stdout}"
         ) from e
     except subprocess.TimeoutExpired as e:
-        log_file.write_text(f"TIMEOUT after {e.timeout}s\n\nOutput:\n{e.output or ''}")
+        write_secure(log_file, f"TIMEOUT after {e.timeout}s\n\nOutput:\n{e.output or ''}")
         raise RuntimeError(f"Analysis session timed out for PR {pr_ref(pr_number)}") from e
     finally:
         with contextlib.suppress(Exception):
@@ -289,6 +279,7 @@ def review_pr_inline(
     iteration: int,
     state_dir: Path,
     dry_run: bool = False,
+    timeout: int = DEFAULT_AGENT_TIMEOUT,
 ) -> tuple[str, list[str]]:
     """Review an impl PR in-loop: run analysis, post inline threads, return verdict.
 
@@ -333,6 +324,7 @@ def review_pr_inline(
         review_agent=review_token,
         state_dir=state_dir,
         dry_run=dry_run,
+        timeout=timeout,
     )
     comments: list[dict[str, Any]] = analysis.get("comments", [])
     summary: str = analysis.get("summary", "")
@@ -448,31 +440,13 @@ class PRReviewer(BaseReviewer):
             Mapping of issue_number -> pr_number for found PRs
 
         """
-        pr_map: dict[int, int] = {}
-
-        for issue_num in issue_numbers:
-            pr_number = self._find_pr_for_issue(issue_num)
-            if pr_number is not None:
-                pr_map[issue_num] = pr_number
-            else:
-                logger.warning("No open PR found for issue #%s", issue_num)
-
-        return pr_map
-
-    def _find_pr_for_issue(self, issue_number: int) -> int | None:
-        """Find the open PR for a single issue.
-
-        Delegates to :func:`_review_utils.find_pr_for_issue` (two-strategy
-        variant: branch-name lookup then body search).
-
-        Args:
-            issue_number: GitHub issue number
-
-        Returns:
-            PR number if found, None otherwise
-
-        """
-        return find_pr_for_issue(issue_number)
+        return _discover_prs_simple(
+            issue_numbers,
+            find_pr_for_issue,
+            on_missing=lambda issue_num: logger.warning(
+                "No open PR found for issue #%s", issue_num
+            ),
+        )
 
     def _gather_pr_context(
         self,
@@ -620,6 +594,7 @@ class PRReviewer(BaseReviewer):
             review_agent=AGENT_PR_REVIEWER,
             state_dir=self.state_dir,
             dry_run=self.options.dry_run,
+            timeout=self.options.agent_timeout,
         )
 
     def _get_or_create_state(self, issue_number: int, pr_number: int) -> ReviewState:
@@ -671,150 +646,151 @@ class PRReviewer(BaseReviewer):
             WorkerResult
 
         """
-        slot_id = self.status_tracker.acquire_slot()
-        if slot_id is None:
-            return WorkerResult(
-                issue_number=issue_number,
-                success=False,
-                error="Failed to acquire worker slot",
-            )
+        with self.status_tracker.slot() as slot_id:
+            if slot_id is None:
+                return WorkerResult(
+                    issue_number=issue_number,
+                    success=False,
+                    error="Failed to acquire worker slot",
+                )
 
-        thread_id = threading.get_ident()
+            thread_id = threading.get_ident()
 
-        try:
-            self.status_tracker.update_slot(
-                slot_id, f"{issue_ref(issue_number)}: PR {pr_ref(pr_number)} Creating worktree"
-            )
-            self._log(
-                "info",
-                f"Starting review of PR {pr_ref(pr_number)} for issue {issue_ref(issue_number)}",
-                thread_id,
-            )
-
-            state = self._get_or_create_state(issue_number, pr_number)
-
-            # Idempotency guard: skip if this PR was already fully reviewed (#374)
-            if state.phase == ReviewPhase.COMPLETED:
+            try:
+                self.status_tracker.update_slot(
+                    slot_id, f"{issue_ref(issue_number)}: PR {pr_ref(pr_number)} Creating worktree"
+                )
                 self._log(
                     "info",
-                    f"PR {pr_ref(pr_number)} for issue {issue_ref(issue_number)} already reviewed "
-                    "(state.phase=COMPLETED) — skipping to avoid duplicate comments",
+                    f"Starting review of PR {pr_ref(pr_number)} "
+                    f"for issue {issue_ref(issue_number)}",
                     thread_id,
                 )
+
+                state = self._get_or_create_state(issue_number, pr_number)
+
+                # Idempotency guard: skip if this PR was already fully reviewed (#374)
+                if state.phase == ReviewPhase.COMPLETED:
+                    self._log(
+                        "info",
+                        f"PR {pr_ref(pr_number)} for issue {issue_ref(issue_number)} "
+                        "already reviewed (state.phase=COMPLETED) — "
+                        "skipping to avoid duplicate comments",
+                        thread_id,
+                    )
+                    self.status_tracker.update_slot(
+                        slot_id, f"{issue_ref(issue_number)}: already reviewed, skipped"
+                    )
+                    return WorkerResult(
+                        issue_number=issue_number,
+                        success=True,
+                        pr_number=pr_number,
+                    )
+
+                # Create worktree on the PR branch (read-only usage)
+                branch_name = f"{issue_number}-auto-impl"
+                worktree_path = self.worktree_manager.create_worktree(issue_number, branch_name)
+
+                with self.state_lock:
+                    state.worktree_path = str(worktree_path)
+                    state.branch_name = branch_name
+                self._save_state(state)
+
+                # Gather context
                 self.status_tracker.update_slot(
-                    slot_id, f"{issue_ref(issue_number)}: already reviewed, skipped"
+                    slot_id, f"{issue_ref(issue_number)}: PR {pr_ref(pr_number)} Gathering context"
                 )
+                context = self._gather_pr_context(pr_number, issue_number, worktree_path)
+
+                # Phase: ANALYZING — run Claude read-only analysis
+                self.status_tracker.update_slot(
+                    slot_id, f"{issue_ref(issue_number)}: PR {pr_ref(pr_number)} Analyzing"
+                )
+                with self.state_lock:
+                    state.phase = ReviewPhase.ANALYZING
+                self._save_state(state)
+
+                analysis = self._run_analysis_session(
+                    pr_number, issue_number, worktree_path, context, slot_id
+                )
+
+                comments: list[dict[str, Any]] = analysis.get("comments", [])
+                summary: str = analysis.get("summary", "")
+
+                # Phase: POSTING — post inline review comments to GitHub
+                self.status_tracker.update_slot(
+                    slot_id, f"{issue_ref(issue_number)}: PR {pr_ref(pr_number)} Posting"
+                )
+                with self.state_lock:
+                    state.phase = ReviewPhase.POSTING
+                self._save_state(state)
+
+                if self.options.dry_run:
+                    pref = pr_ref(pr_number)
+                    self._log(
+                        "info",
+                        f"[DRY RUN] Would post {len(comments)} inline comment(s) on PR {pref}",
+                        thread_id,
+                    )
+                    thread_ids: list[str] = []
+                else:
+                    thread_ids = gh_pr_review_post(
+                        pr_number=pr_number,
+                        comments=comments,
+                        summary=summary,
+                        dry_run=False,
+                        # #1083: edit an existing comment on a line instead of
+                        # duplicating it on re-review.
+                        dedupe_existing=True,
+                    )
+                    self._log(
+                        "info",
+                        f"Posted {len(thread_ids)} review thread(s) on PR {pr_ref(pr_number)}",
+                        thread_id,
+                    )
+
+                with self.state_lock:
+                    state.posted_thread_ids = thread_ids
+                    state.phase = ReviewPhase.COMPLETED
+                    state.completed_at = datetime.now(timezone.utc)
+                self._save_state(state)
+
+                self._log(
+                    "info",
+                    f"PR {pr_ref(pr_number)} review complete for issue {issue_ref(issue_number)}",
+                    thread_id,
+                )
+
                 return WorkerResult(
                     issue_number=issue_number,
                     success=True,
                     pr_number=pr_number,
+                    branch_name=branch_name,
+                    worktree_path=str(worktree_path),
                 )
 
-            # Create worktree on the PR branch (read-only usage)
-            branch_name = f"{issue_number}-auto-impl"
-            worktree_path = self.worktree_manager.create_worktree(issue_number, branch_name)
+            except subprocess.TimeoutExpired as e:
+                error_msg = f"Timeout: {' '.join(str(c) for c in e.cmd[:3])} exceeded {e.timeout}s"
+                self._log("error", error_msg, thread_id)
+                return self._fail(issue_number, error_msg, slot_id)
 
-            with self.state_lock:
-                state.worktree_path = str(worktree_path)
-                state.branch_name = branch_name
-            self._save_state(state)
-
-            # Gather context
-            self.status_tracker.update_slot(
-                slot_id, f"{issue_ref(issue_number)}: PR {pr_ref(pr_number)} Gathering context"
-            )
-            context = self._gather_pr_context(pr_number, issue_number, worktree_path)
-
-            # Phase: ANALYZING — run Claude read-only analysis
-            self.status_tracker.update_slot(
-                slot_id, f"{issue_ref(issue_number)}: PR {pr_ref(pr_number)} Analyzing"
-            )
-            with self.state_lock:
-                state.phase = ReviewPhase.ANALYZING
-            self._save_state(state)
-
-            analysis = self._run_analysis_session(
-                pr_number, issue_number, worktree_path, context, slot_id
-            )
-
-            comments: list[dict[str, Any]] = analysis.get("comments", [])
-            summary: str = analysis.get("summary", "")
-
-            # Phase: POSTING — post inline review comments to GitHub
-            self.status_tracker.update_slot(
-                slot_id, f"{issue_ref(issue_number)}: PR {pr_ref(pr_number)} Posting"
-            )
-            with self.state_lock:
-                state.phase = ReviewPhase.POSTING
-            self._save_state(state)
-
-            if self.options.dry_run:
-                pref = pr_ref(pr_number)
-                self._log(
-                    "info",
-                    f"[DRY RUN] Would post {len(comments)} inline comment(s) on PR {pref}",
-                    thread_id,
+            except subprocess.CalledProcessError as e:
+                error_msg = (
+                    f"Command failed (exit {e.returncode}): {' '.join(str(c) for c in e.cmd[:3])}"
                 )
-                thread_ids: list[str] = []
-            else:
-                thread_ids = gh_pr_review_post(
-                    pr_number=pr_number,
-                    comments=comments,
-                    summary=summary,
-                    dry_run=False,
-                    # #1083: edit an existing comment on a line instead of
-                    # duplicating it on re-review.
-                    dedupe_existing=True,
-                )
-                self._log(
-                    "info",
-                    f"Posted {len(thread_ids)} review thread(s) on PR {pr_ref(pr_number)}",
-                    thread_id,
-                )
+                self._log("error", error_msg, thread_id)
+                return self._fail(issue_number, error_msg, slot_id)
 
-            with self.state_lock:
-                state.posted_thread_ids = thread_ids
-                state.phase = ReviewPhase.COMPLETED
-                state.completed_at = datetime.now(timezone.utc)
-            self._save_state(state)
+            except RuntimeError as e:
+                self._log("error", f"Runtime error: {e}", thread_id)
+                return self._fail(issue_number, str(e)[:80], slot_id)
 
-            self._log(
-                "info",
-                f"PR {pr_ref(pr_number)} review complete for issue {issue_ref(issue_number)}",
-                thread_id,
-            )
+            except Exception as e:
+                self._log("error", f"Unexpected {type(e).__name__}: {e}", thread_id)
+                return self._fail(issue_number, str(e)[:80], slot_id)
 
-            return WorkerResult(
-                issue_number=issue_number,
-                success=True,
-                pr_number=pr_number,
-                branch_name=branch_name,
-                worktree_path=str(worktree_path),
-            )
-
-        except subprocess.TimeoutExpired as e:
-            error_msg = f"Timeout: {' '.join(str(c) for c in e.cmd[:3])} exceeded {e.timeout}s"
-            self._log("error", error_msg, thread_id)
-            return self._fail(issue_number, error_msg, slot_id)
-
-        except subprocess.CalledProcessError as e:
-            error_msg = (
-                f"Command failed (exit {e.returncode}): {' '.join(str(c) for c in e.cmd[:3])}"
-            )
-            self._log("error", error_msg, thread_id)
-            return self._fail(issue_number, error_msg, slot_id)
-
-        except RuntimeError as e:
-            self._log("error", f"Runtime error: {e}", thread_id)
-            return self._fail(issue_number, str(e)[:80], slot_id)
-
-        except Exception as e:
-            self._log("error", f"Unexpected {type(e).__name__}: {e}", thread_id)
-            return self._fail(issue_number, str(e)[:80], slot_id)
-
-        finally:
-            time.sleep(1)
-            self.status_tracker.release_slot(slot_id)
+            finally:
+                time.sleep(1)
 
     def _review_all(self, pr_map: dict[int, int]) -> dict[int, WorkerResult]:
         """Review all PRs in parallel.
@@ -836,29 +812,22 @@ class PRReviewer(BaseReviewer):
                 future = executor.submit(self._review_pr, issue_num, pr_num)
                 futures[future] = issue_num
 
-            while futures:
+            for future in drain_completed_futures(futures):
+                issue_num = futures.pop(future)
                 try:
-                    done, _pending = wait(futures.keys(), timeout=1.0, return_when=FIRST_COMPLETED)
-                except Exception:
-                    time.sleep(0.1)
-                    continue
-
-                for future in done:
-                    issue_num = futures.pop(future)
-                    try:
-                        result = future.result()
-                        results[issue_num] = result
-                        if result.success:
-                            logger.info("Issue #%s PR review completed", issue_num)
-                        else:
-                            logger.error("Issue #%s PR review failed: %s", issue_num, result.error)
-                    except Exception as e:
-                        logger.error("Issue #%s raised exception: %s", issue_num, e)
-                        results[issue_num] = WorkerResult(
-                            issue_number=issue_num,
-                            success=False,
-                            error=str(e),
-                        )
+                    result = future.result()
+                    results[issue_num] = result
+                    if result.success:
+                        logger.info("Issue #%s PR review completed", issue_num)
+                    else:
+                        logger.error("Issue #%s PR review failed: %s", issue_num, result.error)
+                except Exception as e:
+                    logger.error("Issue #%s raised exception: %s", issue_num, e)
+                    results[issue_num] = WorkerResult(
+                        issue_number=issue_num,
+                        success=False,
+                        error=str(e),
+                    )
 
         self._print_summary(results)
         return results
@@ -870,22 +839,12 @@ class PRReviewer(BaseReviewer):
             results: Mapping of issue number to WorkerResult
 
         """
-        total = len(results)
-        successful = sum(1 for r in results.values() if r.success)
-        failed = total - successful
-
-        logger.info("=" * 60)
-        logger.info("PR Review Summary")
-        logger.info("=" * 60)
-        logger.info("Total PRs: %s", total)
-        logger.info("Successful: %s", successful)
-        logger.info("Failed: %s", failed)
-
-        if failed > 0:
-            logger.info("\nFailed issues:")
-            for issue_num, result in results.items():
-                if not result.success:
-                    logger.info("  #%s: %s", issue_num, result.error)
+        print_worker_summary(
+            "PR Review Summary",
+            results,
+            count_noun="PRs",
+            failed_header="\nFailed issues:",
+        )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -907,10 +866,10 @@ Examples:
   %(prog)s --issues 595 596 --max-workers 5
         """,
         issues_help="Issue numbers whose linked PRs should be reviewed",
-        dry_run_help="Show what would be done without actually posting any review comments.",
+        dry_run_prefix="Show what would be done without actually posting any review comments.",
     )
-    add_json_arg(parser)
     add_version_arg(parser)
+    add_agent_timeout_arg(parser)
     return parser
 
 
@@ -943,6 +902,9 @@ def main() -> int:
         max_workers=args.max_workers,
         dry_run=args.dry_run,
         enable_ui=not args.no_ui and not args.json,
+        agent_timeout=(
+            args.agent_timeout if args.agent_timeout is not None else DEFAULT_AGENT_TIMEOUT
+        ),
     )
 
     with terminal_guard():

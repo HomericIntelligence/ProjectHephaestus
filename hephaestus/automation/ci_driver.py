@@ -10,41 +10,55 @@ Provides:
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import logging
-import os
 import subprocess
 import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from hephaestus.agents.runtime import (
-    add_agent_argument,
     direct_agent_model,
     resolve_agent,
     run_agent_session,
-    session_agent_matches,
     uses_direct_agent_runner,
 )
 from hephaestus.cli.utils import (
-    add_dry_run_arg,
-    add_github_throttle_args,
-    add_json_arg,
+    add_advise_timeout_arg,
+    add_agent_timeout_arg,
+    add_learn_timeout_arg,
+    add_poll_max_wait_arg,
     configure_github_throttle_from_args,
     emit_json_status,
 )
+from hephaestus.constants import AUTOMATION_LOG_FORMAT, LOG_DATEFMT, read_timeout_env
+from hephaestus.io.utils import write_secure
 from hephaestus.utils.file_lock import file_lock
 
-from ._review_utils import add_max_workers_arg, find_pr_for_issue
+from ._review_utils import (
+    _discover_prs_simple,
+    build_automation_parser,
+    drain_completed_futures,
+    ensure_state_dir,
+    find_pr_for_issue,
+    load_impl_session_id,
+    load_state_file,
+    log_file_path,
+    parse_json_block,
+    print_worker_summary,
+)
 from .address_review import (
     _parse_addressed_block,
     resolve_addressed_threads,
     run_address_fix_session,
 )
 from .advise_runner import run_advise
+from .agent_config import (
+    DEFAULT_AGENT_TIMEOUT,
+    DEFAULT_CI_POLL_MAX_WAIT,
+)
 from .arming_state import ArmingStateStore
 from .ci_check_inspector import (
     FAILING_CHECK_CONCLUSIONS as FAILING_CHECK_CONCLUSIONS,  # re-export
@@ -53,10 +67,6 @@ from .ci_check_inspector import (
 from .ci_fix_orchestrator import CIFixOrchestrator
 from .claude_invoke import invoke_claude_with_session
 from .claude_models import advise_model, codex_advise_model
-from .claude_timeouts import (
-    advise_claude_timeout,
-    ci_poll_max_wait,
-)
 from .git_utils import (
     get_repo_root,
     get_repo_slug,
@@ -118,7 +128,7 @@ def _pr_is_failing(pr: dict[str, Any]) -> bool:
     return any(c.get("conclusion") in FAILING_CHECK_CONCLUSIONS for c in rollup)
 
 
-class CIDriver:
+class _CIDriverCore:
     """Drives open PRs toward green CI by fixing failures and enabling auto-merge.
 
     Features:
@@ -138,8 +148,7 @@ class CIDriver:
         """
         self.options = options
         self.repo_root = get_repo_root()
-        self.state_dir = self.repo_root / "build" / ".issue_implementer"
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.state_dir = ensure_state_dir(self.repo_root)
         self._arming_store = ArmingStateStore(lambda: self.state_dir)
 
         self.worktree_manager = WorktreeManager()
@@ -252,35 +261,24 @@ class CIDriver:
                     future = executor.submit(self._drive_issue, issue_num, pr_num, idx)
                     futures[future] = issue_num
 
-                while futures:
+                for future in drain_completed_futures(futures):
+                    issue_num = futures.pop(future)
                     try:
-                        done, _pending = wait(
-                            futures.keys(), timeout=1.0, return_when=FIRST_COMPLETED
-                        )
-                    except Exception:
-                        time.sleep(0.1)
-                        continue
-
-                    for future in done:
-                        issue_num = futures.pop(future)
-                        try:
-                            result = future.result()
-                            with self.lock:
-                                results[issue_num] = result
-                            if result.success:
-                                logger.info("Issue #%s: CI drive completed", issue_num)
-                            else:
-                                logger.error(
-                                    "Issue #%s: CI drive failed: %s", issue_num, result.error
-                                )
-                        except Exception as e:
-                            logger.error("Issue #%s raised exception: %s", issue_num, e)
-                            with self.lock:
-                                results[issue_num] = WorkerResult(
-                                    issue_number=issue_num,
-                                    success=False,
-                                    error=str(e),
-                                )
+                        result = future.result()
+                        with self.lock:
+                            results[issue_num] = result
+                        if result.success:
+                            logger.info("Issue #%s: CI drive completed", issue_num)
+                        else:
+                            logger.error("Issue #%s: CI drive failed: %s", issue_num, result.error)
+                    except Exception as e:
+                        logger.error("Issue #%s raised exception: %s", issue_num, e)
+                        with self.lock:
+                            results[issue_num] = WorkerResult(
+                                issue_number=issue_num,
+                                success=False,
+                                error=str(e),
+                            )
         finally:
             # Always clean up worktrees, even on KeyboardInterrupt or exception.
             # Mirror the pattern from implementer.py:178-185.
@@ -441,13 +439,13 @@ class CIDriver:
         # Per-issue lookup first; preserve insertion order so the "lowest
         # numbered issue wins" tie-break is stable across runs given the same
         # input list.
-        raw_map: dict[int, int] = {}
-        for issue_num in issue_numbers:
-            pr_number = self._find_pr_for_issue(issue_num)
-            if pr_number is not None:
-                raw_map[issue_num] = pr_number
-            else:
-                logger.info("Issue #%s: no open PR found, skipping", issue_num)
+        raw_map = _discover_prs_simple(
+            issue_numbers,
+            find_pr_for_issue,
+            on_missing=lambda issue_num: logger.info(
+                "Issue #%s: no open PR found, skipping", issue_num
+            ),
+        )
 
         # Group by PR, then pick a canonical issue per PR (the smallest one)
         # and log the deferred siblings so operators can see the dedupe.
@@ -721,42 +719,46 @@ class CIDriver:
             WorkerResult indicating success or failure.
 
         """
-        acquired_slot: int | None = self.status_tracker.acquire_slot()
-        if acquired_slot is None:
-            return WorkerResult(
-                issue_number=issue_number, success=False, error="Failed to acquire worker slot"
-            )
+        with self.status_tracker.slot() as acquired_slot:
+            if acquired_slot is None:
+                return WorkerResult(
+                    issue_number=issue_number, success=False, error="Failed to acquire worker slot"
+                )
 
-        try:
-            armed_result = self._check_arming_on_drive_start(issue_number, pr_number)
-            if armed_result is not None:
-                return armed_result
+            try:
+                armed_result = self._check_arming_on_drive_start(issue_number, pr_number)
+                if armed_result is not None:
+                    return armed_result
 
-            if self.options.enable_mechanical_rebase and not self.options.dry_run:
-                self._attempt_mechanical_rebase(issue_number, pr_number, acquired_slot)
+                if self.options.enable_mechanical_rebase and not self.options.dry_run:
+                    self._attempt_mechanical_rebase(issue_number, pr_number, acquired_slot)
 
-            self.status_tracker.update_slot(acquired_slot, f"{pr_ref(pr_number)}: fetching checks")
+                self.status_tracker.update_slot(
+                    acquired_slot, f"{pr_ref(pr_number)}: fetching checks"
+                )
 
-            poll_result = self._poll_ci_until_concluded(
-                issue_number, pr_number, acquired_slot, ci_poll_max_wait()
-            )
-            if poll_result is None:
-                return WorkerResult(issue_number=issue_number, success=True, pr_number=pr_number)
-            _checks, required_checks = poll_result
+                poll_result = self._poll_ci_until_concluded(
+                    issue_number, pr_number, acquired_slot, self.options.poll_max_wait
+                )
+                if poll_result is None:
+                    return WorkerResult(
+                        issue_number=issue_number, success=True, pr_number=pr_number
+                    )
+                _checks, required_checks = poll_result
 
-            all_green = all(
-                c.get("conclusion") in ("success", "skipped", "neutral") for c in required_checks
-            )
-            if all_green:
-                return self._handle_green_pr(issue_number, pr_number, acquired_slot)
-            return self._handle_failing_pr(issue_number, pr_number, acquired_slot, required_checks)
+                all_green = all(
+                    c.get("conclusion") in ("success", "skipped", "neutral")
+                    for c in required_checks
+                )
+                if all_green:
+                    return self._handle_green_pr(issue_number, pr_number, acquired_slot)
+                return self._handle_failing_pr(
+                    issue_number, pr_number, acquired_slot, required_checks
+                )
 
-        except Exception as e:
-            logger.error("Issue #%s: unexpected error: %s", issue_number, e)
-            return WorkerResult(issue_number=issue_number, success=False, error=str(e)[:200])
-
-        finally:
-            self.status_tracker.release_slot(acquired_slot)
+            except Exception as e:
+                logger.error("Issue #%s: unexpected error: %s", issue_number, e)
+                return WorkerResult(issue_number=issue_number, success=False, error=str(e)[:200])
 
     def _attempt_mechanical_rebase(
         self,
@@ -788,7 +790,7 @@ class CIDriver:
                     agent=self.options.agent,
                     prompt=prompt,
                     cwd=self.repo_root,
-                    timeout=advise_claude_timeout(),
+                    timeout=self.options.advise_timeout,
                     model=direct_agent_model(
                         self.options.agent,
                         "HEPH_ADVISE_MODEL",
@@ -805,7 +807,7 @@ class CIDriver:
                 prompt=prompt,
                 model=advise_model(),
                 cwd=self.repo_root,
-                timeout=advise_claude_timeout(),
+                timeout=self.options.advise_timeout,
                 output_format="text",
                 allowed_tools="Read,Glob,Grep,Bash",
             )
@@ -853,7 +855,7 @@ class CIDriver:
 
         # Bounded poll for the freshly-pushed run to conclude. Reuse the same
         # backoff/cap pattern as the main poll loop.
-        max_wait = ci_poll_max_wait()
+        max_wait = self.options.poll_max_wait
         elapsed = 0
         attempt = 0
         while True:
@@ -1079,7 +1081,7 @@ class CIDriver:
         if pre_agent_sha is None:
             return False
 
-        log_file = self.state_dir / f"address-review-blocked-{issue_number}.log"
+        log_file = log_file_path(self.state_dir, "address-review-blocked", issue_number)
         try:
             fix_result = run_address_fix_session(
                 issue_number=issue_number,
@@ -1091,6 +1093,8 @@ class CIDriver:
                 parse_fn=_parse_addressed_block,
                 log_file=log_file,
                 dry_run=self.options.dry_run,
+                timeout=self.options.agent_timeout,
+                advise_timeout=self.options.advise_timeout,
             )
         except RuntimeError as exc:
             logger.warning(
@@ -1241,8 +1245,9 @@ class CIDriver:
         if not head_sha:
             return
         try:
-            self._ci_fix_marker_path(pr_number).write_text(
-                json.dumps({"pr_number": pr_number, "head_sha": head_sha}) + "\n"
+            write_secure(
+                self._ci_fix_marker_path(pr_number),
+                json.dumps({"pr_number": pr_number, "head_sha": head_sha}) + "\n",
             )
         except OSError as exc:
             logger.warning(
@@ -1270,23 +1275,6 @@ class CIDriver:
         gh_state = self._gh_pr_state(pr_number) or {}
         current = str(gh_state.get("headRefOid") or "")
         return bool(current) and current == recorded
-
-    def _find_pr_for_issue(self, issue_number: int) -> int | None:
-        """Find the open PR for a single issue.
-
-        Delegates to :func:`_review_utils.find_pr_for_issue` (two-strategy
-        branch-name + body search). Sharing the helper with
-        :class:`AddressReviewer` and :class:`PRReviewer` keeps strategy
-        evolution in one place.
-
-        Args:
-            issue_number: GitHub issue number.
-
-        Returns:
-            PR number if found, None otherwise.
-
-        """
-        return find_pr_for_issue(issue_number)
 
     def _validate_pr_open(self, pr_number: int) -> bool:
         """Return True iff ``pr_number`` exists and is in OPEN state.
@@ -1348,16 +1336,11 @@ class CIDriver:
             Path to the worktree directory.
 
         """
-        review_state_file = self.state_dir / f"review-{issue_number}.json"
-        if review_state_file.exists():
-            try:
-                data = json.loads(review_state_file.read_text())
-                if data.get("worktree_path"):
-                    wt = Path(data["worktree_path"])
-                    if wt.exists():
-                        return wt
-            except Exception as e:
-                logger.debug("Could not read review state for issue #%s: %s", issue_number, e)
+        data = load_state_file(self.state_dir, "review", issue_number, state_logger=logger)
+        if data and data.get("worktree_path"):
+            wt = Path(data["worktree_path"])
+            if wt.exists():
+                return wt
 
         # Fallback: create a new worktree for the PR head branch
         branch = self._get_pr_branch(pr_number)
@@ -1524,7 +1507,7 @@ class CIDriver:
         if self.options.dry_run:
             return "TIMEOUT"
 
-        max_wait = int(os.environ.get("HEPH_PR_MERGE_MAX_WAIT", "1800"))
+        max_wait = read_timeout_env("HEPH_PR_MERGE_MAX_WAIT", 1800)
         elapsed = 0
         attempt = 0
         iref = issue_ref(issue_number)
@@ -1825,6 +1808,9 @@ class CIDriver:
     def _load_impl_session_id(self, issue_number: int) -> str | None:
         """Load the agent session ID from the implementer's saved state.
 
+        Thin wrapper around :func:`._review_utils.load_impl_session_id`, kept
+        as a method so existing patch-by-method test seams hold.
+
         Args:
             issue_number: GitHub issue number.
 
@@ -1832,35 +1818,7 @@ class CIDriver:
             Session ID string, or None if not found.
 
         """
-        # The implementer persists its state to ``issue-<n>.json`` (see
-        # ImplementationStateManager.save), NOT ``state-<n>.json``. Reading the
-        # wrong name always missed, so this lookup silently never resumed the
-        # implementer's session — masked for Claude (deterministic-UUID resume)
-        # but breaking Codex session continuity on the CI-fix path.
-        state_file = self.state_dir / f"issue-{issue_number}.json"
-        if not state_file.exists():
-            logger.debug("No implementer state file for issue #%s", issue_number)
-            return None
-
-        try:
-            data = json.loads(state_file.read_text())
-            session_id: str | None = data.get("session_id")
-            session_agent: str | None = data.get("session_agent")
-            if session_id and not session_agent_matches(session_agent, self.options.agent):
-                logger.info(
-                    "Skipping impl session for issue #%s: session belongs to %s, "
-                    "selected agent is %s",
-                    issue_number,
-                    session_agent or "claude",
-                    self.options.agent,
-                )
-                return None
-            if session_id:
-                logger.debug("Loaded session_id for issue #%s: %s...", issue_number, session_id[:8])
-            return session_id
-        except Exception as e:
-            logger.warning("Could not load session_id for issue #%s: %s", issue_number, e)
-            return None
+        return load_impl_session_id(self.state_dir, issue_number, self.options.agent)
 
     def _list_unresolved_threads_safe(self, pr_number: int) -> list[dict[str, Any]]:
         """Fetch unresolved review threads, swallowing lookup failures.
@@ -2241,7 +2199,7 @@ class CIDriver:
         return self._post_merge.run_drive_green_compact(issue_number, pr_number)
 
     def _parse_json_block(self, text: str) -> dict[str, Any]:
-        """Extract and parse the first JSON block from a text string.
+        """Extract and parse the first JSON block or raw JSON object.
 
         Args:
             text: Input text that may contain a JSON block.
@@ -2250,18 +2208,13 @@ class CIDriver:
             Parsed dictionary, or empty dict if no valid JSON found.
 
         """
-        import re
-
-        match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
-        if match:
-            with contextlib.suppress(json.JSONDecodeError):
-                return dict(json.loads(match.group(1)))
-
-        # Try raw JSON
-        with contextlib.suppress(json.JSONDecodeError):
-            return dict(json.loads(text))
-
-        return {}
+        return parse_json_block(
+            text,
+            default={},
+            parse_error_default={},
+            raw_json_fallback=True,
+            use_last_block=False,
+        )
 
     def _print_summary(self, results: dict[int, WorkerResult]) -> None:
         """Print a summary of CI drive results.
@@ -2270,22 +2223,11 @@ class CIDriver:
             results: Mapping of issue number to WorkerResult.
 
         """
-        total = len(results)
-        successful = sum(1 for r in results.values() if r.success)
-        failed = total - successful
+        print_worker_summary("CI Driver Summary", results)
 
-        logger.info("=" * 60)
-        logger.info("CI Driver Summary")
-        logger.info("=" * 60)
-        logger.info("Total issues: %s", total)
-        logger.info("Successful: %s", successful)
-        logger.info("Failed: %s", failed)
 
-        if failed > 0:
-            logger.info("Failed issues:")
-            for issue_num, result in results.items():
-                if not result.success:
-                    logger.info("  #%s: %s", issue_num, result.error)
+class CIDriver(_CIDriverCore):
+    """Public drive-green façade over the compatibility implementation core."""
 
 
 # ---------------------------------------------------------------------------
@@ -2303,14 +2245,14 @@ def _setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        format=AUTOMATION_LOG_FORMAT,
+        datefmt=LOG_DATEFMT,
     )
 
 
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argparse parser for the CI-driver CLI."""
-    parser = argparse.ArgumentParser(
+    parser = build_automation_parser(
         description="Drive PRs to green CI: fix failures and enable auto-merge",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -2336,6 +2278,12 @@ Examples:
   # Drive every open PR, including teammates' and bots' (default is @me only)
   %(prog)s --all
         """,
+        add_github_throttle=True,
+        dry_run_prefix=(
+            "Suppress GitHub writes and git pushes (no comments, no merges, no pushes)."
+        ),
+        add_no_ui=True,
+        add_version=False,
     )
 
     parser.add_argument(
@@ -2362,27 +2310,10 @@ Examples:
             "--issues; duplicate PRs are deduped."
         ),
     )
-    add_agent_argument(parser)
-    add_max_workers_arg(parser)
-    add_dry_run_arg(
-        parser,
-        prefix="Suppress GitHub writes and git pushes (no comments, no merges, no pushes).",
-    )
-    parser.add_argument(
-        "--no-ui",
-        action="store_true",
-        help="Disable curses UI (use plain logging instead)",
-    )
     parser.add_argument(
         "--no-advise",
         action="store_true",
         help="Skip the advise step before CI fixing",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging",
     )
     parser.add_argument(
         "--no-include-bot-prs",
@@ -2433,8 +2364,10 @@ Examples:
             "here so a PR that will not go green is abandoned after N tries."
         ),
     )
-    add_github_throttle_args(parser)
-    add_json_arg(parser)
+    add_agent_timeout_arg(parser)
+    add_advise_timeout_arg(parser)
+    add_learn_timeout_arg(parser)
+    add_poll_max_wait_arg(parser)
     return parser
 
 
@@ -2482,7 +2415,7 @@ def _evaluate_run_result(
 
     """
     log = logging.getLogger(__name__)
-    failed = [num for num, result in results.items() if not result.success]
+    raw_failed = {num: result for num, result in results.items() if not result.success}
 
     # Terminal-state vocabulary shared with ``_wait_for_armed_merge``: a PR in
     # one of these merge-states has a real conflict with its base and can never
@@ -2517,6 +2450,13 @@ def _evaluate_run_result(
         for pr in open_prs_remaining
         if pr.get("autoMergeRequest") and not _is_conflicting(pr)
     ]
+    armed_pending_prs = set(armed_pending)
+    stale_failed = [
+        num
+        for num, result in raw_failed.items()
+        if result.pr_number is not None and result.pr_number in armed_pending_prs
+    ]
+    failed = [num for num in raw_failed if num not in stale_failed]
     # #1576: un-armed-because-awaiting-review PRs are neither armed nor stuck.
     pending_review = [pr.get("number") for pr in open_prs_remaining if _is_pending_review(pr)]
     # needs_action = genuinely stuck: un-armed for a reason OTHER than pending
@@ -2532,6 +2472,12 @@ def _evaluate_run_result(
             "%s PR(s) armed and still merging (waited; not a failure): %s",
             len(armed_pending),
             armed_pending,
+        )
+    if stale_failed:
+        log.info(
+            "%s issue failure(s) correspond to armed pending PRs and are no longer actionable: %s",
+            len(stale_failed),
+            stale_failed,
         )
     if pending_review:
         log.info(
@@ -2606,6 +2552,18 @@ def main() -> int:
             include_all_authors=args.include_all_authors,
             enable_mechanical_rebase=args.enable_mechanical_rebase,
             max_fix_iterations=args.max_fix_iterations,
+            agent_timeout=(
+                args.agent_timeout if args.agent_timeout is not None else DEFAULT_AGENT_TIMEOUT
+            ),
+            advise_timeout=(
+                args.advise_timeout if args.advise_timeout is not None else DEFAULT_AGENT_TIMEOUT
+            ),
+            learn_timeout=(
+                args.learn_timeout if args.learn_timeout is not None else DEFAULT_AGENT_TIMEOUT
+            ),
+            poll_max_wait=(
+                args.poll_max_wait if args.poll_max_wait is not None else DEFAULT_CI_POLL_MAX_WAIT
+            ),
         )
 
         driver = CIDriver(options)

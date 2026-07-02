@@ -53,12 +53,13 @@ from ._review_utils import find_pr_for_issue, get_pr_head_branch
 from ._stage_context import StageContext
 from .claude_invoke import invoke_claude_with_session
 from .claude_models import advise_model
-from .claude_timeouts import advise_claude_timeout
 from .git_utils import (
+    commit_if_changes,
     get_repo_slug,
     is_clean_working_tree,
     issue_ref,
     pr_ref,
+    push_branch,
     run,
     sync_worktree_to_remote_branch,
 )
@@ -302,48 +303,47 @@ class ImplementationPhaseRunner:
 
         """
         impl = self.impl
-        slot_id = self.status_tracker.acquire_slot()
-        if slot_id is None:
-            return WorkerResult(
-                issue_number=issue_number, success=False, error="Failed to acquire worker slot"
-            )
+        with self.status_tracker.slot() as slot_id:
+            if slot_id is None:
+                return WorkerResult(
+                    issue_number=issue_number, success=False, error="Failed to acquire worker slot"
+                )
 
-        thread_id = threading.get_ident()
+            thread_id = threading.get_ident()
 
-        try:
-            return self._dispatch_issue_work(
-                issue_number=issue_number,
-                slot_id=slot_id,
-                thread_id=thread_id,
-            )
+            try:
+                return self._dispatch_issue_work(
+                    issue_number=issue_number,
+                    slot_id=slot_id,
+                    thread_id=thread_id,
+                )
 
-        except subprocess.TimeoutExpired as e:
-            error_msg = f"Timeout: {' '.join(e.cmd[:3])} exceeded {e.timeout}s"
-            impl._log("error", error_msg, thread_id)
-            return self._record_issue_failure(
-                issue_number, slot_id, thread_id, error_msg, persist_error=error_msg
-            )
+            except subprocess.TimeoutExpired as e:
+                error_msg = f"Timeout: {' '.join(e.cmd[:3])} exceeded {e.timeout}s"
+                impl._log("error", error_msg, thread_id)
+                return self._record_issue_failure(
+                    issue_number, slot_id, thread_id, error_msg, persist_error=error_msg
+                )
 
-        except subprocess.CalledProcessError as e:
-            error_msg = f"Command failed (exit {e.returncode}): {' '.join(e.cmd[:3])}"
-            impl._log("error", error_msg, thread_id)
-            if e.stderr:
-                impl._log("error", f"stderr: {e.stderr[:300]}", thread_id)
-            return self._record_issue_failure(
-                issue_number, slot_id, thread_id, error_msg, persist_error=str(e)
-            )
+            except subprocess.CalledProcessError as e:
+                error_msg = f"Command failed (exit {e.returncode}): {' '.join(e.cmd[:3])}"
+                impl._log("error", error_msg, thread_id)
+                if e.stderr:
+                    impl._log("error", f"stderr: {e.stderr[:300]}", thread_id)
+                return self._record_issue_failure(
+                    issue_number, slot_id, thread_id, error_msg, persist_error=str(e)
+                )
 
-        except RuntimeError as e:
-            return self._handle_runtime_error(issue_number, slot_id, thread_id, e)
+            except RuntimeError as e:
+                return self._handle_runtime_error(issue_number, slot_id, thread_id, e)
 
-        except Exception as e:  # broad catch: top-level worker boundary, must not crash thread pool
-            impl._log("error", f"Unexpected {type(e).__name__}: {e}", thread_id)
-            return self._record_issue_failure(
-                issue_number, slot_id, thread_id, str(e)[:80], persist_error=str(e)
-            )
-
-        finally:
-            self.status_tracker.release_slot(slot_id)
+            except (
+                Exception
+            ) as e:  # broad catch: top-level worker boundary, must not crash thread pool
+                impl._log("error", f"Unexpected {type(e).__name__}: {e}", thread_id)
+                return self._record_issue_failure(
+                    issue_number, slot_id, thread_id, str(e)[:80], persist_error=str(e)
+                )
 
     def _handle_runtime_error(
         self,
@@ -889,7 +889,7 @@ class ImplementationPhaseRunner:
                     agent=self.options.agent,
                     prompt=prompt,
                     cwd=worktree_path,
-                    timeout=advise_claude_timeout(),
+                    timeout=self.options.advise_timeout,
                     model=direct_agent_model(self.options.agent, "HEPH_ADVISE_MODEL"),
                     sandbox="read-only",
                 )
@@ -903,7 +903,7 @@ class ImplementationPhaseRunner:
                     prompt=prompt,
                     model=advise_model(),
                     cwd=worktree_path,
-                    timeout=advise_claude_timeout(),
+                    timeout=self.options.advise_timeout,
                     output_format="text",
                     allowed_tools="Read,Glob,Grep,Bash",
                 )
@@ -965,6 +965,7 @@ class ImplementationPhaseRunner:
                 "git",
                 "commit",
                 "-S",
+                "-s",
                 "-m",
                 f"chore: preserve reused worktree changes on {branch_name}",
             ],
@@ -1031,7 +1032,7 @@ class ImplementationPhaseRunner:
         )
         try:
             run(
-                ["git", "cherry-pick", "-S", commit_sha],
+                ["git", "cherry-pick", "-S", "-s", commit_sha],
                 cwd=worktree_path,
                 check=True,
             )
@@ -1222,7 +1223,7 @@ class ImplementationPhaseRunner:
     def _resume_impl_with_feedback(
         self,
         *,
-        session_id: str,
+        session_id: str | None,
         worktree_path: Path,
         issue_number: int,
         review_text: str,
@@ -1350,12 +1351,17 @@ class ImplementationPhaseRunner:
         return self.review_phase._parse_address_result(text, issue_number, iteration)
 
     def _commit_if_changes(self, issue_number: int, worktree_path: Path) -> bool:
-        """Delegate to :meth:`ReviewPhase._commit_if_changes`."""
-        return self.review_phase._commit_if_changes(issue_number, worktree_path)
+        """Commit pending changes from the in-loop address step."""
+        return commit_if_changes(
+            issue_number,
+            worktree_path,
+            self.options.agent,
+            committed_log_message="Committed in-loop address changes for issue #%s",
+        )
 
     def _push_branch(self, branch_name: str, worktree_path: Path) -> None:
-        """Delegate to :meth:`ReviewPhase._push_branch`."""
-        self.review_phase._push_branch(branch_name, worktree_path)
+        """Push *branch_name* to origin."""
+        push_branch(branch_name, worktree_path)
 
     # FollowUpPhase
     def _run_post_pr_followup(

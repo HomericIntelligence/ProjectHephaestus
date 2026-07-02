@@ -118,20 +118,20 @@ def test_plan_phase_generate_uses_entry_point(tmp_path: Path) -> None:
     assert "--issues" in args and "7" in args
 
 
-def test_plan_phase_generate_uses_centralized_timeout(tmp_path: Path) -> None:
-    """_generate bounds the subprocess by planner_claude_timeout, not 600s (#1374).
+def test_plan_phase_generate_uses_long_stage_timeout(tmp_path: Path) -> None:
+    """_generate bounds the subprocess by the long stage timeout (#1374).
 
     output.log L834 showed ``Command timed out after 600s:
     hephaestus-plan-issues --issues 1357`` — the heavy issue exhausted a
-    hard-coded 600s wrapper while the planner's own budget is 7200s. The call
-    must now route through the centralized helper.
+    hard-coded 600s wrapper while the planner's stage budget is 7200s. The call
+    must now route through the distinct stage-level helper.
     """
     phase = PlanPhase(_make_ctx(tmp_path))
     with (
         mock.patch("shutil.which", return_value="/usr/bin/hpi"),
         mock.patch("hephaestus.automation._plan_phase.run") as mock_run,
         mock.patch(
-            "hephaestus.automation._plan_phase.planner_claude_timeout",
+            "hephaestus.automation._plan_phase.plan_stage_timeout",
             return_value=7200,
         ),
     ):
@@ -142,8 +142,9 @@ def test_plan_phase_generate_uses_centralized_timeout(tmp_path: Path) -> None:
 def test_plan_phase_generate_timeout_respects_env_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The HEPH_PLANNER_AGENT_TIMEOUT override flows through to the subprocess."""
-    monkeypatch.setenv("HEPH_PLANNER_AGENT_TIMEOUT", "9000")
+    """The HEPH_PLAN_STAGE_TIMEOUT override flows through to the subprocess."""
+    monkeypatch.setenv("HEPH_PLAN_STAGE_TIMEOUT", "9000")
+    monkeypatch.setenv("HEPH_AGENT_PLAN_TIMEOUT", "300")
     phase = PlanPhase(_make_ctx(tmp_path))
     with (
         mock.patch("shutil.which", return_value="/usr/bin/hpi"),
@@ -151,6 +152,22 @@ def test_plan_phase_generate_timeout_respects_env_override(
     ):
         phase._generate(1357)
     assert mock_run.call_args.kwargs["timeout"] == 9000
+
+
+def test_plan_phase_generate_ignores_inner_agent_plan_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HEPH_AGENT_PLAN_TIMEOUT must not shorten the outer plan-stage wrapper."""
+    monkeypatch.delenv("HEPH_PLAN_STAGE_TIMEOUT", raising=False)
+    monkeypatch.delenv("HEPH_PLANNER_AGENT_TIMEOUT", raising=False)
+    monkeypatch.setenv("HEPH_AGENT_PLAN_TIMEOUT", "333")
+    phase = PlanPhase(_make_ctx(tmp_path))
+    with (
+        mock.patch("shutil.which", return_value="/usr/bin/hpi"),
+        mock.patch("hephaestus.automation._plan_phase.run") as mock_run,
+    ):
+        phase._generate(1357)
+    assert mock_run.call_args.kwargs["timeout"] == 7200
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +196,7 @@ def test_implement_phase_run_claude_code_dry_run(tmp_path: Path) -> None:
 def test_implement_phase_run_claude_code_dispatches_claude(tmp_path: Path) -> None:
     """_run_claude_code routes to the Claude session for non-direct agents."""
     ctx = _make_ctx(tmp_path)
-    ctx.impl._run_claude_impl_session = mock.MagicMock(return_value="sess-1")  # type: ignore[method-assign]
+    ctx.impl._run_claude_impl_session = mock.MagicMock(return_value="sess-1")  # type: ignore[attr-defined]
     phase = ImplementPhase(ctx)
     assert phase._run_claude_code(7, tmp_path, "prompt") == "sess-1"
     ctx.impl._run_claude_impl_session.assert_called_once()
@@ -193,9 +210,9 @@ def test_implement_phase_run_claude_code_dispatches_claude(tmp_path: Path) -> No
 def test_pr_create_finalize_persists_pr_number(tmp_path: Path) -> None:
     """_finalize_pr ensures the PR exists and persists its number on state."""
     ctx = _make_ctx(tmp_path)
-    ctx.impl._ensure_pr_created = mock.MagicMock(return_value=321)  # type: ignore[method-assign]
-    ctx.impl._commit_changes = mock.MagicMock()  # type: ignore[method-assign]
-    ctx.impl._run_tests_in_worktree = mock.MagicMock(return_value=True)  # type: ignore[method-assign]
+    ctx.impl._ensure_pr_created = mock.MagicMock(return_value=321)  # type: ignore[attr-defined]
+    ctx.impl._commit_changes = mock.MagicMock()  # type: ignore[attr-defined]
+    ctx.impl._run_tests_in_worktree = mock.MagicMock(return_value=True)  # type: ignore[attr-defined]
     phase = PRCreatePhase(ctx)
     state = SimpleNamespace(phase=None, pr_number=None)
     with mock.patch(
@@ -213,9 +230,9 @@ def test_pr_create_finalize_persists_pr_number(tmp_path: Path) -> None:
 def test_pr_create_finalize_commits_dirty_worktree_before_pr(tmp_path: Path) -> None:
     """_finalize_pr commits agent edits before push/PR creation."""
     ctx = _make_ctx(tmp_path)
-    ctx.impl._commit_changes = mock.MagicMock()  # type: ignore[method-assign]
-    ctx.impl._ensure_pr_created = mock.MagicMock(return_value=321)  # type: ignore[method-assign]
-    ctx.impl._run_tests_in_worktree = mock.MagicMock(return_value=True)  # type: ignore[method-assign]
+    ctx.impl._commit_changes = mock.MagicMock()  # type: ignore[attr-defined]
+    ctx.impl._ensure_pr_created = mock.MagicMock(return_value=321)  # type: ignore[attr-defined]
+    ctx.impl._run_tests_in_worktree = mock.MagicMock(return_value=True)  # type: ignore[attr-defined]
     parent = mock.MagicMock()
     parent.attach_mock(ctx.impl._commit_changes, "commit")
     parent.attach_mock(ctx.impl._ensure_pr_created, "ensure")
@@ -240,9 +257,9 @@ def test_pr_create_finalize_commits_dirty_worktree_before_pr(tmp_path: Path) -> 
 def test_pr_create_finalize_runs_pre_pr_tests_when_enabled(tmp_path: Path) -> None:
     """_finalize_pr runs the opt-in pre-PR test gate before creating the PR."""
     ctx = _make_ctx(tmp_path, run_pre_pr_tests=True)
-    ctx.impl._ensure_pr_created = mock.MagicMock(return_value=9)  # type: ignore[method-assign]
-    ctx.impl._commit_changes = mock.MagicMock()  # type: ignore[method-assign]
-    ctx.impl._run_tests_in_worktree = mock.MagicMock(return_value=False)  # type: ignore[method-assign]
+    ctx.impl._ensure_pr_created = mock.MagicMock(return_value=9)  # type: ignore[attr-defined]
+    ctx.impl._commit_changes = mock.MagicMock()  # type: ignore[attr-defined]
+    ctx.impl._run_tests_in_worktree = mock.MagicMock(return_value=False)  # type: ignore[attr-defined]
     phase = PRCreatePhase(ctx)
     state = SimpleNamespace(phase=None, pr_number=None)
     with mock.patch(
@@ -251,6 +268,20 @@ def test_pr_create_finalize_runs_pre_pr_tests_when_enabled(tmp_path: Path) -> No
     ):
         phase._finalize_pr(7, "b", tmp_path, cast(Any, state), slot_id=None)
     ctx.impl._run_tests_in_worktree.assert_called_once()
+
+
+def test_pr_create_run_tests_uses_env_configured_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pre-PR test subprocess timeout is centralized and env-tunable."""
+    monkeypatch.setenv("HEPH_PRE_PR_TEST_TIMEOUT", "777")
+    phase = PRCreatePhase(_make_ctx(tmp_path))
+    with mock.patch("hephaestus.automation._pr_create_phase.subprocess.run") as mock_run:
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        assert phase._run_tests_in_worktree(tmp_path, 7) is True
+
+    assert mock_run.call_args.kwargs["timeout"] == 777
 
 
 # ---------------------------------------------------------------------------
@@ -351,41 +382,47 @@ def test_review_phase_apply_verdict_mapping(
     assert mark_no_go.called is calls_no_go
 
 
-def test_review_phase_push_branch_raises_on_failure(tmp_path: Path) -> None:
-    """_push_branch raises RuntimeError on a failed git push (no silent swallow)."""
-    import subprocess
+def test_review_phase_push_branch_delegates(tmp_path: Path) -> None:
+    """_push_branch delegates to the canonical git helper."""
+    phase = ReviewPhase(_make_ctx(tmp_path))
+    with mock.patch("hephaestus.automation._review_phase.push_branch") as mock_push:
+        phase._push_branch("b", tmp_path)
 
+    mock_push.assert_called_once_with("b", tmp_path)
+
+
+def test_review_phase_commit_if_changes_delegates_to_git_utils(tmp_path: Path) -> None:
+    """_commit_if_changes delegates to the canonical git helper."""
     phase = ReviewPhase(_make_ctx(tmp_path))
     with mock.patch(
-        "hephaestus.automation._review_phase.run",
-        side_effect=subprocess.CalledProcessError(1, ["git", "push"]),
-    ):
-        with pytest.raises(RuntimeError, match="Failed to push branch"):
-            phase._push_branch("b", tmp_path)
-
-
-def test_review_phase_commit_if_changes_skips_secrets_via_commit_changes(tmp_path: Path) -> None:
-    """_commit_if_changes delegates to pr_manager.commit_changes (secret-skip path)."""
-    phase = ReviewPhase(_make_ctx(tmp_path))
-    dirty = SimpleNamespace(stdout=" M file.py\n")
-    with (
-        mock.patch("hephaestus.automation._review_phase.run", return_value=dirty),
-        mock.patch("hephaestus.automation._review_phase.commit_changes") as mock_commit,
-    ):
+        "hephaestus.automation._review_phase.commit_if_changes",
+        return_value=True,
+    ) as mock_commit:
         assert phase._commit_if_changes(7, tmp_path) is True
-    mock_commit.assert_called_once()
+
+    mock_commit.assert_called_once_with(
+        7,
+        tmp_path,
+        phase.options.agent,
+        committed_log_message="Committed in-loop address changes for issue #%s",
+    )
 
 
 def test_review_phase_commit_if_changes_clean_returns_false(tmp_path: Path) -> None:
     """_commit_if_changes returns False (no commit) when the worktree is clean."""
     phase = ReviewPhase(_make_ctx(tmp_path))
-    clean = SimpleNamespace(stdout="")
-    with (
-        mock.patch("hephaestus.automation._review_phase.run", return_value=clean),
-        mock.patch("hephaestus.automation._review_phase.commit_changes") as mock_commit,
-    ):
+    with mock.patch(
+        "hephaestus.automation._review_phase.commit_if_changes",
+        return_value=False,
+    ) as mock_commit:
         assert phase._commit_if_changes(7, tmp_path) is False
-    mock_commit.assert_not_called()
+
+    mock_commit.assert_called_once_with(
+        7,
+        tmp_path,
+        phase.options.agent,
+        committed_log_message="Committed in-loop address changes for issue #%s",
+    )
 
 
 # ---------------------------------------------------------------------------

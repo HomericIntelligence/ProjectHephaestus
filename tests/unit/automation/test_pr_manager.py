@@ -62,6 +62,60 @@ class TestCommitChanges:
         assert ".env" not in add_call
         assert "data.key" not in add_call
 
+    def test_allowed_paths_prevent_staging_unlisted_artifacts(self) -> None:
+        porcelain = " M hephaestus/automation/ci_driver.py\n?? output.log\n"
+        run_mock = MagicMock(
+            side_effect=[
+                _status(porcelain),  # git status
+                _status(""),  # git add
+                _status("M\thephaestus/automation/ci_driver.py\n"),  # changed files context
+                _status(" hephaestus/automation/ci_driver.py | 1 +\n"),  # stat context
+                _status(""),  # git commit
+            ]
+        )
+        issue = MagicMock(title="Fix CI driver")
+        with (
+            patch.object(pr_manager, "run", run_mock),
+            patch.object(pr_manager, "fetch_issue_info", return_value=issue),
+            patch.object(pr_manager, "_invoke_git_message_agent", return_value="not json"),
+        ):
+            pr_manager.commit_changes(
+                1405,
+                Path("/tmp/wt"),
+                allowed_paths=("hephaestus/automation/ci_driver.py",),
+            )
+
+        add_call = run_mock.call_args_list[1].args[0]
+        assert add_call == [
+            "git",
+            "add",
+            "--",
+            "hephaestus/automation/ci_driver.py",
+        ]
+
+    def test_commit_uses_cryptographic_signature_and_dco_signoff(self) -> None:
+        porcelain = " M src/foo.py\n"
+        run_mock = MagicMock(
+            side_effect=[
+                _status(porcelain),  # git status
+                _status(""),  # git add
+                _status("M\tsrc/foo.py\n"),  # changed files context
+                _status(" src/foo.py | 1 +\n"),  # stat context
+                _status(""),  # git commit
+            ]
+        )
+        issue = MagicMock(title="Add foo", body="Implement it.")
+        with (
+            patch.object(pr_manager, "run", run_mock),
+            patch.object(pr_manager, "fetch_issue_info", return_value=issue),
+            patch.object(pr_manager, "_invoke_git_message_agent", return_value="not json"),
+        ):
+            pr_manager.commit_changes(3, Path("/tmp/wt"))
+
+        commit_cmd = run_mock.call_args_list[-1].args[0]
+        assert commit_cmd[:4] == ["git", "commit", "-S", "-s"]
+        assert "-m" in commit_cmd
+
     def test_handles_renamed_files(self) -> None:
         porcelain = "R  old.py -> new.py\n"
         run_mock = MagicMock(
@@ -82,6 +136,28 @@ class TestCommitChanges:
             pr_manager.commit_changes(4, Path("/tmp/wt"))
         add_call = run_mock.call_args_list[1].args[0]
         assert "new.py" in add_call
+
+    def test_stages_deleted_files_without_pathspec(self) -> None:
+        porcelain = " D hephaestus/github/fleet_sync.py\n"
+        run_mock = MagicMock(
+            side_effect=[
+                _status(porcelain),
+                _status(""),
+                _status("D\thephaestus/github/fleet_sync.py\n"),
+                _status(" hephaestus/github/fleet_sync.py | 10 ----------\n"),
+                _status(""),
+            ]
+        )
+        issue = MagicMock(title="Delete obsolete module")
+        with (
+            patch.object(pr_manager, "run", run_mock),
+            patch.object(pr_manager, "fetch_issue_info", return_value=issue),
+            patch.object(pr_manager, "_invoke_git_message_agent", return_value="not json"),
+        ):
+            pr_manager.commit_changes(1406, Path("/tmp/wt"))
+
+        add_call = run_mock.call_args_list[1].args[0]
+        assert add_call == ["git", "add", "-u", "--", "hephaestus/github/fleet_sync.py"]
 
     def test_uses_message_agent_for_commit_subject_and_body(self) -> None:
         porcelain = " M LICENSE\n M NOTICE\n"
@@ -214,6 +290,7 @@ class TestEnsurePRCreated:
                 agent="claude",
                 base="master",
                 worktree_path=Path("/tmp/wt"),
+                git_message_timeout=1200,
             )
 
     def test_creates_pr_with_selected_agent_metadata(self) -> None:
@@ -239,6 +316,7 @@ class TestEnsurePRCreated:
                 agent="codex",
                 base="master",
                 worktree_path=Path("/tmp/wt"),
+                git_message_timeout=1200,
             )
 
 
@@ -340,7 +418,6 @@ class TestMessageAgentInvocation:
         with (
             patch.object(pr_manager, "get_repo_slug", return_value="ProjectHephaestus"),
             patch.object(pr_manager, "git_message_model", return_value="claude-haiku-4-5"),
-            patch.object(pr_manager, "git_message_agent_timeout", return_value=120),
             patch.object(
                 pr_manager,
                 "invoke_claude_with_session",
@@ -354,6 +431,7 @@ class TestMessageAgentInvocation:
                     prompt="prompt",
                     worktree_path=Path("/tmp/wt"),
                     agent="claude",
+                    timeout=120,
                 )
                 == "{}"
             )
@@ -370,7 +448,6 @@ class TestMessageAgentInvocation:
         )
         with (
             patch.dict("os.environ", {"HEPH_GIT_MESSAGE_MODEL": "gpt-5.4-mini"}),
-            patch.object(pr_manager, "git_message_agent_timeout", return_value=120),
             patch.object(pr_manager, "run_agent_text", return_value=completed) as run_agent,
         ):
             assert (
@@ -380,6 +457,7 @@ class TestMessageAgentInvocation:
                     prompt="prompt",
                     worktree_path=Path("/tmp/wt"),
                     agent="codex",
+                    timeout=120,
                 )
                 == "{}"
             )
@@ -394,7 +472,6 @@ class TestMessageAgentInvocation:
         completed = subprocess.CompletedProcess(args=["pi"], returncode=0, stdout="{}", stderr="")
         with (
             patch.object(pr_manager, "uses_direct_agent_runner", return_value=True),
-            patch.object(pr_manager, "git_message_agent_timeout", return_value=120),
             patch.object(pr_manager, "run_agent_text", return_value=completed) as run_agent,
         ):
             assert (
@@ -404,6 +481,7 @@ class TestMessageAgentInvocation:
                     prompt="prompt",
                     worktree_path=Path("/tmp/wt"),
                     agent="pi",
+                    timeout=120,
                 )
                 == "{}"
             )

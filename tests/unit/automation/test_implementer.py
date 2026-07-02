@@ -12,7 +12,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -92,6 +92,132 @@ def dry_run_implementer(tmp_path: Path) -> IssueImplementer:
     )
     with patch("hephaestus.automation.implementer.get_repo_root", return_value=tmp_path):
         return IssueImplementer(options)
+
+
+class TestIssueImplementerDynamicDelegates:
+    """Regression coverage for low-risk legacy helper lookup."""
+
+    PHASE_DELEGATES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "_parse_follow_up_items",
+            "_can_resume_state_session",
+            "_run_follow_up_issues",
+            "_learn_needs_rerun",
+            "_rerun_failed_learns",
+            "_run_learn",
+            "_run_advise_as_implementer_turn",
+            "_run_claude_impl_session",
+            "_run_codex_code",
+            "_save_review_log",
+            "_load_review_iteration_state",
+            # #1438: absorbed pure-forward phase delegates (were explicit methods)
+            "_finalize_pr",
+            "_run_post_pr_followup",
+            "_implement_issue",
+            "_has_plan",
+            "_generate_plan",
+            "_run_advise",
+            "_run_impl_review_loop",
+            "_run_impl_review_step",
+            "_run_address_review_step",
+            "_resume_impl_with_feedback",
+            "_run_impl_review",
+            "_collect_diff",
+            "_collect_changed_files",
+            "_save_review_iteration_state",
+            "_run_tests_in_worktree",
+            "_run_claude_code",
+            "_ensure_pr_created",
+        }
+    )
+    STATE_DELEGATES: ClassVar[dict[str, str]] = {
+        "_get_or_create_state": "get_or_create",
+        "_get_state": "get",
+        "_save_state": "save",
+        "_load_state": "load_all",
+    }
+
+    def test_dynamic_delegate_tables_are_exact(self) -> None:
+        assert IssueImplementer._PHASE_RUNNER_DYNAMIC_DELEGATES == self.PHASE_DELEGATES
+        assert IssueImplementer._STATE_MANAGER_DYNAMIC_DELEGATES == self.STATE_DELEGATES
+
+    @pytest.mark.parametrize("name", sorted(PHASE_DELEGATES))
+    def test_phase_runner_dynamic_delegate_resolves_to_runner(
+        self, dry_run_implementer: IssueImplementer, name: str
+    ) -> None:
+        assert getattr(dry_run_implementer, name) == getattr(dry_run_implementer.phase_runner, name)
+
+    @pytest.mark.parametrize(("name", "manager_method"), sorted(STATE_DELEGATES.items()))
+    def test_state_dynamic_delegate_resolves_to_state_manager(
+        self, dry_run_implementer: IssueImplementer, name: str, manager_method: str
+    ) -> None:
+        assert getattr(dry_run_implementer, name) == getattr(
+            dry_run_implementer.state_manager, manager_method
+        )
+
+    @pytest.mark.parametrize(
+        "name",
+        sorted(
+            PHASE_DELEGATES
+            | set(STATE_DELEGATES)
+            | {"_commit_changes", "_create_pr", "_print_summary"}
+        ),
+    )
+    def test_removed_delegates_are_not_class_methods(self, name: str) -> None:
+        assert name not in IssueImplementer.__dict__
+
+    def test_dynamic_commit_changes_passes_selected_agent(
+        self, dry_run_implementer: IssueImplementer, tmp_path: Path
+    ) -> None:
+        dry_run_implementer.options.agent = "codex"
+        with patch("hephaestus.automation.implementer.commit_changes") as commit:
+            dry_run_implementer._commit_changes(7, tmp_path)
+        commit.assert_called_once_with(7, tmp_path, "codex", git_message_timeout=1200)
+
+    def test_dynamic_create_pr_preserves_legacy_arguments(
+        self, dry_run_implementer: IssueImplementer
+    ) -> None:
+        dry_run_implementer.options.agent = "codex"
+        with patch("hephaestus.automation.implementer.create_pr", return_value=42) as create:
+            assert dry_run_implementer._create_pr(7, "7-auto-impl") == 42
+        create.assert_called_once_with(
+            7, "7-auto-impl", auto_merge=False, agent="codex", git_message_timeout=1200
+        )
+
+    def test_dynamic_summary_printer_constructs_at_call_time(
+        self, dry_run_implementer: IssueImplementer
+    ) -> None:
+        results = {1: WorkerResult(issue_number=1, success=True)}
+        with patch("hephaestus.automation.implementer.ImplementationSummaryPrinter") as printer:
+            dry_run_implementer._print_summary(results)
+        printer.assert_called_once_with(dry_run_implementer.worktree_manager)
+        printer.return_value.print.assert_called_once_with(results)
+
+    def test_patch_object_still_intercepts_dynamic_delegate(
+        self, dry_run_implementer: IssueImplementer
+    ) -> None:
+        with patch.object(dry_run_implementer, "_save_state") as save_state:
+            dry_run_implementer._save_state(MagicMock())
+        save_state.assert_called_once()
+        assert "_save_state" not in dry_run_implementer.__dict__
+
+    def test_instance_assignment_still_shadows_dynamic_commit_delegate(
+        self, dry_run_implementer: IssueImplementer, tmp_path: Path
+    ) -> None:
+        assigned_commit = MagicMock()
+        dry_run_implementer._commit_changes = assigned_commit  # type: ignore[attr-defined]
+        dry_run_implementer._commit_changes(7, tmp_path)
+        assigned_commit.assert_called_once_with(7, tmp_path)
+
+    def test_unknown_private_attribute_raises_attribute_error(
+        self, dry_run_implementer: IssueImplementer
+    ) -> None:
+        with pytest.raises(
+            AttributeError,
+            match="IssueImplementer object has no attribute '_sav_state'",
+        ):
+            missing_name = "_sav_state"
+            getattr(dry_run_implementer, missing_name)
 
 
 # ---------------------------------------------------------------------------

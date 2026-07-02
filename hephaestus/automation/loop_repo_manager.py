@@ -18,6 +18,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from hephaestus.automation.ci_driver import _pr_is_failing
+from hephaestus.automation.git_utils import COMMIT_POLICY_REWRITE_EXEC
+from hephaestus.automation.github_api import skip_epics
+from hephaestus.automation.state_labels import partition_epics
 from hephaestus.github.client import gh_call
 from hephaestus.resilience.subprocess_resilience import resilient_call
 from hephaestus.utils.helpers import METADATA_TIMEOUT, NETWORK_TIMEOUT
@@ -28,10 +31,12 @@ LOG = logging.getLogger(__name__)
 def _detect_cwd_repo() -> tuple[str | None, str | None]:
     """Return ``(org, repo_name)`` for the current working directory.
 
-    Returns ``(None, None)`` when cwd is not inside a git repo or has no
-    parseable github.com origin remote. ``org`` is parsed from
-    ``git remote get-url origin``; ``repo_name`` is the basename of
-    ``git rev-parse --show-toplevel``.
+    Returns ``(None, None)`` when cwd is not inside a git repo. For GitHub
+    origin remotes, both ``org`` and ``repo_name`` come from
+    ``git remote get-url origin`` so automation worktree names such as
+    ``issue-1442`` do not masquerade as repository names. Non-GitHub remotes
+    preserve the historical fallback of returning the local top-level basename
+    with ``org`` set to ``None``.
     """
     try:
         top = subprocess.run(
@@ -71,9 +76,11 @@ def _detect_cwd_repo() -> tuple[str | None, str | None]:
         path = path_part.lstrip("/")
 
     if host == "github.com":
-        parts = path.split("/", 1)
+        parts = path.strip("/").split("/", 1)
         if len(parts) == 2:
             org = parts[0] or None
+            remote_repo = parts[1].removesuffix(".git")
+            repo = remote_repo or repo
 
     return (org, repo)
 
@@ -109,7 +116,7 @@ def _gh_list_repos(org: str) -> list[str]:
 
 
 def _list_open_issue_numbers(org: str, repo: str) -> list[int]:
-    """Return ALL open issue numbers in ``org/repo``, sorted ascending.
+    """Return open NON-epic issue numbers in ``org/repo``, sorted ascending.
 
     This is the loop's single canonical issue-discovery call: the result is
     passed down to the plan/implement child phases via ``--issues`` so they do
@@ -117,6 +124,14 @@ def _list_open_issue_numbers(org: str, repo: str) -> list[int]:
     (no ``@me`` author/assignee filter) so it matches the child phases'
     ``gh_list_open_issues`` semantics exactly — the loop's convergence and
     failing-PR gates then agree with the work the phases actually do.
+
+    Epic/roadmap **tracking** issues are excluded (#1669): they are checklists
+    of child work, not code tasks, so the loop must never plan/implement them.
+    Each excluded epic is tagged ``state:skip`` (best-effort) via
+    :func:`skip_epics` so dashboards see it as intentionally bypassed; that
+    tagging never raises and never affects the returned list. Detection uses
+    label names + title because native GitHub issue types are not exposed by the
+    installed ``gh`` — see :func:`~hephaestus.automation.state_labels.is_epic`.
 
     Sorted ascending so the implementer phase processes oldest-first. Returns
     an empty list on any failure (rate limit, auth error, timeout) so callers
@@ -134,14 +149,38 @@ def _list_open_issue_numbers(org: str, repo: str) -> list[int]:
                 "--limit",
                 "500",
                 "--json",
-                "number",
-                "--jq",
-                ".[].number",
+                "number,labels,title",
             ],
         )
-    except (subprocess.SubprocessError, RuntimeError, OSError):
+        entries = json.loads(out.stdout or "[]")
+    except (subprocess.SubprocessError, RuntimeError, OSError, json.JSONDecodeError):
         return []
-    return sorted(int(x) for x in out.stdout.split() if x.strip().isdigit())
+
+    meta = [
+        {
+            "number": e["number"],
+            "labels": [lbl["name"] for lbl in e.get("labels", [])],
+            "title": e.get("title", ""),
+        }
+        for e in entries
+        if isinstance(e, dict) and "number" in e
+    ]
+    kept, epics = partition_epics(meta)
+    if epics:
+        epic_set = set(epics)
+        for num in epics:
+            LOG.info(
+                "[%s] issue #%s is an epic/roadmap tracking issue; excluding from planning loop",
+                repo,
+                num,
+            )
+        epic_labels = {m["number"]: m["labels"] for m in meta if m["number"] in epic_set}
+        # Best-effort skip-tagging: never let a label write break discovery.
+        try:
+            skip_epics(epic_labels)
+        except Exception as exc:  # pragma: no cover - defensive
+            LOG.warning("[%s] could not tag excluded epics state:skip: %s", repo, exc)
+    return kept
 
 
 def _count_open_issues(org: str, repo: str) -> int:
@@ -309,6 +348,10 @@ def _rebase_main(repo: str, repo_dir: Path) -> tuple[str, bool]:
     would propagate the "stale" marker into every child session label and
     would also break any future caller that consumed the env var as a git
     ref. The staleness is conveyed via the second return value instead.
+
+    If the local checkout is ahead of the detected base ref, the rebase uses a
+    per-commit exec hook that re-signs and DCO-signs replayed commits so repo
+    preparation cannot silently create PR-policy-invalid history.
     """
     fetch_ok = True
     try:
@@ -342,8 +385,12 @@ def _rebase_main(repo: str, repo_dir: Path) -> tuple[str, bool]:
             fetch_ok = False
     base_ref = _detect_remote_base_ref(repo, repo_dir)
     local_ahead = _local_ahead_count(repo, repo_dir, base_ref)
+    rebase_cmd = ["git", "-C", str(repo_dir), "rebase", base_ref]
+    if local_ahead > 0:
+        rebase_cmd.extend(["--exec", COMMIT_POLICY_REWRITE_EXEC])
+    rebase_cmd.append("--quiet")
     rb = subprocess.run(
-        ["git", "-C", str(repo_dir), "rebase", base_ref, "--quiet"],
+        rebase_cmd,
         capture_output=True,
         text=True,
         check=False,

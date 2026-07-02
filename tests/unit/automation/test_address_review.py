@@ -3,6 +3,7 @@
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -132,36 +133,58 @@ class TestLoadImplSessionId:
 
 
 # ---------------------------------------------------------------------------
-# _parse_json_block (instance method on AddressReviewer)
+# Address-review parse tracing
 # ---------------------------------------------------------------------------
 
 
-class TestParseJsonBlock:
-    """Tests for AddressReviewer._parse_json_block."""
+class TestAddressReviewParseTracing:
+    """AddressReviewer keeps standalone trace diagnostics through the shared parser."""
 
-    def test_extracts_last_json_block(self, reviewer: AddressReviewer) -> None:
-        """Returns last parsed JSON block from Claude output."""
-        payload = {"addressed": ["thread-1", "thread-2"], "replies": {"thread-1": "Fixed"}}
-        text = (
-            "Some output\n"
-            "```json\n"
-            '{"addressed": ["old"], "replies": {}}\n'
-            "```\n"
-            "More output\n"
-            "```json\n" + json.dumps(payload) + "\n```"
-        )
-        result = reviewer._parse_json_block(text)
-        assert result["addressed"] == ["thread-1", "thread-2"]
+    def test_missing_block_writes_address_trace_and_warning(
+        self,
+        reviewer: AddressReviewer,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        reviewer.state_dir = tmp_path
 
-    def test_no_block_returns_defaults(self, reviewer: AddressReviewer) -> None:
-        """No json block → returns defaults with empty addressed list."""
-        result = reviewer._parse_json_block("No json here.")
+        def fake_run_address_fix_session(**kwargs: Any) -> dict[str, Any]:
+            return kwargs["parse_fn"]("No json here.")
+
+        with patch(
+            "hephaestus.automation.address_review.run_address_fix_session",
+            side_effect=fake_run_address_fix_session,
+        ):
+            result = reviewer._run_fix_session(123, 456, tmp_path, [], session_id=None)
+
         assert result == {"addressed": [], "replies": {}}
+        trace = tmp_path / "address-123.parse-error.log"
+        assert trace.exists()
+        assert "reason: no fenced ```json block found in response" in trace.read_text()
+        assert "Issue #123: address-review JSON parse failed" in caplog.text
 
-    def test_invalid_json_returns_defaults(self, reviewer: AddressReviewer) -> None:
-        """Invalid json block → returns defaults."""
-        result = reviewer._parse_json_block("```json\n{broken!!}\n```")
+    def test_invalid_block_writes_last_block_in_address_trace(
+        self,
+        reviewer: AddressReviewer,
+        tmp_path: Path,
+    ) -> None:
+        reviewer.state_dir = tmp_path
+        text = "```json\n{broken!!}\n```"
+
+        def fake_run_address_fix_session(**kwargs: Any) -> dict[str, Any]:
+            return kwargs["parse_fn"](text)
+
+        with patch(
+            "hephaestus.automation.address_review.run_address_fix_session",
+            side_effect=fake_run_address_fix_session,
+        ):
+            result = reviewer._run_fix_session(123, 456, tmp_path, [], session_id=None)
+
         assert result == {"addressed": [], "replies": {}}
+        payload = (tmp_path / "address-123.parse-error.log").read_text()
+        assert "reason: json.JSONDecodeError:" in payload
+        assert "=== last fenced block (if any) ===\n{broken!!}" in payload
+        assert "=== full response ===\n" in payload
 
 
 def test_codex_fix_session_falls_back_to_fresh_on_resume_failure(
@@ -299,21 +322,23 @@ class TestResolveAddressedThreads:
 class TestCommitIfChanges:
     """Tests for AddressReviewer._commit_if_changes."""
 
-    def test_forwards_selected_agent_to_commit_changes(
+    def test_forwards_selected_agent_to_git_utils(
         self, reviewer: AddressReviewer, tmp_path: Path
     ) -> None:
         reviewer.options.agent = "codex"
 
-        with (
-            patch(
-                "hephaestus.automation.address_review.run",
-                return_value=MagicMock(stdout=" M fixed.py\n"),
-            ),
-            patch("hephaestus.automation.pr_manager.commit_changes") as mock_commit,
-        ):
+        with patch(
+            "hephaestus.automation.address_review.commit_if_changes",
+            return_value=True,
+        ) as mock_commit:
             reviewer._commit_if_changes(123, tmp_path)
 
-        mock_commit.assert_called_once_with(123, tmp_path, "codex")
+        mock_commit.assert_called_once_with(
+            123,
+            tmp_path,
+            "codex",
+            committed_log_message="Committed fix changes for issue #%s",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +405,7 @@ class TestAddressIssue:
 
     def test_no_pr_found_skips_run(self, reviewer: AddressReviewer) -> None:
         """No PR for any issue → run() returns {} without launching any workers."""
-        with patch.object(reviewer, "_find_pr_for_issue", return_value=None):
+        with patch("hephaestus.automation.address_review.find_pr_for_issue", return_value=None):
             results = reviewer.run()
 
         assert results == {}

@@ -15,12 +15,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from hephaestus.constants import (
+    agent_auth_status_timeout,
+)
+from hephaestus.utils.helpers import strip_null_bytes
+
 AgentName = Literal["claude", "codex", "pi"]
 SubprocessCommandPart = str | bytes | os.PathLike[str] | os.PathLike[bytes]
 SubprocessCommand = SubprocessCommandPart | Sequence[SubprocessCommandPart]
 AGENT_CHOICES: tuple[AgentName, ...] = ("claude", "codex", "pi")
 DEFAULT_AGENT: AgentName = "claude"
-AGENT_AUTH_STATUS_TIMEOUT = 10
+CODEX_HELP_PROBE_SECONDS = 10
+GIT_COMMON_DIR_PROBE_SECONDS = 5
+CODEX_TERMINATION_GRACE_SECONDS = 5
 CODEX_FINAL_MESSAGE_GRACE_ENV = "HEPH_CODEX_FINAL_MESSAGE_GRACE"
 CODEX_FINAL_MESSAGE_GRACE_SECONDS = 5.0
 CODEX_OPUS_MODEL = "gpt-5.5"
@@ -30,16 +37,25 @@ CODEX_SONNET_REASONING_EFFORT = "medium"
 CODEX_HAIKU_MODEL = "gpt-5.4-mini"
 CODEX_DEFAULT_MODEL = CODEX_OPUS_MODEL
 CODEX_DEFAULT_REASONING_EFFORT = CODEX_OPUS_REASONING_EFFORT
+PI_PROVIDER_ENV = "HEPH_PI_PROVIDER"
 PI_MODEL_ENV = "HEPH_PI_MODEL"
 PI_MODEL_CONFIG_RELATIVE_PATH = Path(".pi") / "agent" / "models.json"
 PI_PRIVATE_DENYLIST_FILENAME = ".heph-private-denylist"
 PI_PRIVATE_REDACTION = "<redacted-pi-private-value>"
 PI_READ_ONLY_TOOLS = "read,grep,find,ls"
+REQUIRED_ALIAS_ENVS: tuple[str, ...] = (PI_PROVIDER_ENV, PI_MODEL_ENV)
 AGENT_AUTH_STATUS_COMMANDS: dict[AgentName, tuple[tuple[str, ...], ...]] = {
     "claude": (("claude", "auth", "status"),),
     "codex": (("codex", "login", "status"),),
     "pi": (("pi", "--version"),),
 }
+
+
+def missing_pi_alias_env(
+    required: tuple[str, ...] = REQUIRED_ALIAS_ENVS,
+) -> list[str]:
+    """Return required Pi alias env vars that are unset or blank."""
+    return [name for name in required if not os.environ.get(name, "").strip()]
 
 
 @dataclass(frozen=True)
@@ -115,7 +131,7 @@ def is_agent_authenticated(agent: AgentName) -> bool:
                 list(cmd),
                 text=True,
                 capture_output=True,
-                timeout=AGENT_AUTH_STATUS_TIMEOUT,
+                timeout=agent_auth_status_timeout(),
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -314,9 +330,12 @@ def run_claude_text(
     cid = get_current_correlation_id()
     if cid:
         env["GH_TRACE_ID"] = cid
+    # A NUL in the prompt would make subprocess.run raise ``ValueError: embedded
+    # null byte`` while marshaling text stdin, before the child runs (#1661). The
+    # prompt is assembled from untrusted multi-source text; strip defensively.
     return subprocess.run(
         cmd,
-        input=prompt,
+        input=strip_null_bytes(prompt),
         cwd=cwd,
         text=True,
         stdout=subprocess.PIPE,
@@ -335,7 +354,7 @@ def codex_approval_args(approval: str) -> list[str]:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=10,
+            timeout=CODEX_HELP_PROBE_SECONDS,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -404,7 +423,7 @@ def _codex_extra_writable_dirs(cwd: Path, sandbox: str | None) -> list[Path]:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=5,
+            timeout=GIT_COMMON_DIR_PROBE_SECONDS,
             check=True,
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
@@ -637,14 +656,11 @@ def _run_codex_command(
     return AgentRunResult(stdout=stdout, stderr=stderr_text, session_id=session_id)
 
 
-def _pi_base_cmd(*, model: str = "", session_id: str | None = None) -> list[str]:
-    """Build a Pi JSON-mode command."""
-    resolved_model = model or os.environ.get(PI_MODEL_ENV, "")
+def _pi_base_cmd(*, session_id: str | None = None) -> list[str]:
+    """Build a Pi JSON-mode command without alias values in argv."""
     cmd = ["pi", "--mode", "json"]
     if session_id:
         cmd.extend(["--session", session_id])
-    if resolved_model:
-        cmd.extend(["--model", resolved_model])
     return cmd
 
 
@@ -668,9 +684,11 @@ def _pi_sandbox_args(sandbox: str) -> list[str]:
     raise ValueError(f"Unsupported Pi sandbox mode: {sandbox}")
 
 
-def _pi_env() -> dict[str, str]:
+def _pi_env(*, model: str = "") -> dict[str, str]:
     """Return a privacy-biased environment for Pi subprocesses."""
     env = os.environ.copy()
+    if model:
+        env[PI_MODEL_ENV] = model
     env.setdefault("PI_TELEMETRY", "0")
     env.setdefault("PI_SKIP_VERSION_CHECK", "1")
     return env
@@ -683,6 +701,7 @@ def _run_pi_command(
     cwd: Path,
     timeout: int,
     sandbox: str,
+    model: str = "",
 ) -> subprocess.CompletedProcess[str]:
     """Run Pi with prompt content attached via an ephemeral file, not argv."""
     prompt_path: Path | None = None
@@ -706,7 +725,7 @@ def _run_pi_command(
                 text=True,
                 capture_output=True,
                 timeout=timeout,
-                env=_pi_env(),
+                env=_pi_env(model=model),
                 check=True,
             )
         except subprocess.CalledProcessError as exc:
@@ -763,13 +782,14 @@ def run_pi_session(
 ) -> AgentRunResult:
     """Run a new Pi JSON-mode session and capture its id."""
     del approval
-    cmd = _pi_base_cmd(model=model)
+    cmd = _pi_base_cmd()
     result = _run_pi_command(
         cmd,
         prompt=prompt,
         cwd=cwd,
         timeout=timeout,
         sandbox=sandbox,
+        model=model,
     )
     session_id, event_message = _parse_pi_json_events(result.stdout or "")
     stdout = (event_message or result.stdout or "").strip()
@@ -785,13 +805,14 @@ def resume_pi_session(
     model: str = "",
 ) -> AgentRunResult:
     """Resume a Pi JSON-mode session by id."""
-    cmd = _pi_base_cmd(model=model, session_id=session_id)
+    cmd = _pi_base_cmd(session_id=session_id)
     result = _run_pi_command(
         cmd,
         prompt=prompt,
         cwd=cwd,
         timeout=timeout,
         sandbox="workspace-write",
+        model=model,
     )
     parsed_session_id, event_message = _parse_pi_json_events(result.stdout or "")
     stdout = (event_message or result.stdout or "").strip()
@@ -904,7 +925,10 @@ def _communicate_codex_process(
     )
     started_at = time.monotonic()
     final_seen_at: float | None = None
-    input_text: str | None = prompt
+    # Strip NUL bytes: proc.communicate(input=...) marshals text stdin and would
+    # raise ``ValueError: embedded null byte`` on a stray NUL, before Codex runs
+    # (#1661) — the same crash the Claude path guards against.
+    input_text: str | None = strip_null_bytes(prompt)
     grace_seconds = _codex_final_message_grace_seconds()
 
     while True:
@@ -947,7 +971,7 @@ def _terminate_codex_process(proc: subprocess.Popen[str]) -> tuple[str, str]:
     if proc.poll() is None:
         proc.terminate()
     try:
-        stdout_text, stderr_text = proc.communicate(timeout=5)
+        stdout_text, stderr_text = proc.communicate(timeout=CODEX_TERMINATION_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
         proc.kill()
         stdout_text, stderr_text = proc.communicate()

@@ -1,7 +1,8 @@
 """GitHub rate-limit detection and wait utilities.
 
 Parses GitHub CLI rate-limit messages and provides blocking waits
-with countdown display.  All functions use only the standard library.
+with countdown display. Subprocess probes route through ProjectHephaestus's
+shared helper for consistent timeout handling.
 
 Usage:
     from hephaestus.github.rate_limit import detect_rate_limit, wait_until
@@ -28,11 +29,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
 
+from hephaestus.utils.helpers import run_subprocess
+
 logger = logging.getLogger(__name__)
 
 try:
     from zoneinfo import ZoneInfo
 except ImportError:  # pragma: no cover – Python 3.8 backport
+    # WHY justified: the backports.zoneinfo fallback rebinds the same `ZoneInfo`
+    # name as the stdlib import above, which mypy flags as [no-redef].
     from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
 
 # Regex matching GitHub CLI rate-limit messages, e.g.:
@@ -249,12 +254,11 @@ def gh_rate_limit_reset_epoch(resource: str = "graphql") -> int | None:
         return cached[0]
 
     try:
-        result = subprocess.run(
+        result = run_subprocess(
             ["gh", "api", "rate_limit"],
-            capture_output=True,
             check=True,
-            text=True,
             timeout=10,
+            log_on_error=False,
         )
         payload = json.loads(result.stdout)
         reset_val = payload.get("resources", {}).get(resource, {}).get("reset")

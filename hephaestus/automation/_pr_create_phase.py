@@ -13,6 +13,8 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from hephaestus.constants import pre_pr_test_timeout
+
 from ._stage_context import StageMixin
 from .git_utils import issue_ref, run
 from .models import ImplementationPhase, ImplementationState
@@ -66,7 +68,7 @@ class PRCreatePhase(StageMixin):
                     issue_number,
                 )
 
-        pr_number = impl._ensure_pr_created(issue_number, branch_name, worktree_path, slot_id)
+        pr_number: int = impl._ensure_pr_created(issue_number, branch_name, worktree_path, slot_id)
         with self.state_lock:
             state.pr_number = pr_number
         impl._save_state(state)
@@ -74,13 +76,14 @@ class PRCreatePhase(StageMixin):
 
     def _run_tests_in_worktree(self, worktree_path: Path, issue_number: int) -> bool:
         """Run the unit test suite inside the worktree as a pre-PR gate (A2-004)."""
+        timeout_s = pre_pr_test_timeout()
         try:
             result = subprocess.run(
                 ["pixi", "run", "pytest", "tests/unit", "-q", "--tb=short"],
                 cwd=worktree_path,
                 capture_output=True,
                 text=True,
-                timeout=600,
+                timeout=timeout_s,
             )
             if result.returncode == 0:
                 logger.info("#%d: pre-PR tests passed", issue_number)
@@ -93,7 +96,7 @@ class PRCreatePhase(StageMixin):
             )
             return False
         except subprocess.TimeoutExpired:
-            logger.warning("#%d: pre-PR tests timed out after 600s", issue_number)
+            logger.warning("#%d: pre-PR tests timed out after %ss", issue_number, timeout_s)
             return False
         except Exception as e:
             logger.warning("#%d: pre-PR tests could not run: %s", issue_number, e)

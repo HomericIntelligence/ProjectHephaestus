@@ -41,6 +41,7 @@ ProjectHephaestus/
 │   ├── markdown/               # Markdown linting and link fixing
 │   ├── nats/                   # NATS JetStream subscriber (event-driven workflows)
 │   ├── resilience/             # Circuit breaker + retry + subprocess resilience
+│   ├── scripts_lib/            # Standalone consistency-check scripts (CLI table, version)
 │   ├── system/                 # System information collection
 │   ├── utils/                  # General utility functions (slugify, retry, subprocess)
 │   ├── validation/             # README, schema, and structural validation
@@ -64,12 +65,29 @@ codebase) co-located with the utility library. It is gated behind the
 `HomericIntelligence-Hephaestus[automation]` optional extra. The base
 `import hephaestus` surface MUST NOT pull `curses`, `fcntl`, `pydantic`,
 or any `hephaestus.automation.*` module. Enforced by
-`tests/unit/test_import_surface.py` (subprocess) and
-`tests/unit/test_automation_boundary.py` (static grep).
+`tests/unit/validation/test_import_surface.py` (subprocess) and
+`tests/unit/validation/test_automation_boundary.py` (static grep).
 
 Library subpackages of `hephaestus` may not import from
 `hephaestus.automation`. The dependency arrow points only one way:
 automation → library. See `docs/adr/0001-automation-library-boundary.md`.
+
+Significant architectural decisions are recorded as ADRs in `docs/adr/`; see
+`docs/adr/README.md` for the enumerable index.
+
+### Coverage omit-list invariant
+
+A small set of `hephaestus/automation/*` orchestration modules whose loops
+shell out to live `claude`/`gh` CLIs are excluded from coverage via
+`[tool.coverage.run].omit`. The contract: an omitted module's pure-function
+helpers MUST still be unit-tested in `tests/unit/automation/`. This is enforced
+executably — `tests/unit/validation/test_omit_allowlist.py` freezes the list's
+membership, and `tests/unit/validation/test_omit_justification.py` (using `ast`
+import-parsing) fails CI if any omitted module lacks a backing unit-test suite.
+That guard checks a *proxy* (a test file imports the module and defines a test),
+not that every helper is asserted. Reducing the omit list (target: −50% over two
+releases, issue #1422) means promoting a module's orchestration logic to
+mocked-subprocess unit coverage and removing its `omit` entry.
 
 ## Python Development Guidelines
 
@@ -224,31 +242,36 @@ If you are a myrmidon-swarm subagent with a specific task prompt, skip this and 
 
 ### Skill Catalog
 
-| Skill | When to Use |
-|-------|-------------|
-| `skill-advisor` | Before any task — routes to the correct skill |
-| `advise` | Before starting work — search ProjectMnemosyne for prior learnings |
-| `learn` | After completing work — capture session learnings in ProjectMnemosyne |
-| `myrmidon-swarm` | Complex multi-step tasks requiring parallel agent coordination |
-| `brainstorm` | Before implementing a new feature — design before code |
-| `test-driven-development` | Before writing implementation code — RED-GREEN-REFACTOR |
-| `systematic-debugging` | Before proposing fixes — root cause first |
-| `verification` | Before claiming work is done — evidence before assertions |
-| `git-worktrees` | When needing isolated branch workspace |
-| `finish-branch` | When implementation is complete — branch completion workflow |
-| `code-review` | After major feature completion — Sonnet reviewer + feedback reception |
-| `repo-analyze` | Comprehensive 15-dimension repository audit |
-| `repo-analyze-quick` | Quick repository health check |
-| `repo-analyze-strict` | Ruthlessly thorough repository audit |
-| `repo-analyze-full` | Full-coverage audit — one swarm agent per section, no sampling cap |
-| `repo-analyze-quick-full` | Quick health check with full file coverage |
-| `repo-analyze-strict-full` | Strict audit with full file coverage (swarm per section) |
-| `review-pr-strict` | Ruthlessly thorough PR-alignment audit with full coverage |
-| `worktree-cleanup` | Audit + prune git worktrees (never deletes branches) |
-| `tidy` | Rebase all local branches with swarm conflict resolution |
-| `create-reusable-utilities` | Port/generalize utility scripts for cross-project reuse |
-| `github-actions-python-cicd` | Set up a Python GitHub Actions CI/CD pipeline |
-| `python-repo-modernization` | Bring a Python repo to production-grade quality |
+Invoke a skill with `Skill(skill: "hephaestus:<name>", args: "<argument>")`, or
+`/hephaestus:<name> <argument>` interactively. The **Arguments** column mirrors each
+skill's `argument-hint` frontmatter in `skills/<name>/SKILL.md`; `—` means the skill
+takes no argument.
+
+| Skill | Arguments | When to Use |
+|-------|-----------|-------------|
+| `skill-advisor` | `<task description>` | Before any task — routes to the correct skill |
+| `advise` | `<task description>` | Before starting work — search ProjectMnemosyne for prior learnings |
+| `learn` | — | After completing work — capture session learnings in ProjectMnemosyne |
+| `myrmidon-swarm` | `<task description>` | Complex multi-step tasks requiring parallel agent coordination |
+| `brainstorm` | `<idea or feature description>` | Before implementing a new feature — design before code |
+| `test-driven-development` | `<feature or bugfix description>` | Before writing implementation code — RED-GREEN-REFACTOR |
+| `systematic-debugging` | `<description of the bug or failure>` | Before proposing fixes — root cause first |
+| `verification` | `<what you are verifying>` | Before claiming work is done — evidence before assertions |
+| `git-worktrees` | `<branch-name or feature description>` | When needing isolated branch workspace |
+| `finish-branch` | `"<optional: base branch name>"` | When implementation is complete — branch completion workflow |
+| `code-review` | `<what was implemented>` | After major feature completion — Sonnet reviewer + feedback reception |
+| `repo-analyze` | — | Comprehensive 15-dimension repository audit |
+| `repo-analyze-quick` | — | Quick repository health check |
+| `repo-analyze-strict` | — | Ruthlessly thorough repository audit |
+| `repo-analyze-full` | — | Full-coverage audit — one swarm agent per section, no sampling cap |
+| `repo-analyze-quick-full` | — | Quick health check with full file coverage |
+| `repo-analyze-strict-full` | — | Strict audit with full file coverage (swarm per section) |
+| `review-pr-strict` | — | Ruthlessly thorough PR-alignment audit with full coverage |
+| `worktree-cleanup` | `"<optional: --dry-run>"` | Audit + prune git worktrees (never deletes branches) |
+| `tidy` | `"<optional: --dry-run \| --no-swarm \| --trunk BRANCH \| --max-concurrent N>"` | Rebase all local branches with swarm conflict resolution |
+| `create-reusable-utilities` | — | Port/generalize utility scripts for cross-project reuse |
+| `github-actions-python-cicd` | — | Set up a Python GitHub Actions CI/CD pipeline |
+| `python-repo-modernization` | `<path to Python repo to modernize>` | Bring a Python repo to production-grade quality |
 
 ### Agent Skills vs Sub-Agents Decision Tree
 
@@ -298,7 +321,9 @@ gh issue comment <number> --body "Completed implementation of new logging utilit
 1. The PR body MUST contain the literal line `Closes #<issue-number>` (capital
    `C`, no colon, on its own line). `Fixes`, `Resolves`, `closes`, and
    `Closes:` are NOT accepted.
-2. Auto-merge MUST be enabled (`gh pr merge --auto --squash`) (squash-only; rebase is disabled).
+2. Auto-merge MUST stay disabled until implementation review applies
+   `state:implementation-go`; then enable it with `gh pr merge --auto --squash`
+   (squash-only; rebase is disabled).
 3. Every commit MUST be cryptographically signed (`git commit -S`).
 
 CI blocks PRs that fail any of these checks. No exceptions, including
@@ -321,7 +346,8 @@ gh pr create \
   --title "[Type] Brief description" \
   --body "$(printf 'Summary of change.\n\nCloses #<issue-number>\n')"
 
-# 5. Enable auto-merge (mandatory; squash-only — rebase is disabled)
+# 5. After implementation review marks the PR `state:implementation-go`,
+#    enable auto-merge (mandatory; squash-only — rebase is disabled)
 gh pr merge --auto --squash
 ```
 
@@ -358,14 +384,27 @@ pixi run pytest tests/unit --cov=hephaestus --cov-report=html
 
 ## Environment Setup
 
-This project uses [Pixi](https://pixi.sh) for environment management:
+This project uses [Pixi](https://pixi.sh) for environment management. The
+one-command bootstrap (deps + editable install + pre-commit hooks) is
+`just bootstrap`:
 
 ```bash
-# Install dependencies and create environment
+# Install deps, the editable hephaestus package, and pre-commit hooks
+just bootstrap
+```
+
+`just bootstrap` wraps the three commands below. Run them manually if you do
+not have [`just`](https://just.systems/) installed:
+
+```bash
+# 1. Install dependencies and create the environment
 pixi install
 
-# Run pre-commit hooks (formatting, linting, etc.)
-pre-commit install
+# 2. Editable-install hephaestus so `import hephaestus` works at runtime
+pixi run dev-install
+
+# 3. Install the pre-commit hooks (pixi-managed binary)
+pixi run pre-commit install
 ```
 
 ## Common Commands

@@ -2,17 +2,27 @@
 
 from datetime import datetime
 
+import pytest
+
 from hephaestus.automation.models import (
+    DEFAULT_WORKER_COUNT,
+    AddressReviewOptions,
+    CIDriverOptions,
     DependencyGraph,
     ImplementationPhase,
     ImplementationState,
     ImplementerOptions,
     IssueInfo,
     IssueState,
+    ParallelWorkerOptionsBase,
     PlannerOptions,
     PlanResult,
+    PlanReviewerOptions,
+    ReviewerOptions,
     ReviewPhase,
     ReviewState,
+    VerboseParallelWorkerOptionsBase,
+    WorkerOptionsBase,
     WorkerResult,
 )
 
@@ -279,6 +289,85 @@ class TestWorkerResult:
         assert result.pr_number is None
 
 
+class TestWorkerOptionsBase:
+    """Tests for shared worker option defaults."""
+
+    def test_base_defaults_and_model_dump(self) -> None:
+        """WorkerOptionsBase exposes only the dry-run field."""
+        options = WorkerOptionsBase()
+
+        assert WorkerOptionsBase.model_fields["dry_run"].default is False
+        assert "verbose" not in WorkerOptionsBase.model_fields
+        assert options.model_dump() == {"dry_run": False}
+
+    def test_parallel_and_verbose_base_defaults(self) -> None:
+        """Narrow worker base classes expose only their shared fields."""
+        assert ParallelWorkerOptionsBase.model_fields["max_workers"].default == DEFAULT_WORKER_COUNT
+        assert VerboseParallelWorkerOptionsBase.model_fields["verbose"].default is False
+
+    def test_all_option_models_inherit_shared_fields(self) -> None:
+        """Every automation option model inherits dry-run and omits state_dir."""
+        for model_cls in (
+            PlannerOptions,
+            ImplementerOptions,
+            ReviewerOptions,
+            PlanReviewerOptions,
+            AddressReviewOptions,
+            CIDriverOptions,
+        ):
+            assert issubclass(model_cls, WorkerOptionsBase)
+            assert "dry_run" in model_cls.model_fields
+            assert "state_dir" not in model_cls.model_fields
+
+    def test_worker_count_defaults_use_shared_constant(self) -> None:
+        """Worker-count fields all use DEFAULT_WORKER_COUNT without renaming."""
+        assert PlannerOptions.model_fields["parallel"].default == DEFAULT_WORKER_COUNT
+        for model_cls in (
+            ImplementerOptions,
+            ReviewerOptions,
+            PlanReviewerOptions,
+            AddressReviewOptions,
+            CIDriverOptions,
+        ):
+            assert model_cls.model_fields["max_workers"].default == DEFAULT_WORKER_COUNT
+
+    def test_constructor_keywords_and_model_dump_are_compatible(self) -> None:
+        """Existing constructor keyword shapes still validate and dump correctly."""
+        cases = (
+            (
+                PlannerOptions,
+                {"issues": [1], "parallel": 5, "dry_run": True},
+                "parallel",
+            ),
+            (
+                ImplementerOptions,
+                {"max_workers": 5, "dry_run": True},
+                "max_workers",
+            ),
+            (ReviewerOptions, {"max_workers": 5, "dry_run": True}, "max_workers"),
+            (
+                PlanReviewerOptions,
+                {"max_workers": 5, "dry_run": True, "verbose": True},
+                "max_workers",
+            ),
+            (
+                AddressReviewOptions,
+                {"max_workers": 5, "dry_run": True, "verbose": True},
+                "max_workers",
+            ),
+            (CIDriverOptions, {"max_workers": 5, "dry_run": True, "verbose": True}, "max_workers"),
+        )
+
+        for model_cls, kwargs, worker_field in cases:
+            options = model_cls(**kwargs)
+            dumped = options.model_dump(include={worker_field, "dry_run", "verbose"})
+            expected = {worker_field: 5, "dry_run": True}
+            if "verbose" in model_cls.model_fields:
+                expected["verbose"] = True
+
+            assert dumped == expected
+
+
 class TestReviewState:
     """Tests for ReviewState model."""
 
@@ -308,7 +397,7 @@ class TestPlannerOptions:
         assert options.issues == [123, 456]
         assert options.dry_run is False
         assert options.force is False
-        assert options.parallel == 3
+        assert options.parallel == DEFAULT_WORKER_COUNT
         assert options.system_prompt_file is None
         assert options.skip_closed is True
         assert options.enable_advise is True
@@ -345,7 +434,7 @@ class TestImplementerOptions:
         assert options.analyze_only is False
         assert options.health_check is False
         assert options.resume is False
-        assert options.max_workers == 3
+        assert options.max_workers == DEFAULT_WORKER_COUNT
         assert options.skip_closed is True
         assert options.auto_merge is True
         assert options.dry_run is False
@@ -377,3 +466,44 @@ class TestImplementerOptions:
         assert options.dry_run is True
         assert options.enable_learn is True
         assert options.enable_follow_up is True
+
+
+def test_issueinfo_eq_with_non_issueinfo_returns_notimplemented() -> None:
+    """__eq__ against a non-IssueInfo returns NotImplemented (models.py:74)."""
+    issue = IssueInfo(number=1, title="t")
+    assert issue.__eq__("not-an-issue") is NotImplemented
+    assert (issue == 1) is False
+
+
+def test_add_issue_idempotent_when_edges_already_present() -> None:
+    """Re-adding an issue whose edges key exists skips re-init (models.py:327->exit)."""
+    graph = DependencyGraph()
+    a = IssueInfo(number=1, title="a")
+    graph.add_issue(a)
+    graph.add_dependency(1, 2)  # populate edges[1] = [2]
+    graph.add_issue(a)  # edges[1] already present -> false branch, no reset
+    assert graph.edges[1] == [2]
+
+
+def test_add_dependency_raises_when_issue_not_in_graph() -> None:
+    """add_dependency raises ValueError for an unknown source issue (models.py:346)."""
+    graph = DependencyGraph()
+    with pytest.raises(ValueError, match=r"Issue #99 not in graph"):
+        graph.add_dependency(99, 1)  # issue 99 absent -> raise ValueError
+
+
+def test_add_dependency_when_edges_key_missing_initializes_list() -> None:
+    """add_dependency seeds edges[] when issue present but edges key absent (models.py:349)."""
+    graph = DependencyGraph()
+    graph.issues[1] = IssueInfo(number=1, title="a")  # issue present, edges key absent
+    graph.add_dependency(1, 2)
+    assert graph.edges[1] == [2]
+
+
+def test_add_dependency_skips_duplicate_edge() -> None:
+    """Adding an existing edge is a no-op (models.py:350->exit, duplicate-edge guard false side)."""
+    graph = DependencyGraph()
+    graph.add_issue(IssueInfo(number=1, title="a"))  # add_issue seeds edges[1]=[]
+    graph.add_dependency(1, 2)
+    graph.add_dependency(1, 2)  # depends_on already in edges[1] -> false branch, no re-append
+    assert graph.edges[1] == [2]

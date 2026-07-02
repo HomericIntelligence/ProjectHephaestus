@@ -38,11 +38,13 @@ import contextlib
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -50,9 +52,10 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from hephaestus.agents.runtime import add_agent_argument, resolve_agent
-from hephaestus.automation._review_utils import add_max_workers_arg, find_pr_for_issue
+from hephaestus.agents.runtime import resolve_agent
+from hephaestus.automation._review_utils import build_automation_parser, find_pr_for_issue
 from hephaestus.automation.github_api import (
+    _fetch_issue_comment_ids,
     gh_issue_add_labels,
     is_issue_closed,
     prefetch_issue_states,
@@ -72,17 +75,14 @@ from hephaestus.automation.loop_repo_manager import (
     _sort_repos_by_open_count as _sort_repos_by_open_count,
 )
 from hephaestus.automation.pr_manager import pr_is_genuinely_stuck
+from hephaestus.automation.protocol import PLAN_COMMENT_MARKER
 from hephaestus.automation.state_labels import STATE_SKIP
 from hephaestus.cli.utils import (
-    add_dry_run_arg,
-    add_github_throttle_args,
-    add_json_arg,
-    add_version_arg,
     configure_github_throttle_from_args,
     emit_json_status,
 )
 from hephaestus.config.paths import DEFAULT_PROJECTS_DIR, resolve_projects_dir
-from hephaestus.constants import scripts_dir as _scripts_dir
+from hephaestus.constants import read_timeout_env
 from hephaestus.github.client import gh_call
 
 LOG = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ def _default_phase_timeout_s() -> float:
     on a network hang; a non-``None`` default ensures the worker thread is
     always bounded even when the operator does not pass ``--phase-timeout``.
     Overridable via ``HEPH_PHASE_TIMEOUT`` (seconds). Mirrors the
-    graceful-fallback contract of :mod:`hephaestus.automation.claude_timeouts`:
+    graceful-fallback contract of :mod:`hephaestus.automation.agent_config`:
     a malformed env value logs a warning and falls back to the default rather
     than crashing at startup.
 
@@ -259,6 +259,11 @@ class RepoResult:
     is_post_loop: bool = False
     # Populated when the WORKER itself crashed (not a phase failure).
     runner_error: str | None = None
+    # Issues withheld from this round because their planned file set overlaps
+    # an in-flight peer's (#1623). Non-empty means the round did NOT finish all
+    # discoverable work, so run_loop must NOT early-exit — they are re-attempted
+    # next round against freshly-merged trunk.
+    deferred_issues: list[int] = field(default_factory=list)
 
     @property
     def any_failure(self) -> bool:
@@ -271,7 +276,13 @@ class RepoResult:
 
     @property
     def produced_work(self) -> bool:
-        """Whether any convergence-relevant LOOP phase produced work.
+        """Whether this loop record still has convergence-relevant work.
+
+        Counts (a) any convergence-phase (``plan``) work AND (b) issues deferred
+        this round for file-overlap (#1623): a deferred issue is unfinished work
+        that MUST keep the loop iterating, otherwise the early-exit at the end of
+        ``run_loop`` (``loop_runner.py`` ``not any(r.produced_work ...)``) would
+        strand it — the exact failure #1623 fixes.
 
         Post-loop stages never count toward convergence — they are
         terminal, not iterative — so ``post_loop_phases`` is intentionally
@@ -279,6 +290,8 @@ class RepoResult:
         operates on per-loop ``loop_results`` only, so this property is
         never consulted on a post-loop RepoResult.
         """
+        if self.deferred_issues:
+            return True
         return any(p.produced_work for p in self.phases if p.name in _CONVERGENCE_PHASES)
 
 
@@ -358,6 +371,10 @@ class LoopConfig:
     # Defaults to the CIDriver ``max_fix_iterations`` default (1) so behavior
     # matches the pre-issue-major drive-green retry budget unless overridden.
     max_merge_attempts: int = 1
+    # When True (default), never dispatch two issues whose plans touch the same
+    # file concurrently — defer the later one to the next loop (#1623). Only
+    # active when max_workers > 1 and more than one issue is in the round.
+    serialize_file_overlap: bool = True
     agent: str = "claude"
     issues: list[int] = field(default_factory=list)
     dry_run: bool = False
@@ -400,8 +417,6 @@ def _make_work_report_path(build_dir: str) -> str:
         Path to a new temp file for work reporting.
 
     """
-    import tempfile
-
     build_path = Path(build_dir)
     build_path.mkdir(parents=True, exist_ok=True)
     fd, path = tempfile.mkstemp(prefix="work_report_", dir=str(build_path))
@@ -435,22 +450,22 @@ def _read_work_report(path: str) -> int | None:
 
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argparse parser for the loop runner."""
-    p = argparse.ArgumentParser(
+    p = build_automation_parser(
         prog="hephaestus-automation-loop",
         description=(
             "Run the 2-stage loop body and post-loop terminal stages across "
             "HomericIntelligence repos."
         ),
-    )
-    add_dry_run_arg(
-        p,
-        prefix="Forward --dry-run to every phase (suppresses GitHub mutations and git pushes).",
+        max_workers_help=(
+            "Parallel workers per repo per phase (1-32, default: 3). Passes to child phases."
+        ),
+        add_github_throttle=True,
+        dry_run_prefix=(
+            "Forward --dry-run to every phase (suppresses GitHub mutations and git pushes)."
+        ),
+        verbose_help="Enable DEBUG logging",
     )
     p.add_argument("--loops", type=int, default=5, help="Number of loop iterations (default: 5)")
-    add_max_workers_arg(
-        p,
-        help_text="Parallel workers per repo per phase (1-32, default: 3). Passes to child phases.",
-    )
     p.add_argument(
         "--max-merge-attempts",
         type=int,
@@ -477,7 +492,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "when selected and also does one final repo-level catch-up sweep)."
         ),
     )
-    add_agent_argument(p)
     p.add_argument(
         "--issues",
         type=_parse_issue_list,
@@ -491,6 +505,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-advise",
         action="store_true",
         help="Pass --no-advise to phases that support the advise preflight",
+    )
+    p.add_argument(
+        "--no-serialize-file-overlap",
+        action="store_false",
+        dest="serialize_file_overlap",
+        default=True,
+        help=(
+            "Disable file-overlap serialization; dispatch all issues in a round"
+            " concurrently even when their plans touch the same file (#1623)"
+        ),
     )
     p.add_argument(
         "--nitpick",
@@ -574,10 +598,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "enumeration. Space-separated input is NOT accepted."
         ),
     )
-    add_github_throttle_args(p)
-    p.add_argument("-v", "--verbose", action="store_true", help="Enable DEBUG logging")
-    add_json_arg(p)
-    add_version_arg(p)
     return p
 
 
@@ -687,7 +707,6 @@ def _resolve_phase_bin(phase: str) -> tuple[str, list[str]] | None:
     Known phases fall back to this source checkout when console scripts are
     not installed on PATH. Unknown phases still return ``None``.
     """
-    script_dir = _scripts_dir()
     if phase == "plan":
         return _resolve_console_or_module("hephaestus-plan-issues", "hephaestus.automation.planner")
     if phase == "implement":
@@ -696,8 +715,7 @@ def _resolve_phase_bin(phase: str) -> tuple[str, list[str]] | None:
             "hephaestus.automation.implementer",
         )
     if phase == "drive-green":
-        py = sys.executable
-        return (py, [str(script_dir / "drive_prs_green.py")])
+        return (sys.executable, ["-m", "hephaestus.automation.ci_driver"])
     return None
 
 
@@ -971,6 +989,23 @@ def _process_repo_inner(
         return result
 
     workers = max(1, cfg.max_workers)
+    # File-overlap serialization (#1623): with >1 worker, N branches cut from
+    # the same trunk snapshot that edit the same file mutually conflict — the
+    # first PR to merge strands the rest DIRTY. Dispatch only a non-overlapping
+    # subset this round; deferred issues re-run next --loops iteration (kept
+    # alive by RepoResult.produced_work), by which point the conflicting peer
+    # has merged and the deferred branch rebases cleanly.
+    if cfg.serialize_file_overlap and workers > 1 and len(open_issues) > 1:
+        open_issues, deferred = _select_non_overlapping(open_issues)
+        if deferred:
+            LOG.info(
+                "[%s] deferring %d file-overlapping issue(s) to next round: %s",
+                repo,
+                len(deferred),
+                deferred,
+            )
+            result.deferred_issues = deferred
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(
@@ -1025,6 +1060,111 @@ def _filter_open_issues(repo: str, issue_numbers: list[int]) -> list[int]:
             continue
         kept.append(num)
     return kept
+
+
+# ---------------------------------------------------------------------------
+# File-overlap serialization (#1623)
+# ---------------------------------------------------------------------------
+
+# Backticked repo-relative path inside a plan's Files sections, e.g.
+# `hephaestus/automation/address_review.py`. Requires a slash so bare tokens
+# like `pyproject.toml` or symbol refs like `os.replace` are not treated as
+# in-tree paths (over-match → needless deferral; the slash requirement keeps
+# the key tight to actual source paths).
+# NOTE: Bare top-level file paths without a directory prefix (e.g., `errors.py`)
+# are intentionally NOT captured — overlap goes undetected and both plans dispatch
+# concurrently, falling back to pre-#1623 behavior (acceptable tradeoff for regex tightness).
+_PLAN_FILE_RE = re.compile(r"`([A-Za-z0-9_][A-Za-z0-9_./-]*/[A-Za-z0-9_./-]+\.[A-Za-z0-9_]+)`")
+_PLAN_FILE_SECTION_RE = re.compile(r"^#{2,}\s+Files to (Modify|Create)\b", re.IGNORECASE)
+
+
+def _parse_planned_files(plan_body: str) -> set[str]:
+    """Return the repo-relative paths a plan intends to touch.
+
+    Scans the ``## Files to Modify`` and ``## Files to Create`` sections of an
+    ``# Implementation Plan`` comment (either or both may be present) and
+    collects every backticked in-tree path until the next top-level ``## ``
+    heading. Empty set when neither section exists.
+
+    Args:
+        plan_body: The full body of the plan comment.
+
+    Returns:
+        The set of backticked repo-relative paths found in the Files sections.
+
+    """
+    files: set[str] = set()
+    in_section = False
+    for line in plan_body.splitlines():
+        if _PLAN_FILE_SECTION_RE.match(line):
+            in_section = True
+            continue
+        # A new top-level ``## `` heading (not a ``### `` sub-header inside the
+        # section) ends the scan region.
+        if line.startswith("## "):
+            in_section = False
+        if in_section:
+            files.update(_PLAN_FILE_RE.findall(line))
+    return files
+
+
+def _fetch_planned_files(issue: int) -> set[str] | None:
+    """Return the file set an issue's plan claims, or None if unknown.
+
+    None (no plan comment / empty fetch) → caller fails OPEN and dispatches the
+    issue this round. :func:`_fetch_issue_comment_ids` already swallows all
+    errors and returns ``[]`` on failure, so NO try/except is needed here — the
+    "no plan" signal is simply an empty/no-match list.
+
+    Args:
+        issue: GitHub issue number.
+
+    Returns:
+        The parsed plan file set, or None when no plan comment is present.
+
+    """
+    for comment in _fetch_issue_comment_ids(issue):
+        body = str(comment.get("body", ""))
+        if body.startswith(PLAN_COMMENT_MARKER):
+            return _parse_planned_files(body)
+    return None
+
+
+def _select_non_overlapping(issues: list[int]) -> tuple[list[int], list[int]]:
+    """Partition *issues* into (dispatch_now, defer_next_round).
+
+    Greedy first-fit in the given order: an issue whose parsed plan file set
+    intersects the union of already-claimed files is deferred. Unknown file set
+    (no plan / parse failure) claims NO files and is always dispatched
+    (fail-open). The first issue always dispatches, so a whole batch can never
+    be deferred (liveness). Performs one serial GraphQL comment fetch per issue;
+    only invoked in multi-worker rounds (guarded at the call site), so the cost
+    is bounded by the issue count already being processed that round.
+
+    Args:
+        issues: The issue numbers to partition, in dispatch-priority order.
+
+    Returns:
+        A ``(dispatch, defer)`` tuple of issue-number lists (order preserved).
+
+    """
+    claimed: set[str] = set()
+    dispatch: list[int] = []
+    defer: list[int] = []
+    for issue in issues:
+        planned = _fetch_planned_files(issue)
+        if planned and (planned & claimed):
+            LOG.info(
+                "issue #%s deferred: plan files %s overlap in-flight peers",
+                issue,
+                sorted(planned & claimed),
+            )
+            defer.append(issue)
+            continue
+        if planned:
+            claimed |= planned
+        dispatch.append(issue)
+    return dispatch, defer
 
 
 def _issue_owns_genuinely_failing_pr(issue: int) -> bool:
@@ -1191,7 +1331,7 @@ def _maybe_sleep_for_rate_budget(loop_idx: int, total_loops: int) -> None:
         return
     if loop_idx >= total_loops:
         return
-    threshold = int(os.environ.get("HEPHAESTUS_RATE_GUARD_THRESHOLD", "200"))
+    threshold = read_timeout_env("HEPHAESTUS_RATE_GUARD_THRESHOLD", 200)
     rl = _rate_limit_remaining()
     if rl is None:
         return
@@ -1508,6 +1648,7 @@ def main(argv: list[str] | None = None) -> int:
         loops=args.loops,
         max_workers=args.max_workers,
         max_merge_attempts=args.max_merge_attempts,
+        serialize_file_overlap=args.serialize_file_overlap,
         parallel_repos=args.parallel_repos,
         phases=phases,
         agent=agent,

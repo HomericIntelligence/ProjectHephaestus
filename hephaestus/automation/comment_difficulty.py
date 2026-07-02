@@ -28,11 +28,12 @@ from hephaestus.agents.runtime import (
     run_agent_text,
     uses_direct_agent_runner,
 )
+from hephaestus.io.utils import write_secure
 
-from ._review_utils import parse_json_block
+from ._review_utils import log_file_path, parse_json_block
+from .agent_config import DEFAULT_AGENT_TIMEOUT
 from .claude_invoke import invoke_claude_with_session
 from .claude_models import HAIKU, OPUS, SONNET, advise_model
-from .claude_timeouts import advise_claude_timeout
 from .git_utils import get_repo_slug
 from .prompts import get_comment_difficulty_prompt
 from .session_naming import AGENT_COMMENT_CLASSIFIER
@@ -100,6 +101,7 @@ def _run_classifier_session(
     worktree_path: Path,
     repo_root: Path,
     state_dir: Path,
+    advise_timeout: int = DEFAULT_AGENT_TIMEOUT,
 ) -> dict[str, str]:
     """Run the read-only classifier sub-agent; return ``{thread_id: difficulty}``.
 
@@ -121,18 +123,18 @@ def _run_classifier_session(
         issue_number=issue_number,
         comments_json=comments_json,
     )
-    log_file = state_dir / f"comment-difficulty-{issue_number}.log"
+    log_file = log_file_path(state_dir, "comment-difficulty", issue_number)
     try:
         if uses_direct_agent_runner(agent):
             result = run_agent_text(
                 agent=agent,
                 prompt=prompt,
                 cwd=worktree_path,
-                timeout=advise_claude_timeout(),
+                timeout=advise_timeout,
                 model=direct_agent_model(agent, "HEPH_ADVISE_MODEL"),
                 sandbox="read-only",
             )
-            log_file.write_text(result.stdout or "")
+            write_secure(log_file, result.stdout or "")
             parsed = parse_json_block(result.stdout or "")
         else:
             stdout, _ = invoke_claude_with_session(
@@ -142,13 +144,13 @@ def _run_classifier_session(
                 prompt=prompt,
                 model=advise_model(),
                 cwd=worktree_path,
-                timeout=advise_claude_timeout(),
+                timeout=advise_timeout,
                 output_format="json",
                 permission_mode="dontAsk",
                 allowed_tools="Read,Glob,Grep",
                 input_via_stdin=True,
             )
-            log_file.write_text(stdout or "")
+            write_secure(log_file, stdout or "")
             try:
                 data = json.loads(stdout or "{}")
                 response_text: str = data.get("result", stdout or "")
@@ -181,6 +183,7 @@ def classify_comments(
     repo_root: Path,
     state_dir: Path,
     dry_run: bool = False,
+    advise_timeout: int = DEFAULT_AGENT_TIMEOUT,
 ) -> dict[str, str]:
     """Classify each thread's difficulty; return ``{thread_id: difficulty}``.
 
@@ -200,5 +203,6 @@ def classify_comments(
         worktree_path=worktree_path,
         repo_root=repo_root,
         state_dir=state_dir,
+        advise_timeout=advise_timeout,
     )
     return {t["id"]: classified.get(t["id"], _DEFAULT_DIFFICULTY) for t in threads}

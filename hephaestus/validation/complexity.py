@@ -11,14 +11,13 @@ Usage::
 
 from __future__ import annotations
 
-import argparse
 import json
 import subprocess
 import sys
 from pathlib import Path
 
-from hephaestus.cli.utils import add_json_arg, add_version_arg, format_output
-from hephaestus.utils.helpers import NETWORK_TIMEOUT, resolve_repo_root
+from hephaestus.cli.utils import create_validation_parser, format_output, resolve_repo_root
+from hephaestus.utils.helpers import NETWORK_TIMEOUT, resolve_repo_root as _resolve_repo_root
 
 
 def run_ruff_complexity_check(
@@ -95,7 +94,7 @@ def check_max_complexity(
         True if all functions are within the threshold, False otherwise.
 
     """
-    repo_root = resolve_repo_root(repo_root)
+    repo_root = _resolve_repo_root(repo_root)
 
     if verbose:
         print(f"\nChecking cyclomatic complexity (threshold={threshold}) in: {path}")
@@ -121,8 +120,8 @@ def main() -> int:
         Exit code (0 if clean, 1 if violations found).
 
     """
-    parser = argparse.ArgumentParser(
-        description="Check cyclomatic complexity against threshold",
+    parser = create_validation_parser(
+        "Check cyclomatic complexity against threshold",
         epilog="Example: %(prog)s --path mypackage/ --threshold 10",
     )
     parser.add_argument(
@@ -138,21 +137,13 @@ def main() -> int:
         help="Path to source code to check (default: .)",
     )
     parser.add_argument(
-        "--repo-root",
-        type=Path,
-        default=None,
-        help="Repository root directory (default: auto-detect)",
-    )
-    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose output",
     )
-    add_json_arg(parser)
-    add_version_arg(parser)
     args = parser.parse_args()
 
-    repo_root = resolve_repo_root(args.repo_root)
+    repo_root = resolve_repo_root(args)
 
     if args.json:
         violations = run_ruff_complexity_check(args.path, args.threshold, repo_root)

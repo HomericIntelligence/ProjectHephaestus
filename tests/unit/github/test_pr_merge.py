@@ -5,6 +5,7 @@ import json
 import subprocess
 from unittest.mock import MagicMock, patch
 
+from hephaestus.github import pr_merge as pr_merge_module
 from hephaestus.github.pr_merge import (
     checks_success_and_log,
     detect_repo_from_remote,
@@ -14,14 +15,6 @@ from hephaestus.github.pr_merge import (
     run_git_cmd,
     try_push_head_branch,
 )
-
-
-def test_pr_merge_uses_canonical_run_subprocess() -> None:
-    """pr_merge uses the shared subprocess helper, not a local duplicate."""
-    import hephaestus.github.pr_merge as pr_merge
-    from hephaestus.utils.helpers import run_subprocess
-
-    assert pr_merge.run_subprocess is run_subprocess
 
 
 def _gh_result(payload: object) -> MagicMock:
@@ -309,6 +302,61 @@ class TestHandleMergeResult:
         handle_merge_result(result, pr_number=42, base_branch="main")
 
 
+class TestProcessPr:
+    """Tests for extracted PR processing helpers."""
+
+    def test_process_pr_pushes_and_merges_passed_pr(self, monkeypatch) -> None:
+        """Successful PRs are pushed and delegated to the merge helper."""
+        pushes: list[tuple[str, bool]] = []
+        merges: list[tuple[str, int, str, str, bool]] = []
+
+        monkeypatch.setattr(pr_merge_module, "_checks_pass_or_legacy", lambda *args: True)
+        monkeypatch.setattr(
+            pr_merge_module,
+            "try_push_head_branch",
+            lambda branch, dry_run: pushes.append((branch, dry_run)),
+        )
+        monkeypatch.setattr(
+            pr_merge_module,
+            "_attempt_pr_merge",
+            lambda repo, number, sha, base, dry_run: merges.append(
+                (repo, number, sha, base, dry_run)
+            ),
+        )
+
+        pr_merge_module._process_pr(
+            "owner/repo",
+            {
+                "number": 1,
+                "headRefName": "feature",
+                "headRefOid": "abc123",
+                "baseRefName": "main",
+            },
+            push_all=False,
+            dry_run=False,
+        )
+
+        assert pushes == [("feature", False)]
+        assert merges == [("owner/repo", 1, "abc123", "main", False)]
+
+    def test_process_pr_missing_head_sha_skips_checks_and_merge(self, monkeypatch) -> None:
+        """PRs without a head SHA skip check and merge work."""
+        check = MagicMock()
+        merge = MagicMock()
+        monkeypatch.setattr(pr_merge_module, "_checks_pass_or_legacy", check)
+        monkeypatch.setattr(pr_merge_module, "_attempt_pr_merge", merge)
+
+        pr_merge_module._process_pr(
+            "owner/repo",
+            {"number": 1, "headRefName": "feature", "baseRefName": "main"},
+            push_all=False,
+            dry_run=False,
+        )
+
+        check.assert_not_called()
+        merge.assert_not_called()
+
+
 class TestMain:
     """Tests for the main() entry point."""
 
@@ -429,6 +477,8 @@ class TestMain:
 
                 assert main() == 0
 
+        legacy_status_args = mock_gh_call.call_args_list[3].args[0]
+        assert legacy_status_args == ["api", "/repos/owner/repo/commits/abc123/status"]
         assert mock_gh_call.call_args_list[-1].args[0][:4] == [
             "api",
             "-X",
@@ -481,17 +531,47 @@ class TestMain:
     @patch("hephaestus.github.pr_merge.try_push_head_branch")
     @patch("hephaestus.github.pr_merge.run_git_cmd")
     @patch("hephaestus.github.pr_merge.gh_call")
-    def test_merge_exception_continues(self, mock_gh_call, _mock_git, _mock_push) -> None:
-        """main() logs and continues when the merge API call raises."""
+    def test_merge_exception_continues_to_next_pr(self, mock_gh_call, _mock_git, mock_push) -> None:
+        """main() logs a merge API exception and still processes later PRs."""
         mock_gh_call.side_effect = [
-            *self._make_pr()[:3],
+            _gh_result({"nameWithOwner": "owner/repo"}),
+            _gh_result(
+                [
+                    {
+                        "number": 1,
+                        "headRefName": "feature-one",
+                        "headRefOid": "sha-one",
+                        "baseRefName": "main",
+                    },
+                    {
+                        "number": 2,
+                        "headRefName": "feature-two",
+                        "headRefOid": "sha-two",
+                        "baseRefName": "main",
+                    },
+                ]
+            ),
+            _gh_result([{"name": "ci", "state": "SUCCESS", "bucket": "pass", "workflow": "CI"}]),
             subprocess.CalledProcessError(1, ["gh"], stderr="merge conflict"),
+            _gh_result([{"name": "ci", "state": "SUCCESS", "bucket": "pass", "workflow": "CI"}]),
+            _gh_result({"merged": True, "sha": "merged-two", "message": "ok"}),
         ]
         with patch("hephaestus.github.pr_merge.detect_repo_from_remote", return_value="owner/repo"):
             with patch("sys.argv", ["prog"]):
                 from hephaestus.github.pr_merge import main
 
                 assert main() == 0
+
+        merge_paths = [
+            call.args[0][3]
+            for call in mock_gh_call.call_args_list
+            if call.args[0][:3] == ["api", "-X", "PUT"]
+        ]
+        assert merge_paths == [
+            "/repos/owner/repo/pulls/1/merge",
+            "/repos/owner/repo/pulls/2/merge",
+        ]
+        assert mock_push.call_count == 2
 
 
 class TestMainJson:
@@ -558,3 +638,18 @@ class TestSquashOnlyInvariant:
         source = inspect.getsource(pr_merge)
         assert "merge_method=rebase" not in source
         assert "merge_method=squash" in source
+
+
+class TestCanonicalRunSubprocess:
+    """Source-level regressions for subprocess helper consolidation."""
+
+    def test_pr_merge_uses_canonical_run_subprocess(self) -> None:
+        import inspect
+
+        from hephaestus.github import pr_merge
+        from hephaestus.utils import helpers
+
+        source = inspect.getsource(pr_merge)
+        assert vars(pr_merge)["run_subprocess"] is helpers.run_subprocess
+        assert "def run_subprocess(" not in source
+        assert "subprocess.check_output" not in source

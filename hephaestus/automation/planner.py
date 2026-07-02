@@ -11,53 +11,261 @@ from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
 import threading
+import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 from hephaestus.agents.runtime import (
-    add_agent_argument,
     direct_agent_model,
     resolve_agent,
+    run_agent_text,
     uses_direct_agent_runner,
 )
 from hephaestus.cli.utils import (
-    add_dry_run_arg,
-    add_github_throttle_args,
-    add_json_arg,
-    add_version_arg,
+    add_advise_timeout_arg,
+    add_agent_timeout_arg,
+    add_git_message_timeout_arg,
     configure_github_throttle_from_args,
     emit_json_status,
 )
+from hephaestus.constants import AUTOMATION_LOG_FORMAT, LOG_DATEFMT
+from hephaestus.github.rate_limit import wait_until
 
 from ._review_utils import (
+    build_automation_parser,
     close_issue_as_covered,
     find_merged_closing_pr,
     find_pr_for_issue,
+    work_report_context,
 )
 from .advise_runner import advise_skipped, ensure_mnemosyne, run_advise
+from .agent_config import (
+    DEFAULT_AGENT_TIMEOUT,
+    DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT,
+    planner_claude_timeout,
+)
+from .claude_invoke import detect_server_overload, invoke_claude_with_session, scan_quota_reset
 from .claude_models import advise_model, codex_advise_model
-from .claude_timeouts import advise_claude_timeout
-from .git_utils import issue_ref
+from .git_utils import get_repo_root, get_repo_slug, issue_ref
 from .github_api import (
     GitHubRateLimitError,
     gh_issue_upsert_comment,
     gh_list_open_issues,
 )
 from .models import PLAN_COMMENT_MARKER, PlannerOptions, PlanResult
-from .planner_claude import PlannerClaudeRunner
 from .planner_review_loop import MAX_REVIEW_ITERATIONS, PlanReviewLoop
 from .planner_state import PlannerStateManager
 from .prompts import get_advise_prompt_builder
 from .review_state import is_plan_review_go
 from .session_naming import AGENT_ADVISE
 from .status_tracker import StatusTracker
-from .work_report import write_work_report
 
 __all__ = ["MAX_REVIEW_ITERATIONS", "Planner", "main"]
 
 logger = logging.getLogger(__name__)
+
+# Base delay (seconds) for the exponential backoff applied to transient
+# server-overload (529 / 5xx) retries. The Nth retry (counting down from the
+# default ``max_retries=3``) waits ``_OVERLOAD_BACKOFF_BASE_S * 2 ** (3 -
+# max_retries)`` seconds, i.e. 5s, 10s, 20s. Unlike a 429 quota cap there is no
+# reset epoch to wait on, so a bounded exponential backoff is the correct
+# policy (#1374).
+_OVERLOAD_BACKOFF_BASE_S = 5.0
+# Default retry budget the backoff schedule is anchored to; used only to size
+# the per-attempt delay so it grows monotonically as retries are consumed.
+_OVERLOAD_BACKOFF_ANCHOR_RETRIES = 3
+
+
+class PlannerClaudeRunner:
+    """Run Claude or Codex on behalf of the planner.
+
+    Holds a reference to :class:`PlannerOptions` so it can pick the right
+    backend (Claude vs Codex) and forward the optional system-prompt file.
+    """
+
+    def __init__(self, options: PlannerOptions) -> None:
+        """Bind to the planner's options.
+
+        Args:
+            options: The shared :class:`PlannerOptions` instance.
+
+        """
+        self.options = options
+
+    def call_claude(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        agent: str,
+        issue_number: int | str,
+        max_retries: int = 3,
+        timeout: int | None = None,
+        extra_args: list[str] | None = None,
+    ) -> str:
+        """Call Claude CLI on a deterministic session with rate-limit retry.
+
+        The session UUID is derived from ``(repo, issue_number, agent,
+        trunk_githash)`` via :func:`session_naming.session_uuid`. First call
+        for a tuple creates the session; every later call resumes it. Cross-
+        agent independence (planner vs reviewer) is preserved because the
+        ``agent`` string is part of the hash.
+
+        Args:
+            prompt: The prompt to send to Claude.
+            model: Claude model ID for ``--model`` (caller picks per phase).
+            agent: One of the ``AGENT_*`` constants from
+                :mod:`hephaestus.automation.session_naming`. Different agents
+                map to different session IDs.
+            issue_number: GitHub issue number; participates in the session ID.
+            max_retries: Maximum retry attempts for rate limits.
+            timeout: Subprocess timeout in seconds.
+            extra_args: Additional CLI arguments.
+
+        Returns:
+            Claude's response text (stdout, stripped).
+
+        Raises:
+            RuntimeError: If Claude call fails.
+
+        """
+        timeout_s = planner_claude_timeout() if timeout is None else timeout
+        if uses_direct_agent_runner(self.options.agent):
+            return self.call_direct_agent(
+                prompt,
+                model=direct_agent_model(
+                    self.options.agent,
+                    "HEPH_PLANNER_MODEL",
+                    codex_default=model,
+                ),
+                max_retries=max_retries,
+                timeout=timeout_s,
+            )
+
+        repo_root = get_repo_root()
+        repo = get_repo_slug(repo_root)
+
+        try:
+            stdout, _ = invoke_claude_with_session(
+                repo=repo,
+                issue=issue_number,
+                agent=agent,
+                prompt=prompt,
+                model=model,
+                cwd=repo_root,
+                timeout=timeout_s,
+                system_prompt_file=self.options.system_prompt_file,
+                allowed_tools="Read,Glob,Grep,Bash",
+                extra_args=extra_args,
+            )
+            response = stdout.strip()
+            if not response:
+                raise RuntimeError("Claude returned empty response")
+            return response
+
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr or ""
+            stdout = e.stdout or ""
+
+            # Rate-limit messages may appear in either stream. The Claude CLI
+            # in particular returns its 429 ("You're out of extra usage ·
+            # resets ...") inside the stdout JSON payload as the ``result``
+            # field of an ``is_error: true`` response, not in stderr.
+            reset_epoch = scan_quota_reset(stderr, stdout)
+            if reset_epoch is not None and max_retries > 0:
+                if reset_epoch > 0:
+                    wait_until(reset_epoch)
+                else:
+                    time.sleep(5)
+                return self.call_claude(
+                    prompt,
+                    model=model,
+                    agent=agent,
+                    issue_number=issue_number,
+                    max_retries=max_retries - 1,
+                    timeout=timeout_s,
+                    extra_args=extra_args,
+                )
+
+            # A transient server-overload (529 Overloaded / generic 5xx) carries
+            # no reset epoch, so scan_quota_reset misses it. It used to fall
+            # straight through to the fatal raise below, surfacing a recoverable
+            # blip as ``phase plan FAILED rc=1`` (#1374). Retry it with bounded
+            # exponential backoff up to ``max_retries``.
+            if detect_server_overload(stderr, stdout) and max_retries > 0:
+                # Exponent grows as retries are consumed (clamped at 0 so an
+                # over-budget caller never gets a fractional/negative delay).
+                exponent = max(0, _OVERLOAD_BACKOFF_ANCHOR_RETRIES - max_retries)
+                delay = _OVERLOAD_BACKOFF_BASE_S * (2**exponent)
+                logger.warning(
+                    "Claude server overloaded (transient); retrying in %.0fs (%d retries left)",
+                    delay,
+                    max_retries,
+                )
+                time.sleep(delay)
+                return self.call_claude(
+                    prompt,
+                    model=model,
+                    agent=agent,
+                    issue_number=issue_number,
+                    max_retries=max_retries - 1,
+                    timeout=timeout_s,
+                    extra_args=extra_args,
+                )
+
+            detail = stderr or stdout or "(no output)"
+            raise RuntimeError(f"Claude failed: {detail}") from e
+
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"Claude timed out after {timeout_s}s") from e
+
+    def call_direct_agent(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        max_retries: int = 3,
+        timeout: int | None = None,
+        sandbox: str = "workspace-write",
+    ) -> str:
+        """Call a non-Claude direct agent with retry logic for rate limits."""
+        agent = self.options.agent
+        timeout_s = planner_claude_timeout() if timeout is None else timeout
+        try:
+            result = run_agent_text(
+                agent=agent,
+                prompt=prompt,
+                cwd=get_repo_root(),
+                timeout=timeout_s,
+                model=model,
+                sandbox=sandbox,
+            )
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr or ""
+            stdout = e.stdout or ""
+            reset_epoch = scan_quota_reset(stderr, stdout)
+            if reset_epoch is not None and reset_epoch > 0 and max_retries > 0:
+                logger.warning("%s usage cap hit; waiting for reset", agent)
+                wait_until(reset_epoch)
+                return self.call_direct_agent(
+                    prompt,
+                    model=model,
+                    max_retries=max_retries - 1,
+                    timeout=timeout_s,
+                    sandbox=sandbox,
+                )
+            detail = stderr or stdout or str(e)
+            raise RuntimeError(f"{agent} failed: {detail}") from e
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"{agent} timed out after {timeout_s}s") from e
+
+        response = (result.stdout or "").strip()
+        if not response:
+            raise RuntimeError(f"{agent} returned empty response")
+        return response
 
 
 class Planner:
@@ -226,90 +434,89 @@ class Planner:
             PlanResult
 
         """
-        slot_id = self.status_tracker.acquire_slot()
-        if slot_id is None:
-            return PlanResult(
-                issue_number=issue_number,
-                success=False,
-                error="Failed to acquire worker slot",
-            )
-
-        try:
-            # Idempotency guard (FM1): never (re-)plan an issue whose work is
-            # already covered by a PR. Runs BEFORE the existing-plan/force gates
-            # because an open/merged closing PR makes planning pure churn — the
-            # 2026-06-15 loop burned ~5.5h re-planning #1357/#1289/#1179 while
-            # their PRs were open (and again after they merged). This mirrors the
-            # implementer phase's "Skipped (open PR already exists)" semantics so
-            # plan and implement agree on what to skip. Localized to this guard
-            # block (no _call_claude changes) for FM3 retry-logic coordination.
-            covered = self._pr_coverage_skip(issue_number, slot_id)
-            if covered is not None:
-                return covered
-
-            # Skip-if-already-planned moved here from _filter_issues (#548) so
-            # the check runs inside the thread pool (parallel, overlapped with
-            # actual planning work) instead of as a serial pre-pass that
-            # blocked all workers behind N ``gh issue view --comments`` calls.
-            if not self.options.force:
-                self.status_tracker.update_slot(
-                    slot_id, f"{issue_ref(issue_number)}: checking existing plan"
-                )
-                if self._has_existing_plan(issue_number):
-                    logger.info("Issue #%s already has a plan, skipping", issue_number)
-                    self.status_tracker.update_slot(
-                        slot_id, f"{issue_ref(issue_number)}: plan exists, skipped"
-                    )
-                    return PlanResult(
-                        issue_number=issue_number,
-                        success=True,
-                        plan_already_exists=True,
-                    )
-
-            self.status_tracker.update_slot(slot_id, f"Planning {issue_ref(issue_number)}")
-
-            if self.options.dry_run:
-                logger.info("[DRY RUN] Would plan %s", issue_ref(issue_number))
-                return PlanResult(issue_number=issue_number, success=True)
-
-            # Run the strict review loop: advise → loop[plan → learn → review]
-            # → post final plan with last review attached. Loop terminates on
-            # the first unambiguous GO or after MAX_REVIEW_ITERATIONS.
-            plan, final_review, iterations, verdict_is_go = self._run_plan_review_loop(
-                issue_number, slot_id
-            )
-
-            # Post final plan + review to issue regardless of verdict so
-            # operators can see what was produced (NOGO banner is appended
-            # inside _post_plan when verdict_is_go is False).
-            self._post_plan(
-                issue_number, plan, final_review=final_review, verdict_is_go=verdict_is_go
-            )
-
-            self.status_tracker.update_slot(
-                slot_id, f"Completed {issue_ref(issue_number)} ({iterations} iter)"
-            )
-
-            if not verdict_is_go:
+        with self.status_tracker.slot() as slot_id:
+            if slot_id is None:
                 return PlanResult(
                     issue_number=issue_number,
                     success=False,
-                    error=(
-                        "review loop exhausted all iterations without a GO verdict (NOGO-exhausted)"
-                    ),
+                    error="Failed to acquire worker slot",
                 )
 
-            return PlanResult(issue_number=issue_number, success=True)
+            try:
+                # Idempotency guard (FM1): never (re-)plan an issue whose work is
+                # already covered by a PR. Runs BEFORE the existing-plan/force gates
+                # because an open/merged closing PR makes planning pure churn — the
+                # 2026-06-15 loop burned ~5.5h re-planning #1357/#1289/#1179 while
+                # their PRs were open (and again after they merged). This mirrors the
+                # implementer phase's "Skipped (open PR already exists)" semantics so
+                # plan and implement agree on what to skip. Localized to this guard
+                # block (no _call_claude changes) for FM3 retry-logic coordination.
+                covered = self._pr_coverage_skip(issue_number, slot_id)
+                if covered is not None:
+                    return covered
 
-        except Exception as e:
-            logger.error("Failed to plan %s: %s", issue_ref(issue_number), e)
-            return PlanResult(
-                issue_number=issue_number,
-                success=False,
-                error=str(e),
-            )
-        finally:
-            self.status_tracker.release_slot(slot_id)
+                # Skip-if-already-planned moved here from _filter_issues (#548) so
+                # the check runs inside the thread pool (parallel, overlapped with
+                # actual planning work) instead of as a serial pre-pass that
+                # blocked all workers behind N ``gh issue view --comments`` calls.
+                if not self.options.force:
+                    self.status_tracker.update_slot(
+                        slot_id, f"{issue_ref(issue_number)}: checking existing plan"
+                    )
+                    if self._has_existing_plan(issue_number):
+                        logger.info("Issue #%s already has a plan, skipping", issue_number)
+                        self.status_tracker.update_slot(
+                            slot_id, f"{issue_ref(issue_number)}: plan exists, skipped"
+                        )
+                        return PlanResult(
+                            issue_number=issue_number,
+                            success=True,
+                            plan_already_exists=True,
+                        )
+
+                self.status_tracker.update_slot(slot_id, f"Planning {issue_ref(issue_number)}")
+
+                if self.options.dry_run:
+                    logger.info("[DRY RUN] Would plan %s", issue_ref(issue_number))
+                    return PlanResult(issue_number=issue_number, success=True)
+
+                # Run the strict review loop: advise → loop[plan → learn → review]
+                # → post final plan with last review attached. Loop terminates on
+                # the first unambiguous GO or after MAX_REVIEW_ITERATIONS.
+                plan, final_review, iterations, verdict_is_go = self._run_plan_review_loop(
+                    issue_number, slot_id
+                )
+
+                # Post final plan + review to issue regardless of verdict so
+                # operators can see what was produced (NOGO banner is appended
+                # inside _post_plan when verdict_is_go is False).
+                self._post_plan(
+                    issue_number, plan, final_review=final_review, verdict_is_go=verdict_is_go
+                )
+
+                self.status_tracker.update_slot(
+                    slot_id, f"Completed {issue_ref(issue_number)} ({iterations} iter)"
+                )
+
+                if not verdict_is_go:
+                    return PlanResult(
+                        issue_number=issue_number,
+                        success=False,
+                        error=(
+                            "review loop exhausted all iterations without a GO verdict "
+                            "(NOGO-exhausted)"
+                        ),
+                    )
+
+                return PlanResult(issue_number=issue_number, success=True)
+
+            except Exception as e:
+                logger.error("Failed to plan %s: %s", issue_ref(issue_number), e)
+                return PlanResult(
+                    issue_number=issue_number,
+                    success=False,
+                    error=str(e),
+                )
 
     def _call_claude(
         self,
@@ -319,7 +526,7 @@ class Planner:
         agent: str,
         issue_number: int | str,
         max_retries: int = 3,
-        timeout: int = 300,
+        timeout: int | None = None,
         extra_args: list[str] | None = None,
     ) -> str:
         """Call Claude (delegates to claude_runner)."""
@@ -329,7 +536,7 @@ class Planner:
             agent=agent,
             issue_number=issue_number,
             max_retries=max_retries,
-            timeout=timeout,
+            timeout=planner_claude_timeout() if timeout is None else timeout,
             extra_args=extra_args,
         )
 
@@ -378,7 +585,7 @@ class Planner:
                         "HEPH_ADVISE_MODEL",
                         codex_default=codex_advise_model(),
                     ),
-                    timeout=advise_claude_timeout(),
+                    timeout=self.options.advise_timeout,
                     sandbox="read-only",
                 )
             # Advise is light search work, so it runs on the cheap model with a
@@ -388,7 +595,7 @@ class Planner:
                 model=advise_model(),
                 agent=AGENT_ADVISE,
                 issue_number=issue_number,
-                timeout=advise_claude_timeout(),
+                timeout=self.options.advise_timeout,
             )
 
         return run_advise(
@@ -557,8 +764,8 @@ def _setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        format=AUTOMATION_LOG_FORMAT,
+        datefmt=LOG_DATEFMT,
     )
 
 
@@ -569,7 +776,7 @@ def _build_parser() -> argparse.ArgumentParser:
     """
     from pathlib import Path
 
-    parser = argparse.ArgumentParser(
+    parser = build_automation_parser(
         description="Bulk plan GitHub issues using Claude Code or Codex",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -592,6 +799,11 @@ Examples:
   # Plan with more parallelism
   %(prog)s --issues 123 456 789 --parallel 5
         """,
+        add_max_workers=False,
+        add_parallel=True,
+        parallel_help="Number of parallel workers, 1-32 (default: 3)",
+        add_github_throttle=True,
+        dry_run_prefix="Suppress GitHub mutations and agent calls (no issue comments posted).",
     )
 
     parser.add_argument(
@@ -600,23 +812,10 @@ Examples:
         nargs="+",
         help="Issue numbers to plan (default: all open issues)",
     )
-    add_agent_argument(parser)
-    add_dry_run_arg(
-        parser,
-        prefix="Suppress GitHub mutations and agent calls (no issue comments posted).",
-    )
     parser.add_argument(
         "--force",
         action="store_true",
         help="Force re-planning even if plan already exists",
-    )
-    parser.add_argument(
-        "--parallel",
-        type=int,
-        default=3,
-        choices=range(1, 33),
-        metavar="N",
-        help="Number of parallel workers, 1-32 (default: 3)",
     )
     parser.add_argument(
         "--system-prompt",
@@ -633,15 +832,9 @@ Examples:
         action="store_true",
         help="Skip the advise step (don't search team knowledge base before planning)",
     )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging",
-    )
-    add_github_throttle_args(parser)
-    add_json_arg(parser)
-    add_version_arg(parser)
+    add_agent_timeout_arg(parser)
+    add_advise_timeout_arg(parser)
+    add_git_message_timeout_arg(parser)
     return parser
 
 
@@ -668,69 +861,85 @@ def main() -> int:
     # Capture explicitness before auto-discovery overwrites ``args.issues``.
     issues_explicit = bool(args.issues)
 
-    if not args.issues:
-        try:
-            discovered = gh_list_open_issues()
-        except GitHubRateLimitError as e:
-            # Don't smear a 100-line traceback across the driver's loop output
-            # when the only problem is that the GraphQL hourly budget is gone.
-            # Exit cleanly so run_automation_loop.sh moves on to the next repo.
-            log.error(
-                "GitHub API rate-limited; cannot discover issues this run "
-                "(reset at epoch %s). Skipping cleanly.",
-                e.reset_epoch,
+    work_units = 0
+    with work_report_context(lambda: work_units):
+        if not args.issues:
+            try:
+                discovered = gh_list_open_issues()
+            except GitHubRateLimitError as e:
+                # Don't smear a 100-line traceback across the driver's loop output
+                # when the only problem is that the GraphQL hourly budget is gone.
+                # Exit cleanly so run_automation_loop.sh moves on to the next repo.
+                log.error(
+                    "GitHub API rate-limited; cannot discover issues this run "
+                    "(reset at epoch %s). Skipping cleanly.",
+                    e.reset_epoch,
+                )
+                if args.json:
+                    emit_json_status(0, message="rate-limited; skipped", reset_epoch=e.reset_epoch)
+                return 0
+            log.info(
+                "No --issues given; discovered %s open issues: %s", len(discovered), discovered
             )
+            args.issues = discovered
+
+        # Dedupe while preserving first-seen order. dict.fromkeys is the
+        # canonical "ordered set" trick. Without this, ``--issues 123 123``
+        # would race two workers on the same issue and produce double-posts.
+        args.issues = list(dict.fromkeys(args.issues))
+
+        log.info("Issues to plan: %s", args.issues)
+
+        try:
+            options = PlannerOptions(
+                issues=args.issues,
+                issues_explicit=issues_explicit,
+                agent=agent,
+                dry_run=args.dry_run,
+                force=args.force,
+                parallel=args.parallel,
+                system_prompt_file=args.system_prompt,
+                skip_closed=not args.no_skip_closed,
+                enable_advise=not args.no_advise,
+                agent_timeout=(
+                    args.agent_timeout if args.agent_timeout is not None else DEFAULT_AGENT_TIMEOUT
+                ),
+                advise_timeout=(
+                    args.advise_timeout
+                    if args.advise_timeout is not None
+                    else DEFAULT_AGENT_TIMEOUT
+                ),
+                git_message_timeout=(
+                    args.git_message_timeout
+                    if args.git_message_timeout is not None
+                    else DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT
+                ),
+            )
+
+            planner = Planner(options)
+            results = planner.run()
+
+            # Compute work units for loop convergence (#613): new plans
+            successful = sum(1 for r in results.values() if r.success)
+            already_planned = sum(1 for r in results.values() if r.plan_already_exists)
+            work_units = max(0, successful - already_planned)
+
+            failed = [num for num, result in results.items() if not result.success]
+            if failed:
+                log.error("Failed to plan %s issue(s): %s", len(failed), failed)
+                if args.json:
+                    emit_json_status(1, issues=args.issues, failed=failed)
+                return 1
+
+            log.info("Planning complete")
             if args.json:
-                emit_json_status(0, message="rate-limited; skipped", reset_epoch=e.reset_epoch)
+                emit_json_status(0, issues=args.issues, failed=[])
             return 0
-        log.info("No --issues given; discovered %s open issues: %s", len(discovered), discovered)
-        args.issues = discovered
-
-    # Dedupe while preserving first-seen order. dict.fromkeys is the
-    # canonical "ordered set" trick. Without this, ``--issues 123 123``
-    # would race two workers on the same issue and produce double-posts.
-    args.issues = list(dict.fromkeys(args.issues))
-
-    log.info("Issues to plan: %s", args.issues)
-
-    try:
-        options = PlannerOptions(
-            issues=args.issues,
-            issues_explicit=issues_explicit,
-            agent=agent,
-            dry_run=args.dry_run,
-            force=args.force,
-            parallel=args.parallel,
-            system_prompt_file=args.system_prompt,
-            skip_closed=not args.no_skip_closed,
-            enable_advise=not args.no_advise,
-        )
-
-        planner = Planner(options)
-        results = planner.run()
-
-        # Compute work units for loop convergence (#613): new plans
-        successful = sum(1 for r in results.values() if r.success)
-        already_planned = sum(1 for r in results.values() if r.plan_already_exists)
-        work_units = max(0, successful - already_planned)
-        write_work_report(work_units)
-
-        failed = [num for num, result in results.items() if not result.success]
-        if failed:
-            log.error("Failed to plan %s issue(s): %s", len(failed), failed)
+        except KeyboardInterrupt:
+            logging.getLogger(__name__).warning("Interrupted by user")
             if args.json:
-                emit_json_status(1, issues=args.issues, failed=failed)
-            return 1
-
-        log.info("Planning complete")
-        if args.json:
-            emit_json_status(0, issues=args.issues, failed=[])
-        return 0
-    except KeyboardInterrupt:
-        logging.getLogger(__name__).warning("Interrupted by user")
-        if args.json:
-            emit_json_status(130, message="interrupted")
-        return 130
+                emit_json_status(130, message="interrupted")
+            return 130
 
 
 if __name__ == "__main__":

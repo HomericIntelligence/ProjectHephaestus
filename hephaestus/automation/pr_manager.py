@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -22,11 +23,10 @@ from hephaestus.agents.runtime import (
     uses_direct_agent_runner,
 )
 
-from ._secret_patterns import SECRET_FILE_EXTENSIONS, SECRET_FILE_NAMES
+from .agent_config import DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT
 from .ci_check_inspector import FAILING_CHECK_CONCLUSIONS
 from .claude_invoke import invoke_claude_with_session
 from .claude_models import git_message_model, implementer_model
-from .claude_timeouts import git_message_agent_timeout
 from .git_utils import get_repo_slug, issue_ref, run
 from .github_api import (
     _gh_call,
@@ -46,6 +46,24 @@ from .state_labels import (
 from .status_tracker import StatusTracker
 
 logger = logging.getLogger(__name__)
+
+# Shared secret-file detection constants. These patterns identify files that
+# should never be staged or committed during automated workflows.
+# Exact basenames that are always considered secrets regardless of extension.
+SECRET_FILE_NAMES: frozenset[str] = frozenset(
+    {
+        ".env",
+        ".secret",
+        "credentials.json",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+    }
+)
+
+# File extensions whose presence indicates a cryptographic key or certificate.
+SECRET_FILE_EXTENSIONS: frozenset[str] = frozenset({".key", ".pem", ".pfx", ".p12"})
 
 _RESERVED_MESSAGE_LINE = re.compile(
     r"^\s*(?:Closes\s+#\d+|Implemented-By:|Co-Authored-By:)",
@@ -314,9 +332,9 @@ def _invoke_git_message_agent(
     prompt: str,
     worktree_path: Path,
     agent: str,
+    timeout: int = DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT,
 ) -> str:
     """Run the lightweight message agent in a separate read-only session."""
-    timeout = git_message_agent_timeout()
     if uses_direct_agent_runner(agent):
         result = run_agent_text(
             agent=agent,
@@ -380,6 +398,7 @@ def _generate_commit_message(
     issue_body: str,
     worktree_path: Path,
     agent: str,
+    git_message_timeout: int = DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT,
 ) -> str:
     """Generate a commit message via a lightweight agent with deterministic fallback."""
     changed_files, diff_stat = _staged_change_context(worktree_path)
@@ -397,6 +416,7 @@ def _generate_commit_message(
             prompt=prompt,
             worktree_path=worktree_path,
             agent=agent,
+            timeout=git_message_timeout,
         )
         data = _parse_agent_json(raw)
         if data is None:
@@ -446,6 +466,7 @@ def _generate_pr_message(
     base: str,
     worktree_path: Path | None,
     agent: str,
+    git_message_timeout: int = DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT,
 ) -> _PrMessageParts:
     """Generate PR text via a lightweight agent with deterministic fallback."""
     fallback = _fallback_pr_message(issue_number, issue_title, agent)
@@ -468,6 +489,7 @@ def _generate_pr_message(
             prompt=prompt,
             worktree_path=worktree_path,
             agent=agent,
+            timeout=git_message_timeout,
         )
         data = _parse_agent_json(raw)
         if data is None:
@@ -683,7 +705,13 @@ def enable_auto_merge_after_implementation_go(pr_number: int) -> None:
     logger.info("Enabled auto-merge for implementation-GO PR #%s", pr_number)
 
 
-def commit_changes(issue_number: int, worktree_path: Path, agent: str = "claude") -> None:
+def commit_changes(
+    issue_number: int,
+    worktree_path: Path,
+    agent: str = "claude",
+    git_message_timeout: int = DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT,
+    allowed_paths: Collection[str] | None = None,
+) -> None:
     """Commit changes in worktree, filtering out secret files.
 
     Args:
@@ -691,6 +719,10 @@ def commit_changes(issue_number: int, worktree_path: Path, agent: str = "claude"
         worktree_path: Path to git worktree
         agent: Selected implementation agent. Defaults to Claude for backwards
             compatibility with existing direct callers.
+        git_message_timeout: Timeout in seconds for the lightweight commit-message
+            agent. Defaults to :data:`DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT`.
+        allowed_paths: Optional exact set of porcelain paths allowed to be
+            staged. Secret filtering still applies.
 
     Raises:
         RuntimeError: If there are no changes, or all changes are secret files.
@@ -714,6 +746,8 @@ def commit_changes(issue_number: int, worktree_path: Path, agent: str = "claude"
     # X = index status, Y = worktree status
     # Common codes: M (modified), A (added), D (deleted), R (renamed), ?? (untracked)
     files_to_add = []
+    files_to_update = []
+    allowed_path_set = set(allowed_paths) if allowed_paths is not None else None
 
     for line in result.stdout.splitlines():
         if not line:
@@ -734,6 +768,10 @@ def commit_changes(issue_number: int, worktree_path: Path, agent: str = "claude"
             # Remove quotes - git uses C-style escaping
             filename_part = filename_part[1:-1]
 
+        if allowed_path_set is not None and filename_part not in allowed_path_set:
+            logger.debug("Skipping non-allowlisted file: %s", filename_part)
+            continue
+
         # Check if file is a potential secret
         filename = Path(filename_part).name
 
@@ -743,16 +781,22 @@ def commit_changes(issue_number: int, worktree_path: Path, agent: str = "claude"
             logger.warning("Skipping potential secret file: %s", filename_part)
             continue
 
-        files_to_add.append(filename_part)
+        if "D" in status:
+            files_to_update.append(filename_part)
+        else:
+            files_to_add.append(filename_part)
 
-    if not files_to_add:
+    if not files_to_add and not files_to_update:
         raise RuntimeError(
             f"No non-secret files to commit for issue {issue_ref(issue_number)}. "
             "All changes appear to be secret files."
         )
 
     # Stage the files
-    run(["git", "add", *files_to_add], cwd=worktree_path)
+    if files_to_update:
+        run(["git", "add", "-u", "--", *files_to_update], cwd=worktree_path)
+    if files_to_add:
+        run(["git", "add", "--", *files_to_add], cwd=worktree_path)
 
     # Generate commit message
     issue = fetch_issue_info(issue_number)
@@ -762,11 +806,12 @@ def commit_changes(issue_number: int, worktree_path: Path, agent: str = "claude"
         issue_body=_issue_body(issue),
         worktree_path=worktree_path,
         agent=agent,
+        git_message_timeout=git_message_timeout,
     )
 
-    # Commit (signed — required by repo policy)
+    # Commit with cryptographic signature and DCO sign-off — required by repo policy.
     run(
-        ["git", "commit", "-S", "-m", commit_msg],
+        ["git", "commit", "-S", "-s", "-m", commit_msg],
         cwd=worktree_path,
     )
 
@@ -779,6 +824,7 @@ def ensure_pr_created(
     status_tracker: StatusTracker | None = None,
     slot_id: int | None = None,
     agent: str = "claude",
+    git_message_timeout: int = DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT,
 ) -> int:
     """Ensure the implementation commit is pushed and a PR exists.
 
@@ -791,6 +837,8 @@ def ensure_pr_created(
         status_tracker: StatusTracker instance for slot updates (optional)
         slot_id: Worker slot ID for status updates
         agent: Selected implementation agent for generated PR metadata.
+        git_message_timeout: Timeout in seconds for the lightweight PR-message
+            agent. Defaults to :data:`DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT`.
 
     Returns:
         PR number
@@ -874,6 +922,7 @@ def ensure_pr_created(
         agent=agent,
         base=base_branch,
         worktree_path=worktree_path,
+        git_message_timeout=git_message_timeout,
     )
     logger.info("Created PR #%s", pr_number)
     return pr_number
@@ -886,6 +935,7 @@ def create_pr(
     agent: str = "claude",
     base: str = "main",
     worktree_path: Path | None = None,
+    git_message_timeout: int = DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT,
 ) -> int:
     """Create pull request for issue.
 
@@ -897,6 +947,8 @@ def create_pr(
         base: Base branch used for changed-file and commit context.
         worktree_path: Optional worktree path used to invoke the lightweight
             PR-message agent. When omitted, deterministic fallback text is used.
+        git_message_timeout: Timeout in seconds for the lightweight PR-message
+            agent. Defaults to :data:`DEFAULT_GIT_MESSAGE_AGENT_TIMEOUT`.
 
     Returns:
         PR number
@@ -912,6 +964,7 @@ def create_pr(
         base=base,
         worktree_path=worktree_path,
         agent=agent,
+        git_message_timeout=git_message_timeout,
     )
     pr_title = pr_message.title
     pr_body = get_pr_description(

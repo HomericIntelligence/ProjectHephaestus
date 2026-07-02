@@ -98,17 +98,21 @@ class TestLocalBranchExists:
 class TestRunGitCmd:
     """Tests for run_git_cmd."""
 
-    def test_dry_run_does_not_call_subprocess(self):
-        """In dry-run mode, no subprocess is called."""
-        with patch("subprocess.run") as mock_run:
-            run_git_cmd(["git", "push", "origin", "main"], dry_run=True)
-            mock_run.assert_not_called()
+    @patch("hephaestus.github.pr_merge.run_subprocess")
+    def test_dry_run_delegates_to_shared_helper(self, mock_run):
+        """Dry-run handling is delegated to the shared subprocess helper."""
+        run_git_cmd(["git", "push", "origin", "main"], dry_run=True)
+        mock_run.assert_called_once_with(
+            ["git", "push", "origin", "main"],
+            cwd=None,
+            dry_run=True,
+        )
 
-    def test_non_dry_run_calls_subprocess(self):
-        """In non-dry-run mode, subprocess is called."""
-        with patch("subprocess.run") as mock_run:
-            run_git_cmd(["git", "status"], dry_run=False)
-            mock_run.assert_called_once()
+    @patch("hephaestus.github.pr_merge.run_subprocess")
+    def test_non_dry_run_delegates_to_shared_helper(self, mock_run):
+        """Non-dry-run execution is delegated to the shared subprocess helper."""
+        run_git_cmd(["git", "status"], dry_run=False)
+        mock_run.assert_called_once_with(["git", "status"], cwd=None, dry_run=False)
 
 
 class TestChecksSuccessAndPrint:

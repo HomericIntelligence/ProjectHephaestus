@@ -159,7 +159,7 @@ class TestResolveFleetConfig:
         # Mock _find_default_config to return the tmp_path config file
         # This isolates the test from the development environment and makes it portable
         # to installed packages where the bundled .fleet.yml won't exist
-        with patch("hephaestus.github.fleet_sync._find_default_config") as mock_find:
+        with patch("hephaestus.github.fleet_sync.config._find_default_config") as mock_find:
             mock_find.return_value = cfg
             org, repos = resolve_fleet_config(cli_org=None, cli_repos=None, config_path=None)
 
@@ -176,3 +176,17 @@ class TestResolveFleetConfig:
         org, repos = resolve_fleet_config(cli_org=None, cli_repos=None, config_path=None)
         assert org == "CwdOrg"
         assert repos == ["cwdrepo"]
+
+    def test_fleet_config_missing_pyyaml_wraps_with_context(self, tmp_path, monkeypatch) -> None:
+        """A .yaml fleet config with PyYAML absent preserves the path context wrapper.
+
+        Regression for issue #1510: the ValueError→RuntimeError type flip in load_config
+        must not cause the 'Failed to load fleet config from {path}' wrapper to be lost.
+        """
+        from hephaestus.github import fleet_sync
+
+        monkeypatch.setattr("hephaestus.config.utils.YAML_AVAILABLE", False)
+        cfg = tmp_path / ".fleet.yml"
+        cfg.write_text("org: acme\nrepos: [a, b]\n")
+        with pytest.raises(RuntimeError, match=r"Failed to load fleet config from .*\.fleet\.yml"):
+            fleet_sync._load_fleet_config(str(cfg))

@@ -9,13 +9,14 @@ mock all external collaborators (GitHub API + Claude calls).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
 from hephaestus.automation import planner as planner_mod
-from hephaestus.automation.models import PlannerOptions, PlanResult
+from hephaestus.automation.models import DEFAULT_WORKER_COUNT, PlannerOptions, PlanResult
 
 
 @pytest.fixture(autouse=True)
@@ -58,10 +59,19 @@ def test_main_resolves_agent_when_omitted(monkeypatch: Any) -> None:
     assert captured["options"].agent == "codex"
 
 
-def test_main_returns_zero_when_rate_limited(monkeypatch: Any) -> None:
-    """If issue discovery is rate-limited, ``main()`` exits cleanly with 0."""
+def test_parse_args_default_parallel_uses_shared_worker_default() -> None:
+    """Planner --parallel default stays aligned with shared worker defaults."""
+    args = planner_mod._parse_args([])
+
+    assert args.parallel == DEFAULT_WORKER_COUNT
+
+
+def test_main_returns_zero_when_rate_limited(monkeypatch: Any, tmp_path: Path) -> None:
+    """If issue discovery is rate-limited, main() exits cleanly and writes 0 work."""
     from hephaestus.automation.github_api import GitHubRateLimitError
 
+    report = tmp_path / "report.txt"
+    monkeypatch.setenv("HEPH_WORK_REPORT", str(report))
     monkeypatch.setattr("sys.argv", ["planner", "--agent", "claude"])
     with patch(
         "hephaestus.automation.planner.gh_list_open_issues",
@@ -69,6 +79,7 @@ def test_main_returns_zero_when_rate_limited(monkeypatch: Any) -> None:
     ):
         rc = planner_mod.main()
     assert rc == 0
+    assert report.read_text(encoding="utf-8") == "0"
 
 
 def test_run_skips_issue_with_existing_plan() -> None:
@@ -99,7 +110,7 @@ def test_run_skips_issue_with_existing_plan() -> None:
         # the worker, so _has_existing_plan never runs (#1156). Empty labels →
         # the issue reaches the worker, where the mocked guard returns True.
         patch(
-            "hephaestus.automation.planner_state.fetch_all_issue_labels_graphql",
+            "hephaestus.automation.state.planner.fetch_all_issue_labels_graphql",
             return_value={},
         ),
     ):

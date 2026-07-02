@@ -10,6 +10,7 @@ import pytest
 
 from hephaestus.automation.models import PlannerOptions
 from hephaestus.automation.planner import Planner
+from hephaestus.github.mnemosyne_repo import MnemosyneTarget
 
 
 @pytest.fixture
@@ -53,10 +54,10 @@ class TestCallClaude:
 
         stack = ExitStack()
         stack.enter_context(
-            patch("hephaestus.automation.planner_claude.get_repo_root", return_value=Path("/repo"))
+            patch("hephaestus.automation.planner.get_repo_root", return_value=Path("/repo"))
         )
         stack.enter_context(
-            patch("hephaestus.automation.planner_claude.get_repo_slug", return_value="TestRepo")
+            patch("hephaestus.automation.planner.get_repo_slug", return_value="TestRepo")
         )
         return stack
 
@@ -90,6 +91,26 @@ class TestCallClaude:
             assert args[-1] == "Test prompt"
             assert "--output-format" in args
             assert "text" in args
+
+    def test_omitted_timeout_uses_env_configured_plan_timeout(
+        self, planner: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Planner._call_claude fills omitted timeouts from HEPH_AGENT_PLAN_TIMEOUT."""
+        monkeypatch.setenv("HEPH_AGENT_PLAN_TIMEOUT", "333")
+        with (
+            self._patch_repo(),
+            patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(stdout="This is a plan", returncode=0)
+
+            planner._call_claude(
+                "Test prompt",
+                model="claude-opus-4-7",
+                agent="planner",
+                issue_number=123,
+            )
+
+        assert mock_run.call_args.kwargs["timeout"] == 333
 
     def test_model_kwarg_pins_argv(self, planner: Any) -> None:
         with (
@@ -138,7 +159,7 @@ class TestCallClaude:
         with (
             self._patch_repo(),
             patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
-            patch("hephaestus.automation.planner_claude.scan_quota_reset") as mock_scan,
+            patch("hephaestus.automation.planner.scan_quota_reset") as mock_scan,
         ):
             mock_run.side_effect = [
                 subprocess.CalledProcessError(1, "claude", stderr="rate limit exceeded"),
@@ -167,7 +188,7 @@ class TestCallClaude:
         with (
             self._patch_repo(),
             patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
-            patch("hephaestus.automation.planner_claude.time.sleep") as mock_sleep,
+            patch("hephaestus.automation.planner.time.sleep") as mock_sleep,
         ):
             mock_run.side_effect = [
                 subprocess.CalledProcessError(
@@ -195,7 +216,7 @@ class TestCallClaude:
         with (
             self._patch_repo(),
             patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
-            patch("hephaestus.automation.planner_claude.time.sleep"),
+            patch("hephaestus.automation.planner.time.sleep"),
         ):
             mock_run.side_effect = subprocess.CalledProcessError(
                 1, "claude", stderr="API Error: 529 Overloaded"
@@ -216,7 +237,7 @@ class TestCallClaude:
         with (
             self._patch_repo(),
             patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
-            patch("hephaestus.automation.planner_claude.time.sleep") as mock_sleep,
+            patch("hephaestus.automation.planner.time.sleep") as mock_sleep,
         ):
             mock_run.side_effect = subprocess.CalledProcessError(
                 1, "claude", stderr="API Error: 400 Bad Request"
@@ -241,7 +262,7 @@ class TestCallClaude:
         with (
             self._patch_repo(),
             patch("hephaestus.automation.claude_invoke.subprocess.run") as mock_run,
-            patch("hephaestus.automation.planner_claude.wait_until") as mock_wait,
+            patch("hephaestus.automation.planner.wait_until") as mock_wait,
         ):
             mock_run.side_effect = [
                 subprocess.CalledProcessError(1, "claude", output=usage_json, stderr=""),
@@ -513,10 +534,21 @@ class TestEnsureMnemosyne:
     """Tests for _ensure_mnemosyne method."""
 
     def test_clone_success(self, planner: Any, tmp_path: Any) -> None:
-        """Test successful clone returns True and runs correct command."""
+        """Test successful clone returns True and clones the resolved slug."""
         mnemosyne_root = tmp_path / "ProjectMnemosyne"
+        target = MnemosyneTarget(
+            owner="HomericIntelligence",
+            slug="HomericIntelligence/ProjectMnemosyne",
+            is_fork_of_upstream=False,
+        )
 
-        with patch("hephaestus.automation.advise_runner.gh_call") as mock_gh:
+        with (
+            patch("hephaestus.automation.advise_runner.gh_call") as mock_gh,
+            patch(
+                "hephaestus.automation.advise_runner.resolve_mnemosyne_target",
+                return_value=target,
+            ),
+        ):
             mock_gh.return_value = MagicMock(returncode=0)
 
             result = planner._ensure_mnemosyne(mnemosyne_root)
@@ -526,7 +558,7 @@ class TestEnsureMnemosyne:
         cmd = mock_gh.call_args[0][0]
         assert "repo" in cmd
         assert "clone" in cmd
-        assert "HomericIntelligence/ProjectMnemosyne" in cmd
+        assert target.slug in cmd
         assert str(mnemosyne_root) in cmd
 
     def test_clone_failure(self, planner: Any, tmp_path: Any) -> None:

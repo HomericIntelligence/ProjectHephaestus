@@ -22,9 +22,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
+from hephaestus.io.utils import write_secure
+
+from ._review_utils import ensure_state_dir, log_file_path
+from .agent_config import (
+    learn_claude_timeout,
+    plan_reviewer_claude_timeout,
+    planner_claude_timeout,
+)
 from .claude_invoke import INFRA_ERROR_REVIEW_TEXT, parse_review_verdict
 from .claude_models import planner_model, reviewer_model
-from .claude_timeouts import learn_claude_timeout, planner_claude_timeout
 from .git_utils import get_repo_root, issue_ref
 from .github_api import (
     gh_issue_add_labels,
@@ -147,7 +154,7 @@ class PlannerHost(Protocol):
         agent: str,
         issue_number: int | str,
         max_retries: int = 3,
-        timeout: int = 300,
+        timeout: int | None = None,
         extra_args: list[str] | None = None,
     ) -> str:
         """Call Claude with the given prompt."""
@@ -620,9 +627,7 @@ class PlanReviewLoop:
             return ""
 
     def _planner_learn_state_dir(self) -> Path:
-        state_dir = get_repo_root() / "build" / ".issue_implementer"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        return state_dir
+        return ensure_state_dir(get_repo_root())
 
     def _write_planner_learn_record(
         self,
@@ -644,7 +649,7 @@ class PlanReviewLoop:
             timestamp = datetime.now(timezone.utc).isoformat()
             duration = round(time.monotonic() - start, 3) if start else None
             record_file = state_dir / f"planner-learn-{issue_number}.json"
-            log_file = state_dir / f"planner-learn-{issue_number}.log"
+            log_file = log_file_path(state_dir, "planner-learn", issue_number)
             record = {
                 "issue_number": issue_number,
                 "learn_attempted_at": timestamp,
@@ -664,8 +669,8 @@ class PlanReviewLoop:
                 )
             if error:
                 record["error"] = error
-            record_file.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-            log_file.write_text(output if succeeded else f"FAILED: {error}\n")
+            write_secure(record_file, json.dumps(record, indent=2, sort_keys=True) + "\n")
+            write_secure(log_file, output if succeeded else f"FAILED: {error}\n")
         except OSError as exc:
             logger.warning(
                 "%s: failed to write planner-learnings state (non-fatal): %s",
@@ -726,7 +731,7 @@ class PlanReviewLoop:
                 model=reviewer_model(),
                 agent=reviewer_agent(AGENT_PLAN_REVIEWER, iteration),
                 issue_number=issue_number,
-                timeout=planner_claude_timeout(),
+                timeout=plan_reviewer_claude_timeout(),
             )
         except Exception as e:
             logger.error(

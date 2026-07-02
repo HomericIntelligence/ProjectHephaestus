@@ -1,6 +1,10 @@
 # ProjectHephaestus
 
-[![Test](https://github.com/HomericIntelligence/ProjectHephaestus/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/HomericIntelligence/ProjectHephaestus/actions/workflows/test.yml)
+[![Test](https://github.com/HomericIntelligence/ProjectHephaestus/actions/workflows/test.yml/badge.svg)](https://github.com/HomericIntelligence/ProjectHephaestus/actions/workflows/test.yml)
+[![Pre-commit](https://github.com/HomericIntelligence/ProjectHephaestus/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/HomericIntelligence/ProjectHephaestus/actions/workflows/pre-commit.yml)
+[![Security](https://github.com/HomericIntelligence/ProjectHephaestus/actions/workflows/security.yml/badge.svg)](https://github.com/HomericIntelligence/ProjectHephaestus/actions/workflows/security.yml)
+[![Release](https://github.com/HomericIntelligence/ProjectHephaestus/actions/workflows/release.yml/badge.svg)](https://github.com/HomericIntelligence/ProjectHephaestus/actions/workflows/release.yml)
+[![Auto Tag](https://github.com/HomericIntelligence/ProjectHephaestus/actions/workflows/auto-tag.yml/badge.svg)](https://github.com/HomericIntelligence/ProjectHephaestus/actions/workflows/auto-tag.yml)
 [![PyPI](https://img.shields.io/pypi/v/HomericIntelligence-Hephaestus.svg)](https://pypi.org/project/HomericIntelligence-Hephaestus/)
 [![Python](https://img.shields.io/pypi/pyversions/HomericIntelligence-Hephaestus.svg)](https://pypi.org/project/HomericIntelligence-Hephaestus/)
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
@@ -45,7 +49,9 @@ and intentionally excludes `[dev]` (which carries test/lint tooling such as
 pytest, ruff, and mypy):
 
 - `pip install HomericIntelligence-Hephaestus[all]` — installs all runtime
-  extras: `github`, `nats`, `toml`, `xml`, `schema`.
+  extras: `automation`, `github`, `nats`, `toml`, `xml`, `schema`. Note that
+  `automation` is the product layer (`hephaestus.automation`) and pulls in
+  `pydantic`; see [ADR 0001](docs/adr/0001-automation-library-boundary.md).
 - `pip install HomericIntelligence-Hephaestus[dev]` — installs development and
   testing dependencies. Use this for contributors and CI.
 - `pip install "HomericIntelligence-Hephaestus[all,dev]"` — both, for a full
@@ -81,9 +87,10 @@ ProjectHephaestus ships two layers from one distribution:
   reviewers, loop runner, curses TUI).
 
 `import hephaestus` does **not** load `hephaestus.automation`, `curses`,
-`fcntl`, or `pydantic`. The boundary is enforced by
-`tests/unit/test_import_surface.py` and
-`tests/unit/test_automation_boundary.py`. See
+`fcntl`, or `pydantic`, and a base `pip install` no longer pulls `pydantic`
+(it ships only in the `[automation]` extra). The boundary is enforced by
+`tests/unit/validation/test_import_surface.py` and
+`tests/unit/validation/test_automation_boundary.py`. See
 [`docs/adr/0001-automation-library-boundary.md`](docs/adr/0001-automation-library-boundary.md).
 
 ## Directory Structure
@@ -313,9 +320,9 @@ config = merge_with_env({}, convert_bools=True)
 ## CLI Commands
 
 <!-- CLI table generated from pyproject.toml [project.scripts]. Keep in sync via
-     `python3 scripts/check_cli_table_sync.py` (also enforced in pre-commit). -->
+     `python3 -m hephaestus.scripts_lib.check_cli_table_sync` (also enforced in pre-commit). -->
 
-50 console scripts are installed when you install the package.  Run any command
+51 console scripts are installed when you install the package.  Run any command
 with `--help` to see full usage.
 
 ### Automation
@@ -400,6 +407,7 @@ sync (#993).
 | Command | Description |
 |---|---|
 | `hephaestus-audit-doc-policy` | Audit documentation command examples for policy violations |
+| `hephaestus-check-api-table-docs` | Enforce per-symbol `__all__` documentation in COMPATIBILITY.md |
 | `hephaestus-check-cli-tier-docs` | Enforce console-script stability-tier documentation in COMPATIBILITY.md |
 | `hephaestus-check-complexity` | Check cyclomatic complexity against a threshold |
 | `hephaestus-check-coverage` | Check test coverage against configurable thresholds |
@@ -497,7 +505,8 @@ three rules — a PR that violates any of them is blocked:
 3. Push the branch (`git push -u origin 123-amazing-feature`).
 4. Open a pull request whose body contains the literal line `Closes #123`
    (capital `C`, no colon, on its own line — `Fixes`/`Resolves` are **not** accepted).
-5. Enable auto-merge: `gh pr merge --auto --squash`.
+5. Keep auto-merge disabled until implementation review applies
+   `state:implementation-go`; then enable it with `gh pr merge --auto --squash`.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full process.
 

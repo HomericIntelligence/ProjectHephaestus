@@ -24,13 +24,11 @@ Exit codes:
 
 from __future__ import annotations
 
-import argparse
 import re
 import sys
 from pathlib import Path
 
-from hephaestus.cli.utils import add_json_arg, add_version_arg, format_output
-from hephaestus.utils.helpers import resolve_repo_root
+from hephaestus.cli.utils import create_validation_parser, format_output, resolve_repo_root
 
 # Scripts that are imported by other scripts (not invoked directly) — always active.
 _ALWAYS_ACTIVE: frozenset[str] = frozenset(
@@ -258,15 +256,9 @@ def main() -> int:
         Exit code (0 unless ``--strict`` and stale scripts are found).
 
     """
-    parser = argparse.ArgumentParser(
-        description="Detect scripts/ files with no references in CI configs or other scripts",
+    parser = create_validation_parser(
+        "Detect scripts/ files with no references in CI configs or other scripts",
         epilog="Example: %(prog)s --strict --verbose",
-    )
-    parser.add_argument(
-        "--repo-root",
-        type=Path,
-        default=None,
-        help="Repository root (default: auto-detected via git)",
     )
     parser.add_argument(
         "--strict",
@@ -285,12 +277,9 @@ def main() -> int:
         default=None,
         help="Exclude scripts whose name contains PATTERN (e.g. 'test_')",
     )
-    add_json_arg(parser)
-    add_version_arg(parser)
 
     args = parser.parse_args()
-
-    repo_root = resolve_repo_root(args.repo_root)
+    repo_root = resolve_repo_root(args)
 
     if args.json:
         stale = find_stale_scripts(repo_root, exclude_pattern=args.exclude)

@@ -928,6 +928,53 @@ class TestRunImplReviewLoop:
         assert mock_addr.call_args.kwargs["include_bootstrap_context"] is True
         assert mock_rev.call_count == 2
 
+    def test_no_session_conflict_gate_dispatches_fresh_agent(
+        self, implementer: IssueImplementer, tmp_path: Path
+    ) -> None:
+        """A conflicted existing PR with no session still gets an agent pass.
+
+        Existing-PR review can start without an implementer transcript. The
+        conflict gate must mirror address-review's fresh-session behavior
+        instead of dead-ending with "no implementer session to resume".
+        """
+        review_phase = implementer.phase_runner.review_phase
+
+        with (
+            patch.object(
+                review_phase,
+                "_pr_merge_state",
+                side_effect=[("DIRTY", "CONFLICTING"), ("CLEAN", "MERGEABLE")],
+            ),
+            patch("hephaestus.automation._review_phase.gh_call") as gh_call,
+            patch("hephaestus.automation._review_phase.sync_worktree_to_remote_branch"),
+            patch(
+                "hephaestus.automation._review_phase.rebase_worktree_onto",
+                return_value=False,
+            ),
+            patch.object(review_phase, "_resume_impl_with_feedback") as resume,
+            patch.object(implementer.phase_runner, "_commit_if_changes", return_value=True),
+            patch.object(implementer.phase_runner, "_push_branch") as push,
+        ):
+            gh_call.return_value = MagicMock(stdout='{"baseRefName": "main"}')
+            resume.return_value = True
+
+            resolved = review_phase._resolve_conflict_before_review(
+                issue_number=1,
+                pr_number=42,
+                worktree_path=tmp_path,
+                branch_name="1-auto-impl",
+                session_id=None,
+                slot_id=None,
+                thread_id=None,
+                state=None,
+            )
+
+        assert resolved is True
+        resume.assert_called_once()
+        assert resume.call_args.kwargs["session_id"] is None
+        assert "MERGE CONFLICT" in resume.call_args.kwargs["review_text"]
+        push.assert_called_once_with("1-auto-impl", tmp_path)
+
     def test_prior_review_passed_to_next_reviewer(
         self, implementer: IssueImplementer, tmp_path: Path
     ) -> None:
@@ -1176,6 +1223,59 @@ class TestRunImplReviewLoop:
         second = mock_addr.call_args_list[1]
         assert second.kwargs.get("unaddressed_findings") == snapshot
 
+    def test_no_commit_thread_count_reduction_extends_budget_to_re_review(
+        self, implementer: IssueImplementer, tmp_path: Path
+    ) -> None:
+        """A no-commit address turn still makes progress if unresolved threads decrease."""
+        snapshots = [
+            [{"id": "t0"}, {"id": "t1"}, {"id": "t2"}],
+            [{"id": "t1"}, {"id": "t2"}],
+            [{"id": "t1"}, {"id": "t2"}],
+            [{"id": "t2"}],
+            [{"id": "t2"}],
+            [],
+        ]
+
+        with (
+            patch.object(
+                implementer,
+                "_run_impl_review_step",
+                side_effect=[
+                    (_nogo("D"), ["t0"]),
+                    (_nogo("D"), ["t1"]),
+                    (_nogo("D"), ["t2"]),
+                    (_go(), []),
+                ],
+            ) as mock_rev,
+            patch.object(implementer, "_run_address_review_step", return_value=False),
+            patch.object(implementer, "_collect_diff", return_value="diff"),
+            patch(
+                "hephaestus.automation._review_phase.validate_prior_comments_addressed",
+                return_value=([], True, set()),
+            ) as validate,
+            patch(
+                "hephaestus.automation._review_phase.gh_pr_list_unresolved_threads",
+                side_effect=snapshots,
+            ),
+        ):
+            iters, verdict, _ = implementer._run_impl_review_loop(
+                issue_number=1554,
+                worktree_path=tmp_path,
+                branch_name="1554-auto-impl",
+                issue_title="t",
+                issue_body="ib",
+                session_id="sess",
+                slot_id=0,
+                thread_id=None,
+                pr_number=1570,
+            )
+
+        assert verdict == "GO"
+        assert iters == 4
+        assert mock_rev.call_count == 4
+        first_validated_threads = validate.call_args_list[0].kwargs["prior_threads"]
+        assert [thread["id"] for thread in first_validated_threads] == ["t0", "t1", "t2"]
+
     def test_no_commit_then_commit_clears_directive(
         self, implementer: IssueImplementer, tmp_path: Path
     ) -> None:
@@ -1298,6 +1398,67 @@ class TestRunImplReviewFailsSafe:
         assert verdict.is_error is True
         assert "Verdict: NOGO" not in out
 
+    def test_direct_reviewer_uses_env_configured_review_timeout(
+        self, implementer: IssueImplementer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Direct-agent implementation reviews use the centralized review timeout."""
+        monkeypatch.setenv("HEPH_AGENT_REVIEW_TIMEOUT", "777")
+        implementer.options.agent = "codex"
+
+        with (
+            patch("hephaestus.automation._review_phase.run_agent_text") as run_agent,
+            patch(
+                "hephaestus.automation._review_phase.direct_agent_model",
+                return_value="review-model",
+            ),
+        ):
+            run_agent.return_value = subprocess.CompletedProcess(
+                ["codex"], 0, stdout="Grade: A\nVerdict: GO\n", stderr=""
+            )
+
+            out = implementer._run_impl_review(
+                issue_number=1,
+                issue_title="t",
+                issue_body="b",
+                diff_text="d",
+                files_changed="f",
+                iteration=0,
+                prior_review=None,
+            )
+
+        assert "Verdict: GO" in out
+        assert run_agent.call_args.kwargs["timeout"] == 777
+
+    def test_collect_diff_uses_env_configured_timeout(
+        self, implementer: IssueImplementer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Diff collection uses the centralized diff timeout helper."""
+        monkeypatch.setenv("HEPH_DIFF_COLLECT_TIMEOUT", "88")
+        with patch("hephaestus.automation._review_phase.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                ["git", "diff"], 0, stdout="diff --git a/x b/x\n", stderr=""
+            )
+
+            assert implementer._collect_diff(tmp_path, "branch") == "diff --git a/x b/x\n"
+
+        assert mock_run.call_args.kwargs["timeout"] == 88
+
+    def test_collect_changed_files_uses_env_configured_git_timeout(
+        self, implementer: IssueImplementer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Changed-file collection uses the centralized agent git timeout helper."""
+        monkeypatch.setenv("HEPH_AGENT_GIT_TIMEOUT", "99")
+        with patch("hephaestus.automation._review_phase.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                ["git", "diff"], 0, stdout="hephaestus/constants.py\n", stderr=""
+            )
+
+            assert implementer._collect_changed_files(tmp_path, "branch") == (
+                "hephaestus/constants.py"
+            )
+
+        assert mock_run.call_args.kwargs["timeout"] == 99
+
 
 class TestResumeImplWithFeedback:
     """Resume routes through invoke_claude_with_session.
@@ -1339,6 +1500,36 @@ class TestResumeImplWithFeedback:
         assert kwargs["issue"] == 1
         assert kwargs["recreate_on_resume_failure"] is False
         assert "Grade: D" in kwargs["prompt"] or "NOGO" in kwargs["prompt"]
+
+    def test_direct_no_session_starts_fresh_session(
+        self, implementer: IssueImplementer, tmp_path: Path
+    ) -> None:
+        implementer.options.agent = "codex"
+        result = subprocess.CompletedProcess(
+            args=["codex", "exec"], returncode=0, stdout="ok", stderr=""
+        )
+        with (
+            patch(
+                "hephaestus.automation._review_phase.run_agent_session", return_value=result
+            ) as run_session,
+            patch("hephaestus.automation._review_phase.resume_agent_session") as resume_session,
+            patch(
+                "hephaestus.automation._review_phase.direct_agent_model",
+                return_value="gpt-test",
+            ),
+        ):
+            ok = implementer._resume_impl_with_feedback(
+                session_id=None,
+                worktree_path=tmp_path,
+                issue_number=1,
+                review_text="Grade: D\nVerdict: NOGO",
+                prev_iteration=0,
+                verdict="NOGO",
+            )
+
+        assert ok is True
+        run_session.assert_called_once()
+        resume_session.assert_not_called()
 
     def test_resume_failure_returns_false(
         self, implementer: IssueImplementer, tmp_path: Path
@@ -1927,7 +2118,7 @@ class TestFetchPlanAndReview:
     def test_extracts_plan_and_review_bodies(
         self, implementer: IssueImplementer, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from hephaestus.automation import review_state as review_state_mod
+        from hephaestus.automation.state import review as review_state_mod
 
         comments = [
             {"body": "# Implementation Plan\n\nStep 1"},
@@ -1943,7 +2134,7 @@ class TestFetchPlanAndReview:
     def test_returns_empty_on_fetch_failure(
         self, implementer: IssueImplementer, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from hephaestus.automation import review_state as review_state_mod
+        from hephaestus.automation.state import review as review_state_mod
 
         def _boom(_n: int) -> list:
             raise RuntimeError("graphql down")
@@ -2541,10 +2732,10 @@ class TestResolveDirtyReusedWorktree:
                     thread_id=None,
                 )
 
-    def test_restores_dirty_commit_after_sync_with_signed_cherry_pick(
+    def test_restores_dirty_commit_after_sync_with_signed_dco_cherry_pick(
         self, implementer: IssueImplementer, tmp_path: Path
     ) -> None:
-        """The salvage commit is replayed with a signed cherry-pick."""
+        """The salvage commit is replayed with signed and DCO-signed cherry-pick."""
         wt = tmp_path / "worktree"
         wt.mkdir(exist_ok=True)
         with patch("hephaestus.automation.implementer_phase_runner.run") as mock_run:
@@ -2556,7 +2747,7 @@ class TestResolveDirtyReusedWorktree:
                 thread_id=None,
             )
         mock_run.assert_called_once_with(
-            ["git", "cherry-pick", "-S", "abc123"],
+            ["git", "cherry-pick", "-S", "-s", "abc123"],
             cwd=wt,
             check=True,
         )

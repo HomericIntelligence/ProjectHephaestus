@@ -39,8 +39,10 @@ from hephaestus.agents.runtime import (
     uses_direct_agent_runner,
 )
 from hephaestus.github.rate_limit import resolve_quota_reset_epoch, wait_until
+from hephaestus.io.utils import write_secure
 
-from .claude_timeouts import follow_up_claude_timeout
+from ._review_utils import log_file_path
+from .agent_config import DEFAULT_AGENT_TIMEOUT
 from .git_utils import issue_ref, run
 from .github_api import gh_issue_comment, gh_issue_create
 from .prompts import get_follow_up_prompt
@@ -369,7 +371,7 @@ def _persist_rejected(
     path = state_dir / f"follow-up-rejected-{issue_number}.json"
     payload = [{"title": r.title, "reason": r.reason} for r in rejected]
     with contextlib.suppress(Exception):
-        path.write_text(json.dumps(payload, indent=2) + "\n")
+        write_secure(path, json.dumps(payload, indent=2) + "\n")
 
 
 def run_follow_up_issues(  # noqa: C901  # orchestration: quota-check + parse + file paths are unavoidably coupled
@@ -382,6 +384,7 @@ def run_follow_up_issues(  # noqa: C901  # orchestration: quota-check + parse + 
     dry_run: bool = False,
     agent: str = "claude",
     session_agent: str | None = None,
+    timeout: int = DEFAULT_AGENT_TIMEOUT,
 ) -> FollowUpResponse | None:
     """Resume the implementation Claude session and file ONE consolidated follow-up issue.
 
@@ -401,18 +404,18 @@ def run_follow_up_issues(  # noqa: C901  # orchestration: quota-check + parse + 
     - In ``dry_run`` mode, all GitHub side effects are suppressed.
     """
     state_dir.mkdir(parents=True, exist_ok=True)
-    follow_up_log = state_dir / f"follow-up-{issue_number}.log"
+    follow_up_log = log_file_path(state_dir, "follow-up", issue_number)
     if not session_agent_matches(session_agent, agent):
         message = (
             f"Session belongs to {session_agent or 'claude'}, "
             f"but selected agent is {agent}; skipping follow-up resume"
         )
         logger.warning("Follow-up skipped for issue #%d: %s", issue_number, message)
-        follow_up_log.write_text(f"FAILED: {message}\n")
+        write_secure(follow_up_log, f"FAILED: {message}\n")
         return None
 
     prompt_file = worktree_path / f".claude-followup-{issue_number}.md"
-    prompt_file.write_text(get_follow_up_prompt(issue_number))
+    write_secure(prompt_file, get_follow_up_prompt(issue_number))
 
     try:
         if uses_direct_agent_runner(agent):
@@ -421,7 +424,7 @@ def run_follow_up_issues(  # noqa: C901  # orchestration: quota-check + parse + 
                 session_id=session_id,
                 prompt=prompt_file.read_text(),
                 cwd=worktree_path,
-                timeout=follow_up_claude_timeout(),
+                timeout=timeout,
                 model=direct_agent_model(agent, "HEPH_LEARN_MODEL"),
             )
             stdout = agent_json_stdout(direct_result.stdout, direct_result.session_id)
@@ -436,11 +439,11 @@ def run_follow_up_issues(  # noqa: C901  # orchestration: quota-check + parse + 
                     "json",
                 ],
                 cwd=worktree_path,
-                timeout=follow_up_claude_timeout(),
+                timeout=timeout,
             )
             stdout = result.stdout or ""
 
-        follow_up_log.write_text(stdout)
+        write_secure(follow_up_log, stdout)
 
         try:
             data = json.loads(stdout)
@@ -530,7 +533,7 @@ def run_follow_up_issues(  # noqa: C901  # orchestration: quota-check + parse + 
             error_output += f"\nSTDERR:\n{e.stderr or ''}"
         error_output += f"\nTRACEBACK:\n{traceback.format_exc()}"
         with contextlib.suppress(Exception):
-            follow_up_log.write_text(error_output)
+            write_secure(follow_up_log, error_output)
         return None
     finally:
         with contextlib.suppress(Exception):

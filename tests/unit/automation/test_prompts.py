@@ -40,7 +40,7 @@ class TestImplementationPrompt:
         assert "ProjectHephaestus orchestrator owns all git and GitHub mutation" in out
         assert "Closes #42" in out
         assert "MANDATORY" in out
-        assert "git commit -S" in out
+        assert "git commit -S -s" in out
         assert "DO NOT run `git commit`" in out
         assert "`git push`" in out
         assert "`gh pr create`" in out
@@ -156,8 +156,8 @@ class TestPRReviewAnalysisPrompt:
     def test_pr_review_prompt_preserves_json_block(self) -> None:
         """The trailing JSON fenced block must remain byte-exact.
 
-        `pr_reviewer.py:_parse_json_block` extracts the LAST fenced JSON
-        block — any change to the schema or fence ordering breaks parsing.
+        `_review_utils.parse_json_block` extracts the LAST fenced JSON block — any
+        change to the schema or fence ordering breaks parsing.
         """
         out = prompts.get_pr_review_analysis_prompt(pr_number=1, issue_number=1)
         # The schema example object must appear verbatim (now on its own line so
@@ -466,6 +466,99 @@ class TestUntrustedFencing:
         assert self._fence_present(out, "GIT_STATUS")
         assert self._fence_present(out, "GIT_DIFF_HEAD")
         assert prompts._UNTRUSTED_NOTICE in out
+
+    def test_refactored_prompt_builders_include_untrusted_notice(self) -> None:
+        """Prompt builders using shared fencing still carry the notice."""
+        rendered_prompts = [
+            (
+                "plan_review",
+                prompts.get_plan_review_prompt(
+                    issue_number=1,
+                    issue_title="t",
+                    issue_body=self.INJECTION,
+                    plan_text=self.INJECTION,
+                ),
+            ),
+            (
+                "plan_loop_review",
+                prompts.get_plan_loop_review_prompt(
+                    issue_number=1,
+                    issue_title="t",
+                    issue_body=self.INJECTION,
+                    plan_text=self.INJECTION,
+                    learnings="",
+                    iteration=0,
+                    prior_review=None,
+                    advise_findings=self.INJECTION,
+                ),
+            ),
+            (
+                "implementation",
+                prompts.get_implementation_prompt(
+                    issue_number=1,
+                    issue_title="t",
+                    issue_body=self.INJECTION,
+                ),
+            ),
+            (
+                "impl_loop_review",
+                prompts.get_impl_loop_review_prompt(
+                    issue_number=1,
+                    issue_title="t",
+                    issue_body=self.INJECTION,
+                    diff_text=self.INJECTION,
+                    files_changed="a.py",
+                    iteration=0,
+                    prior_review=None,
+                ),
+            ),
+            (
+                "dirty_reused_worktree_decision",
+                prompts.get_dirty_reused_worktree_decision_prompt(
+                    branch_name="branch",
+                    status_text=" M a.py",
+                    diff_text=self.INJECTION,
+                ),
+            ),
+            (
+                "address_review",
+                prompts.get_address_review_prompt(
+                    pr_number=1,
+                    issue_number=1,
+                    worktree_path="/tmp/wt",
+                    threads_json="[]",
+                    todo_block="",
+                ),
+            ),
+            (
+                "pr_review_analysis",
+                prompts.get_pr_review_analysis_prompt(
+                    pr_number=1,
+                    issue_number=1,
+                    issue_body=self.INJECTION,
+                    advise_findings=self.INJECTION,
+                ),
+            ),
+            (
+                "review_validation",
+                prompts.get_review_validation_prompt(
+                    pr_number=1,
+                    issue_number=1,
+                    prior_comments_json="[]",
+                    diff_text=self.INJECTION,
+                ),
+            ),
+            (
+                "comment_difficulty",
+                prompts.get_comment_difficulty_prompt(
+                    issue_number=1,
+                    comments_json="[]",
+                ),
+            ),
+        ]
+
+        for name, out in rendered_prompts:
+            assert prompts._UNTRUSTED_NOTICE in out, name
 
 
 class TestSharedRubricConstants:

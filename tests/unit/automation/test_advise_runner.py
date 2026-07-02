@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from hephaestus.automation import advise_runner
+from hephaestus.github.mnemosyne_repo import MnemosyneTarget
 
 
 def _build_prompt(**kwargs: object) -> str:
@@ -65,26 +66,89 @@ class TestEnsureMnemosyne:
         assert ["git", "-C", str(mnemosyne_root), "pull", "--ff-only"] in calls
         assert not any(call[:3] == ["gh", "repo", "clone"] for call in calls)
 
-    def test_existing_corrupt_checkout_is_removed_and_recloned(self, tmp_path: Path) -> None:
+    def test_existing_checkout_uses_env_configured_git_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Git validation/refresh calls use the centralized call-time timeout."""
+        monkeypatch.setenv("HEPH_AGENT_GIT_TIMEOUT", "44")
         mnemosyne_root = tmp_path / "ProjectMnemosyne"
         mnemosyne_root.mkdir()
-        (mnemosyne_root / ".git").mkdir()
-        calls: list[list[str]] = []
+        timeouts: list[object] = []
 
-        def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-            calls.append(argv)
+        def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            timeouts.append(kwargs.get("timeout"))
             if "rev-parse" in argv:
-                return subprocess.CompletedProcess(argv, 128, stdout="", stderr="not a repo")
-            if argv[:3] == ["gh", "repo", "clone"]:
-                mnemosyne_root.mkdir(exist_ok=True)
-                return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+                return subprocess.CompletedProcess(argv, 0, stdout="true\n", stderr="")
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
         with patch("hephaestus.automation.advise_runner.subprocess.run", side_effect=fake_run):
             assert advise_runner.ensure_mnemosyne(mnemosyne_root) is True
 
+        assert timeouts == [44, 44]
+
+    def test_clone_uses_env_configured_clone_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ProjectMnemosyne clone calls use the centralized clone timeout."""
+        monkeypatch.setenv("HEPH_AGENT_CLONE_TIMEOUT", "55")
+        mnemosyne_root = tmp_path / "ProjectMnemosyne"
+        target = MnemosyneTarget(
+            owner="HomericIntelligence",
+            slug="HomericIntelligence/ProjectMnemosyne",
+            is_fork_of_upstream=False,
+        )
+
+        with (
+            patch("hephaestus.automation.advise_runner.gh_call") as gh_call,
+            patch(
+                "hephaestus.automation.advise_runner.resolve_mnemosyne_target",
+                return_value=target,
+            ),
+        ):
+            gh_call.return_value = subprocess.CompletedProcess(
+                ["gh", "repo", "clone"], 0, stdout="", stderr=""
+            )
+            assert advise_runner._clone_mnemosyne(mnemosyne_root) is True
+
+        assert gh_call.call_args.kwargs["timeout"] == 55
+        # The clone targets the resolved slug, not a hardcoded upstream literal.
+        assert gh_call.call_args[0][0][:3] == ["repo", "clone", target.slug]
+
+    def test_existing_corrupt_checkout_is_removed_and_recloned(self, tmp_path: Path) -> None:
+        mnemosyne_root = tmp_path / "ProjectMnemosyne"
+        mnemosyne_root.mkdir()
+        (mnemosyne_root / ".git").mkdir()
+        calls: list[list[str]] = []
+        gh_calls: list[list[str]] = []
+        target = MnemosyneTarget(
+            owner="HomericIntelligence",
+            slug="HomericIntelligence/ProjectMnemosyne",
+            is_fork_of_upstream=False,
+        )
+
+        def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            if "rev-parse" in argv:
+                return subprocess.CompletedProcess(argv, 128, stdout="", stderr="not a repo")
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+        def fake_gh_call(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            gh_calls.append(argv)
+            mnemosyne_root.mkdir(exist_ok=True)
+            return subprocess.CompletedProcess(["gh", *argv], 0, stdout="", stderr="")
+
+        with (
+            patch("hephaestus.automation.advise_runner.subprocess.run", side_effect=fake_run),
+            patch("hephaestus.automation.advise_runner.gh_call", side_effect=fake_gh_call),
+            patch(
+                "hephaestus.automation.advise_runner.resolve_mnemosyne_target",
+                return_value=target,
+            ),
+        ):
+            assert advise_runner.ensure_mnemosyne(mnemosyne_root) is True
+
         assert any("rev-parse" in call for call in calls)
-        assert any(call[:3] == ["gh", "repo", "clone"] for call in calls)
+        assert gh_calls == [["repo", "clone", target.slug, str(mnemosyne_root)]]
         assert not any("pull" in call for call in calls)
 
 

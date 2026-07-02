@@ -82,6 +82,42 @@ class TestWriteFile:
         write_file(f, "hi")
         assert f.exists()
 
+    def test_write_is_atomic_on_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed write leaves the original file intact, never partial."""
+        f = tmp_path / "out.txt"
+        f.write_text("original-intact")
+
+        def boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError("simulated atomic replace failure")
+
+        monkeypatch.setattr(os, "replace", boom)
+        with pytest.raises(OSError, match="simulated atomic replace failure"):
+            write_file(f, "new-content-that-must-not-land")
+
+        assert f.read_text() == "original-intact"
+
+    def test_failed_write_leaves_no_temp_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed write cleans up its temporary file."""
+        f = tmp_path / "out.txt"
+
+        def boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError("simulated atomic replace failure")
+
+        monkeypatch.setattr(os, "replace", boom)
+        with pytest.raises(OSError, match="simulated atomic replace failure"):
+            write_file(f, "content")
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_rejects_non_overwrite_modes(self, tmp_path: Path) -> None:
+        """Only overwrite modes are supported for atomic writes."""
+        with pytest.raises(ValueError, match="atomic overwrite modes"):
+            write_file(tmp_path / "out.txt", "content", mode="a")
+
 
 class TestSafeWrite:
     """Tests for safe_write."""

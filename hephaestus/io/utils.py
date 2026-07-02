@@ -9,6 +9,7 @@ Usage:
 
     ensure_directory('/path/to/dir')
     safe_write('/path/to/file.txt', 'content')
+    write_file('/path/to/file.txt', 'content')
 """
 
 import json
@@ -56,21 +57,26 @@ def write_file(
     content: str | bytes,
     mode: str = "w",
 ) -> None:
-    """Write content to a file.
+    """Write content to a file atomically.
+
+    This public compatibility wrapper delegates to :func:`safe_write` without
+    creating a backup file, preserving the simple overwrite behavior while
+    avoiding partial writes on interruption.
 
     Args:
         filepath: Path to file
         content: Content to write
-        mode: File open mode ('w' for text, 'wb' for binary)
+        mode: File open mode retained for compatibility ('w' for text,
+            'wb' for binary)
 
     Raises:
+        ValueError: If ``mode`` is not an atomic overwrite mode.
         OSError: If the file cannot be written
 
     """
-    filepath = Path(filepath)
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    with open(filepath, mode) as f:
-        f.write(content)
+    if mode not in {"w", "wb"}:
+        raise ValueError("write_file only supports atomic overwrite modes: 'w' and 'wb'")
+    safe_write(filepath, content, backup=False)
 
 
 def ensure_directory(path: str | Path) -> None:

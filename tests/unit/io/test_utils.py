@@ -70,16 +70,31 @@ class TestReadFile:
 class TestWriteFile:
     """Tests for write_file."""
 
+    def test_emits_deprecation_warning(self, tmp_path: Path) -> None:
+        """Deprecated compatibility wrapper warns callers at runtime."""
+        f = tmp_path / "out.txt"
+        with pytest.deprecated_call(
+            match="write_file\\(\\) is deprecated; use safe_write\\(\\) instead\\."
+        ):
+            write_file(f, "content")
+        assert f.read_text() == "content"
+
     def test_writes_text(self, tmp_path: Path) -> None:
         """Writes text content."""
         f = tmp_path / "out.txt"
-        write_file(f, "content")
+        with pytest.deprecated_call(
+            match="write_file\\(\\) is deprecated; use safe_write\\(\\) instead\\."
+        ):
+            write_file(f, "content")
         assert f.read_text() == "content"
 
     def test_creates_parent_dirs(self, tmp_path: Path) -> None:
         """Creates missing parent directories."""
         f = tmp_path / "sub" / "file.txt"
-        write_file(f, "hi")
+        with pytest.deprecated_call(
+            match="write_file\\(\\) is deprecated; use safe_write\\(\\) instead\\."
+        ):
+            write_file(f, "hi")
         assert f.exists()
 
     def test_write_is_atomic_on_failure(
@@ -93,8 +108,11 @@ class TestWriteFile:
             raise OSError("simulated atomic replace failure")
 
         monkeypatch.setattr(os, "replace", boom)
-        with pytest.raises(OSError, match="simulated atomic replace failure"):
-            write_file(f, "new-content-that-must-not-land")
+        with pytest.deprecated_call(
+            match="write_file\\(\\) is deprecated; use safe_write\\(\\) instead\\."
+        ):
+            with pytest.raises(OSError, match="simulated atomic replace failure"):
+                write_file(f, "new-content-that-must-not-land")
 
         assert f.read_text() == "original-intact"
 
@@ -108,8 +126,11 @@ class TestWriteFile:
             raise OSError("simulated atomic replace failure")
 
         monkeypatch.setattr(os, "replace", boom)
-        with pytest.raises(OSError, match="simulated atomic replace failure"):
-            write_file(f, "content")
+        with pytest.deprecated_call(
+            match="write_file\\(\\) is deprecated; use safe_write\\(\\) instead\\."
+        ):
+            with pytest.raises(OSError, match="simulated atomic replace failure"):
+                write_file(f, "content")
 
         assert list(tmp_path.iterdir()) == []
 
@@ -117,6 +138,22 @@ class TestWriteFile:
         """Only overwrite modes are supported for atomic writes."""
         with pytest.raises(ValueError, match="atomic overwrite modes"):
             write_file(tmp_path / "out.txt", "content", mode="a")
+
+    def test_rejects_bytes_content_for_text_mode(self, tmp_path: Path) -> None:
+        """Text mode rejects bytes to match open(..., 'w').write(...)."""
+        with pytest.deprecated_call(
+            match="write_file\\(\\) is deprecated; use safe_write\\(\\) instead\\."
+        ):
+            with pytest.raises(TypeError, match="str"):
+                write_file(tmp_path / "out.txt", b"bytes", mode="w")
+
+    def test_rejects_text_content_for_binary_mode(self, tmp_path: Path) -> None:
+        """Binary mode rejects text to match open(..., 'wb').write(...)."""
+        with pytest.deprecated_call(
+            match="write_file\\(\\) is deprecated; use safe_write\\(\\) instead\\."
+        ):
+            with pytest.raises(TypeError, match="bytes-like object"):
+                write_file(tmp_path / "out.bin", "text", mode="wb")
 
 
 class TestSafeWrite:

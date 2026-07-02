@@ -8,13 +8,15 @@ Usage:
     from hephaestus.io.utils import safe_write, ensure_directory
 
     ensure_directory('/path/to/dir')
-    safe_write('/path/to/file.txt', 'content')
-    write_file('/path/to/file.txt', 'content')
+    safe_write('/path/to/file.txt', 'content', backup=False)
+
+    # write_file() remains available for deprecated compatibility.
 """
 
 import json
 import os
 import tempfile
+import warnings
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
@@ -76,6 +78,15 @@ def write_file(
     """
     if mode not in {"w", "wb"}:
         raise ValueError("write_file only supports atomic overwrite modes: 'w' and 'wb'")
+    warnings.warn(
+        "write_file() is deprecated; use safe_write() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    if mode == "w" and isinstance(content, bytes):
+        raise TypeError("write() argument must be str, not bytes")
+    if mode == "wb" and isinstance(content, str):
+        raise TypeError("a bytes-like object is required, not 'str'")
     safe_write(filepath, content, backup=False)
 
 

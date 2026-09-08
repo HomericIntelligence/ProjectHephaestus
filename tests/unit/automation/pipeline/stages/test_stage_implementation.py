@@ -87,6 +87,7 @@ from hephaestus.automation.review_journal import PlanDiscoveryResult
 from hephaestus.automation.session_naming import AGENT_IMPLEMENTER
 from hephaestus.automation.state_labels import (
     STATE_BLOCKED,
+    STATE_IMPLEMENTATION_BLOCKED,
     STATE_NEEDS_PLAN,
     STATE_PLAN_BLOCKED,
     STATE_PLAN_GO,
@@ -5958,7 +5959,7 @@ class TestCommitPushAndPrCreate:
         "summary",
         ["Blocked: athena:skill-advisor is unavailable", "Already implemented"],
     )
-    def test_no_commits_fails_with_agent_explanation_without_skip(
+    def test_no_commits_requires_direction_without_skip(
         self, make_ctx: Any, make_work_item: Any, summary: str
     ) -> None:
         """An agent explanation cannot authorize an issue-level skip."""
@@ -5975,10 +5976,9 @@ class TestCommitPushAndPrCreate:
 
         result = stage.step(item, ctx)
 
-        assert result == StageOutcome(
-            Disposition.FINISH_FAIL, f"implementation_no_changes: {summary}"
-        )
-        assert github.mutation_log == []
+        assert result == StageOutcome(Disposition.BLOCKED, "no commits; human direction required")
+        assert github.labels[9] == {STATE_IMPLEMENTATION_BLOCKED}
+        assert summary in github.comments[9][0]
 
     @pytest.mark.parametrize("summary", [None, "", "  "])
     def test_no_commits_reports_missing_agent_summary(
@@ -5994,16 +5994,17 @@ class TestCommitPushAndPrCreate:
         item.payload["no_commits"] = True
 
         assert stage.step(item, ctx) == StageOutcome(
-            Disposition.FINISH_FAIL, "implementation_no_changes: no agent summary returned"
+            Disposition.BLOCKED, "no commits; human direction required"
         )
-        assert github.mutation_log == []
+        assert github.labels[9] == {STATE_IMPLEMENTATION_BLOCKED}
 
     def test_no_commits_bounds_and_redacts_agent_summary(
         self, make_ctx: Any, make_work_item: Any, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Terminal diagnostics must not publish credentials or unbounded output."""
         stage = ImplementationStage()
-        ctx = make_ctx()
+        github = FakeStageGitHub()
+        ctx = make_ctx(github=github)
         secret = "ghp_" + "a" * 36
         item = make_work_item(
             issue=9,
@@ -6014,12 +6015,11 @@ class TestCommitPushAndPrCreate:
         result = stage.step(item, ctx)
 
         assert isinstance(result, StageOutcome)
-        assert result.disposition is Disposition.FINISH_FAIL
-        assert result.note.startswith("implementation_no_changes: <redacted>")
-        assert len(result.note) <= len("implementation_no_changes: ") + 2000
-        assert secret not in result.note
+        assert result.disposition is Disposition.BLOCKED
+        assert secret not in github.comments[9][0]
+        assert "<redacted>" in github.comments[9][0]
+        assert len(github.comments[9][0]) < 6_000
         assert secret not in caplog.text
-        assert result.note in caplog.text
 
     def test_no_commits_with_externally_armed_pr_blocks_without_skip_label(
         self, make_ctx: Any, make_work_item: Any
@@ -6055,7 +6055,7 @@ class TestCommitPushAndPrCreate:
         assert item.payload["no_commits"] is True
         assert github.mutation_log == []
 
-    def test_no_commits_with_confirmed_unarmed_pr_fails_without_skip_label(
+    def test_no_commits_with_confirmed_unarmed_pr_requires_direction(
         self, make_ctx: Any, make_work_item: Any
     ) -> None:
         """A retained unarmed PR does not make an empty implementation complete."""
@@ -6065,9 +6065,9 @@ class TestCommitPushAndPrCreate:
         item = make_work_item(issue=9, pr=1001, state="PR_CREATE", payload={"no_commits": True})
 
         assert stage.step(item, ctx) == StageOutcome(
-            Disposition.FINISH_FAIL, "implementation_no_changes: no agent summary returned"
+            Disposition.BLOCKED, "no commits; human direction required"
         )
-        assert github.mutation_log == []
+        assert github.labels[9] == {STATE_IMPLEMENTATION_BLOCKED}
 
     def test_push_failure_retries_without_pr(self, make_ctx: Any, make_work_item: Any) -> None:
         """A non-"no commits" push failure RETRYs with no PR created."""

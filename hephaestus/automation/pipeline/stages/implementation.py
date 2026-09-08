@@ -135,6 +135,7 @@ from hephaestus.automation.source_worktree import (
 )
 from hephaestus.automation.state_labels import (
     STATE_BLOCKED,
+    STATE_IMPLEMENTATION_BLOCKED,
     STATE_IMPLEMENTATION_GO,
     STATE_PLAN_BLOCKED,
     STATE_PLAN_GO,
@@ -562,6 +563,8 @@ HEPHAESTUS_REQUIRED_CHECK_TIMEOUT_S = 7200
 
 NO_COMMIT_REPLY_WARNING = "[auto-msg] reply has no corresponding commit, review thoroughly"
 _TRUNCATED_REPLY_WARNING = "[auto-msg] reply truncated to fit review limit"
+IMPLEMENTATION_BLOCKED_COMMENT_MARKER = "<!-- hephaestus-implementation-blocked -->"
+IMPLEMENTATION_BLOCKED_SUMMARY_MAX = 4_000
 
 
 def _append_no_commit_reply_warning(reply: str) -> str:
@@ -572,6 +575,35 @@ def _append_no_commit_reply_warning(reply: str) -> str:
     bounded_suffix = f"\n\n{_TRUNCATED_REPLY_WARNING}{suffix}"
     content_budget = MAX_ADDRESS_REPLY_CHARS - len(bounded_suffix)
     return f"{reply[:content_budget].rstrip()}{bounded_suffix}"
+
+
+def _bounded_comment_text(value: object, *, limit: int) -> str:
+    """Return redacted and bounded text as an inert Markdown block."""
+    text = redact_diagnostic_text(str(value or ""))
+    if len(text) > limit:
+        text = text[:limit] + "\n[summary truncated]"
+    return "\n".join(f"    {line}" for line in text.splitlines() or [""])
+
+
+def _implementation_blocked_comment(item: WorkItem) -> str:
+    """Build the bounded feedback comment for a no-commit run."""
+    summary = _bounded_comment_text(
+        item.payload.get("implement_summary"), limit=IMPLEMENTATION_BLOCKED_SUMMARY_MAX
+    )
+    diagnostic = _bounded_comment_text(item.payload.get("no_commit_diagnostic"), limit=500)
+    diagnostic_section = f"\n\nNo-commit diagnostic:\n\n{diagnostic}" if diagnostic.strip() else ""
+    return (
+        f"{IMPLEMENTATION_BLOCKED_COMMENT_MARKER}\n"
+        "## Human direction required\n\n"
+        "The implementation run completed without a commit. Automation stopped "
+        "and did not mark this issue as skipped.\n\n"
+        "Implementation-agent summary:\n\n"
+        f"{summary}{diagnostic_section}\n\n"
+        "Review the summary. Then continue the implementation, clarify the "
+        "requirements, confirm that the issue is complete, explicitly skip the "
+        "issue, or request a new plan.\n\n"
+        "A human must remove the implementation-blocked state before automation continues."
+    )
 
 
 def _pre_pr_runner_handoff_reason(result: JobResult) -> str | None:
@@ -3424,6 +3456,7 @@ class ImplementationStage(Stage):
                 if isinstance(reservation, dict):
                     item.payload[DIRECT_SCOPE_LOCAL_BRANCH_CLEANUP_KEY] = reservation
             else:
+                item.payload.pop("no_commit_diagnostic", None)
                 # A published branch has real commits and must not be
                 # released by terminal cleanup.
                 item.payload.pop(DIRECT_SCOPE_RESERVATION_KEY, None)
@@ -3444,6 +3477,7 @@ class ImplementationStage(Stage):
             # Retain the legacy transport result as a no-commit outcome.
             # PR_CREATE reports incomplete work with the agent summary.
             item.payload["no_commits"] = True
+            item.payload["no_commit_diagnostic"] = redact_diagnostic_text(result.error or "")[:500]
             return
         logger.warning("implementation:%s: commit+push failed: %s", item.issue, result.error)
         receipt = result.value if isinstance(result.value, dict) else {}
@@ -4181,6 +4215,11 @@ class ImplementationStage(Stage):
         skip_outcome = self._skip_gate(item.issue, gate_labels)
         if skip_outcome is not None:
             return skip_outcome
+        if STATE_IMPLEMENTATION_BLOCKED in gate_labels:
+            return StageOutcome(
+                Disposition.BLOCKED,
+                "implementation is blocked pending human direction",
+            )
         if STATE_PLAN_BLOCKED in gate_labels:
             return StageOutcome(
                 Disposition.BLOCKED,
@@ -4245,6 +4284,56 @@ class ImplementationStage(Stage):
         if not item.branch:
             item.branch = issue_auto_impl_branch_name(item.issue)
         return Continue(next_state=WORKTREE_WAIT)
+
+    @staticmethod
+    def _record_no_commit_block(item: WorkItem, ctx: StageContext) -> StageOutcome:
+        """Record and confirm a human-intervention latch for a no-commit run."""
+        issue = _issue_number(item)
+        try:
+            live_labels = _require_issue_labels(item, ctx)
+        except Exception:
+            return StageOutcome(Disposition.FINISH_FAIL, "implementation_blocked_label_unverified")
+        if is_skipped(live_labels):
+            item.payload.pop("no_commits", None)
+            return StageOutcome(Disposition.SKIP, "state:skip")
+
+        comment_body = _implementation_blocked_comment(item)
+        try:
+            ctx.github.upsert_issue_comment(
+                issue,
+                IMPLEMENTATION_BLOCKED_COMMENT_MARKER,
+                comment_body,
+            )
+        except Exception:
+            return StageOutcome(Disposition.FINISH_FAIL, "implementation_blocked_comment_failed")
+        try:
+            comments = ctx.github.issue_comments(issue)
+            comment_recorded = any(
+                str((comment.get("body", "") if isinstance(comment, dict) else comment.body) or "")
+                == comment_body
+                for comment in comments
+            )
+        except Exception:
+            return StageOutcome(
+                Disposition.FINISH_FAIL, "implementation_blocked_comment_unverified"
+            )
+        if not comment_recorded:
+            return StageOutcome(
+                Disposition.FINISH_FAIL, "implementation_blocked_comment_unverified"
+            )
+
+        try:
+            ctx.github.add_labels(issue, [STATE_IMPLEMENTATION_BLOCKED])
+        except Exception:
+            return StageOutcome(Disposition.FINISH_FAIL, "implementation_blocked_label_failed")
+        try:
+            confirmed_labels = _require_issue_labels(item, ctx)
+        except Exception:
+            return StageOutcome(Disposition.FINISH_FAIL, "implementation_blocked_label_unverified")
+        if STATE_IMPLEMENTATION_BLOCKED not in confirmed_labels:
+            return StageOutcome(Disposition.FINISH_FAIL, "implementation_blocked_label_unverified")
+        item.payload.pop("no_commits", None)
+        return StageOutcome(Disposition.BLOCKED, "no commits; human direction required")
 
     def _create_dirty_direct_pr(self, item: WorkItem, ctx: StageContext) -> StepResult:
         """Create one PR without adopting a concurrent PR or clearing failed work."""
@@ -4370,14 +4459,7 @@ class ImplementationStage(Stage):
                 external_arm = self._external_arm_gate(item.pr, ctx)
                 if external_arm is not None:
                     return external_arm
-            item.payload.pop("no_commits", None)
-            summary = str(item.payload.get("implement_summary") or "").strip()
-            diagnostic = (
-                redact_diagnostic_text(summary)[:2000] if summary else "no agent summary returned"
-            )
-            note = f"implementation_no_changes: {diagnostic}"
-            logger.warning("implementation:%d: %s", item.issue, note)
-            return StageOutcome(Disposition.FINISH_FAIL, note)
+            return self._record_no_commit_block(item, ctx)
         if item.payload.pop("remediation_publish_permanent", False):
             item.payload.pop("git_error", None)
             return StageOutcome(Disposition.FINISH_FAIL, "remediation_publication_failed")

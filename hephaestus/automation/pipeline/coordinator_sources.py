@@ -628,8 +628,8 @@ class SourceCoordinator(_CoordinatorHost):
           push it into an out-of-scope stage the trimmed route table has no row
           for. In-scope classifications (e.g. PLANNING/PLAN_REVIEW) are kept.
 
-        Exclusions (``stage is None``: ``state:skip``) are never
-        overridden — force is a re-plan knob, not a skip bypass.
+        Exclusions (``stage is None``) include both labels; force does not
+        bypass them.
 
         Args:
             issue: The issue number (for the reason string).

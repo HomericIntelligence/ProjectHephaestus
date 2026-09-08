@@ -65,6 +65,7 @@ COMPLETE_AGENT_PROMPTS = (
     "implementation/dirty_direct_continuation.j2",
     "implementation/implementation.j2",
     "implementation/loop_review.j2",
+    "implementation/rebase_conflict_resolution.j2",
     "implementation/resume_feedback.j2",
     "learn/learn.j2",
     "planning/context.j2",
@@ -169,6 +170,15 @@ DIRECT_PROMPTS: tuple[tuple[str, dict[str, Any]], ...] = (
             "paths_block": "paths",
             "status_block": "status",
             "diff_block": "diff",
+        },
+    ),
+    (
+        "implementation/rebase_conflict_resolution.j2",
+        {
+            "untrusted_notice": "Untrusted data follows.",
+            "conflict_paths_block": "paths",
+            "conflict_hunks_block": "hunks",
+            "diagnosis_block": "diagnosis",
         },
     ),
     ("learn/learn.j2", {"suffix": ""}),

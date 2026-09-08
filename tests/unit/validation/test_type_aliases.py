@@ -312,10 +312,10 @@ def test_partial_read_mixed_inputs(
         mocked.return_value = stream
         assert detect_shadowing(first) == [(1, "Result = DomainResult", "Result", "DomainResult")]
     assert f"Warning: Could not read {first}: {error}" in capsys.readouterr().err
-    with patch("builtins.open") as mocked:
+    with real_open(later, encoding="utf-8") as later_stream, patch("builtins.open") as mocked:
         stream = MagicMock()
         stream.__enter__.return_value = read_lines()
-        mocked.side_effect = [stream, real_open(later, encoding="utf-8")]
+        mocked.side_effect = [stream, later_stream]
         code, errors = check_files([first, later])
         assert mocked.call_count == 2
     assert code == 1

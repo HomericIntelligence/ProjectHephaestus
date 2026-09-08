@@ -33,7 +33,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -725,7 +725,11 @@ def _pipeline_scope_for_phases(phases: tuple[str, ...]) -> PipelineScope | None:
 
 
 def _pipeline_event_log_path(
-    projects_dir: Path, repos: list[str], *, has_repo_source: bool = False
+    projects_dir: Path,
+    repos: list[str],
+    *,
+    has_repo_source: bool = False,
+    repo_roots: Mapping[str, Path] | None = None,
 ) -> Path | None:
     """Return the default durable event-log path for a loop invocation.
 
@@ -737,7 +741,14 @@ def _pipeline_event_log_path(
     if not repos and not has_repo_source:
         return None
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return Path(DEFAULT_STATE_DIR) / f"pipeline-events-{stamp}-{os.getpid()}.jsonl"
+    filename = f"pipeline-events-{stamp}-{os.getpid()}.jsonl"
+    if repo_roots:
+        # A noncanonical caller root can be dirty.  Keep the run journal in a
+        # sibling directory so run_start and cleanup do not write below that
+        # checkout before repo intake can rebind the operational root.
+        caller_root = next(iter(repo_roots.values()))
+        return caller_root.parent / ".hephaestus-pipeline-state" / filename
+    return Path(DEFAULT_STATE_DIR) / filename
 
 
 # ---------------------------------------------------------------------------
@@ -1001,11 +1012,15 @@ def _build_pipeline_config(
         metrics_port=cfg.metrics_port,
         circuit_breaker_snapshot_provider=circuit_breaker_snapshot_provider,
         event_log_path=_pipeline_event_log_path(
-            cfg.projects_dir, repos, has_repo_source=repo_source_factory is not None
+            cfg.projects_dir,
+            repos,
+            has_repo_source=repo_source_factory is not None,
+            repo_roots=cfg.repo_roots,
         ),
         evidence_receipt_dir=cfg.evidence_receipt_dir,
         projects_dir=cfg.projects_dir,
         repo_roots=cfg.repo_roots,
+        repo_state_roots=dict(cfg.repo_roots),
         json_out=args.json,
         scope=_pipeline_scope_for_phases(cfg.phases),
     )

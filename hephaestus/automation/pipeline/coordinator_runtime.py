@@ -81,7 +81,7 @@ class CoordinatorRuntime(PendingHandoffCoordinator, _CoordinatorHost):
         from hephaestus.automation.source_worktree import SourceWorkspaceManager
 
         def learning_state_dir() -> Path:
-            return root / "build" / ".automation-state"
+            return self.config.repo_state_roots.get(repo, root) / "build" / ".automation-state"
 
         github_factory = self._github_factory
         ctx = stages_mod.StageContext(
@@ -1085,7 +1085,6 @@ class CoordinatorRuntime(PendingHandoffCoordinator, _CoordinatorHost):
                 reason=outcome.note or "direct scope checkout preparation failed",
             )
             return
-
         base_sha = item.payload.get(repo_stage_mod.DIRECT_SCOPE_BASE_SHA_KEY)
         if not repo_stage_mod.is_full_commit_sha(base_sha):
             if not self.config.dry_run:
@@ -1112,7 +1111,8 @@ class CoordinatorRuntime(PendingHandoffCoordinator, _CoordinatorHost):
                 self._begin_direct_pr_source(item.repo, base_sha)
                 self._begin_direct_issue_source(item.repo, base_sha)
                 raise StopIteration
-            store = IssueWaveStore(repo_root, self.config.org, item.repo)
+            state_root = ct._effective_repo_state_root(self.config, item.repo)
+            store = IssueWaveStore(state_root, self.config.org, item.repo)
             checkpoint = store.load()
             if checkpoint is not None and checkpoint.status == "active":
                 linked_issues = set(self.config.issues)

@@ -49,6 +49,7 @@ from .base import (
     StageOutcome,
     StepResult,
     WorkItem,
+    _repo_state_root,
 )
 
 logger = logging.getLogger(__name__)
@@ -194,7 +195,7 @@ class MergeWaitStage(Stage):
                     return StageOutcome(Disposition.FINISH_FAIL, "wave_merge_receipt_missing")
                 try:
                     item.payload[WAVE_LEASE_PAYLOAD] = IssueWaveStore(
-                        Path(str(ctx.paths.repo_root)), ctx.org, item.repo
+                        _repo_state_root(ctx, item.repo), ctx.org, item.repo
                     ).record_merge_receipt(
                         lease,
                         issue_number=item.issue,

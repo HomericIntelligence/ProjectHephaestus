@@ -919,6 +919,18 @@ class TestSeedIssueFailClosed:
 class TestSeedFromCli:
     """CLI mapping: repos → repo queue; issues → classified; prs → review/merge."""
 
+    def test_issue_seed_preserves_dependencies_for_implementation(self) -> None:
+        """Issue body dependencies reach the queue entry."""
+        facts = _facts(
+            number=9,
+            body="Depends on #10 and #11.",
+            labels={STATE_PLAN_GO},
+        )
+
+        entry = seed_entry_from_facts(facts)
+
+        assert set(entry.dependencies) == {10, 11}
+
     def test_repos_arm(self) -> None:
         """Each repo becomes a StageName.REPO discovery seed."""
         entries = seed_from_cli(["RepoA", "RepoB"], [], [])

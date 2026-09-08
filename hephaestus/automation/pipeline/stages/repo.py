@@ -47,6 +47,7 @@ from hephaestus.automation.issue_waves import (
     WaveLease,
     is_full_commit_sha as is_wave_commit_sha,
 )
+from hephaestus.automation.pipeline.admission import parse_issue_dependencies
 
 from .base import (
     GIT_JOB_TIMEOUT_S,
@@ -596,6 +597,11 @@ def product_to_work_item(repo: str, product: dict[str, Any]) -> WorkItem | None:
     if kind is ItemKind.ISSUE:
         item.payload["issue_title"] = str(product.get("title") or "")
         item.payload["issue_body"] = str(product.get("body") or "")
+        raw_dependencies = product.get("dependencies")
+        if isinstance(raw_dependencies, (list, tuple, set, frozenset)):
+            item.payload["dependencies"] = list(raw_dependencies)
+        else:
+            item.payload["dependencies"] = parse_issue_dependencies(str(product.get("body") or ""))
     item.payload["entry_stage"] = stage.value
     item.payload["entry_reason"] = product.get("reason", "")
     return item

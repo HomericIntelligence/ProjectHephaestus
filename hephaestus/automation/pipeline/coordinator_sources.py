@@ -848,8 +848,8 @@ class SourceCoordinator(_CoordinatorHost):
                 pr=entry.pr_number or int(entry.identifier),
                 stage=entry.stage,
             )
-            item.payload["issue_title"] = entry.issue_title
-            item.payload["issue_body"] = entry.issue_body
+            item.payload.update(issue_title=entry.issue_title, issue_body=entry.issue_body)
+            item.payload["dependencies"] = list(entry.dependency_numbers)
             item.payload["pr_description"] = entry.pr_description
             if entry.pending_implementation_go_audit is not None:
                 item.payload["pending_implementation_go_audit"] = (
@@ -869,8 +869,8 @@ class SourceCoordinator(_CoordinatorHost):
                 pr=entry.pr_number,
                 stage=entry.stage,
             )
-            item.payload["issue_title"] = entry.issue_title
-            item.payload["issue_body"] = entry.issue_body
+            item.payload.update(issue_title=entry.issue_title, issue_body=entry.issue_body)
+            item.payload["dependencies"] = list(entry.dependency_numbers)
             # A scoped issue with an open PR enters PR_REVIEW as an issue
             # work item. Preserve that provenance so the stage adopts a
             # dedicated PR checkout rather than falling back to the shared

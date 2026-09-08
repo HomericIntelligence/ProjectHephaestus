@@ -67,6 +67,7 @@ from hephaestus.automation.pipeline.work_item import ItemKind, ItemResult, WorkI
 from hephaestus.automation.pipeline.worker_pool import WorkerPool
 from hephaestus.automation.pipeline_github_jobs import PipelineGitHubJobRunner
 from hephaestus.automation.source_worktree import SourceWorkspaceManager
+from hephaestus.automation.state_labels import STATE_SKIP
 from hephaestus.resilience import (
     all_circuit_breaker_snapshots,
     get_circuit_breaker,
@@ -2609,10 +2610,118 @@ class TestImplementationAdmission:
         assert len(coordinator.queues[StageName.IMPLEMENTATION]) == 1
         assert seen_fetches == [(22, ("org", "repo-a")), (21, ("org", "repo-a"))]
 
+    def test_open_out_of_set_dependency_defers_implementation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An open dependency outside the queue does not reach a stage."""
+        coordinator, pool, github = make_coordinator(
+            tmp_path,
+            monkeypatch,
+            max_workers=2,
+            serialize_file_overlap=False,
+        )
+        run_order: list[int] = []
+
+        class RecordingStage(StubStage):
+            def step(self, item: WorkItem, ctx: Any) -> Any:
+                run_order.append(item.issue or 0)
+                return StageOutcome(Disposition.FINISH_PASS, "implemented")
+
+        coordinator.stages[StageName.IMPLEMENTATION] = RecordingStage()
+        dependent = _issue_item(21, StageName.IMPLEMENTATION)
+        dependent.payload["dependencies"] = [999]
+        coordinator._push_item(dependent, StageName.IMPLEMENTATION, enter=True)
+
+        coordinator._drain_implementation()
+
+        assert run_order == []
+        assert not pool.submitted
+        assert dependent.result is None
+        assert dependent in coordinator.queues[StageName.IMPLEMENTATION].snapshot()
+        assert STATE_SKIP not in github.labels.get(21, set())
+        assert "dependency #999" in dependent.payload["dependency_blocked_reason"]
+
+        github._issue_state = "CLOSED"
+        coordinator._drain_implementation()
+
+        assert run_order == [21]
+        assert dependent.result is not None
+        assert dependent.result.passed is True
+
+    @pytest.mark.parametrize(
+        "disposition",
+        [Disposition.BLOCKED, Disposition.FINISH_FAIL, Disposition.FAIL_BACK, Disposition.SKIP],
+    )
+    def test_non_passing_in_wave_dependency_defers_dependent(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        disposition: Disposition,
+    ) -> None:
+        """A non-passing prerequisite cannot dispatch its dependent."""
+        coordinator, pool, github = make_coordinator(
+            tmp_path,
+            monkeypatch,
+            max_workers=2,
+            serialize_file_overlap=False,
+        )
+        run_order: list[int] = []
+
+        class RecordingStage(StubStage):
+            def step(self, item: WorkItem, ctx: Any) -> Any:
+                run_order.append(item.issue or 0)
+                if item.issue == 22:
+                    return StageOutcome(disposition, "prerequisite did not complete")
+                return StageOutcome(Disposition.FINISH_PASS, "implemented")
+
+        coordinator.stages[StageName.IMPLEMENTATION] = RecordingStage()
+        prerequisite = _issue_item(22, StageName.IMPLEMENTATION)
+        dependent = _issue_item(21, StageName.IMPLEMENTATION)
+        dependent.payload["dependencies"] = [22]
+        coordinator._push_item(dependent, StageName.IMPLEMENTATION, enter=True)
+        coordinator._push_item(prerequisite, StageName.IMPLEMENTATION, enter=True)
+
+        coordinator._drain_implementation()
+
+        assert run_order == [22]
+        assert not pool.submitted
+        assert dependent.result is None
+        assert dependent in coordinator.queues[StageName.IMPLEMENTATION].snapshot()
+        assert STATE_SKIP not in github.labels.get(21, set())
+        assert "dependency #22" in dependent.payload["dependency_blocked_reason"]
+
+    def test_completed_in_wave_dependency_allows_dependent_implementation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A passing prerequisite allows the dependent in the same drain."""
+        coordinator, _pool, _github = make_coordinator(
+            tmp_path,
+            monkeypatch,
+            max_workers=2,
+            serialize_file_overlap=False,
+        )
+        run_order: list[int] = []
+
+        class RecordingStage(StubStage):
+            def step(self, item: WorkItem, ctx: Any) -> Any:
+                run_order.append(item.issue or 0)
+                return StageOutcome(Disposition.FINISH_PASS, "implemented")
+
+        coordinator.stages[StageName.IMPLEMENTATION] = RecordingStage()
+        prerequisite = _issue_item(22, StageName.IMPLEMENTATION)
+        dependent = _issue_item(21, StageName.IMPLEMENTATION)
+        dependent.payload["dependencies"] = [22]
+        coordinator._push_item(dependent, StageName.IMPLEMENTATION, enter=True)
+        coordinator._push_item(prerequisite, StageName.IMPLEMENTATION, enter=True)
+
+        coordinator._drain_implementation()
+
+        assert run_order == [22, 21]
+
     def test_aged_dependent_never_overtakes_its_queued_prerequisite(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Aging prioritizes ready work but never reverses an in-queue dependency."""
+        """Aging cannot bypass an in-queue or live dependency hold."""
         coordinator, _pool, _ = make_coordinator(tmp_path, monkeypatch, max_workers=2)
         dependent = _issue_item(21, StageName.IMPLEMENTATION)
         dependent.payload["dependencies"] = [22, 999]
@@ -2635,7 +2744,8 @@ class TestImplementationAdmission:
 
         coordinator._drain_implementation()
 
-        assert run_order == [22, 21]
+        assert run_order == [22]
+        assert dependent in coordinator.queues[StageName.IMPLEMENTATION].snapshot()
 
     def test_overlap_gate_reuses_admission_snapshot_at_parallel_submission(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

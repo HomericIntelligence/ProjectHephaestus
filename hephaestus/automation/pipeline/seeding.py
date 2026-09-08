@@ -40,6 +40,7 @@ from hephaestus.automation.github_api import (
     fetch_issue_info,
     gh_pr_label_names,
     gh_pr_state,
+    parse_issue_dependencies,
 )
 from hephaestus.automation.implementation_go_audit_receipt import PendingImplementationGoAudit
 from hephaestus.automation.models import IssueState
@@ -219,6 +220,7 @@ class SeedEntry:
             planner/reviewer/implementer prompts.
         issue_body: Issue body copied into the issue WorkItem payload for
             planner/reviewer/implementer prompts.
+        dependencies: Issue numbers that must be complete before implementation.
         pr_description: PR body copied into a direct PR review payload.
         passed: Terminal result for entries clamped directly to ``finished``.
         non_code: Whether a passing terminal entry was semantically confirmed
@@ -256,6 +258,12 @@ class SeedEntry:
     non_code_repository_revision: str = ""
     non_code_explanation: str = ""
     non_code_retired: bool = False
+    dependencies: tuple[int, ...] = ()
+
+    @property
+    def dependency_numbers(self) -> tuple[int, ...]:
+        """Return declared dependencies, including legacy body metadata."""
+        return self.dependencies or tuple(parse_issue_dependencies(self.issue_body))
 
 
 def _get_state_label(labels: set[str]) -> str | None:
@@ -645,6 +653,7 @@ def seed_entry_from_facts(facts: IssueFacts) -> SeedEntry:
         pr_number=facts.pr_number if facts.pr_is_open else None,
         issue_title=facts.title,
         issue_body=facts.body,
+        dependencies=tuple(parse_issue_dependencies(facts.body)),
         skip_tag_obligation=obligation,
         pending_implementation_go_audit=facts.pending_implementation_go_audit,
         pending_review_rebase_record=facts.pending_review_rebase_record,

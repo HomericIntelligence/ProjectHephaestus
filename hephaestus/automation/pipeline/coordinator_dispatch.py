@@ -59,6 +59,13 @@ class ImplementationDispatcher(_CoordinatorHost):
         for item in dispatch_items:
             if self.shutdown.is_set() or not self._admit(item):
                 continue
+            if self._implementation_dependency_blocked(item):
+                # A dependency-blocked item is not an active implementation
+                # owner. Keep its frozen plan, but release its file claim.
+                self._implementation_file_claims.pop(id(item), None)
+                item.payload.pop(ct._FILE_OVERLAP_BLOCKED_CLAIMS_KEY, None)
+                continue
+            item.payload.pop("dependency_blocked_reason", None)
             if not self._claim_selected_implementation_item(item):
                 continue
             # Preserve the exact immutable snapshot used by the overlap gate.
@@ -70,6 +77,66 @@ class ImplementationDispatcher(_CoordinatorHost):
             item.payload.pop(ct._FILE_OVERLAP_BLOCKED_CLAIMS_KEY, None)
             self._record_event("drain", ct.StageName.IMPLEMENTATION.value, self._item_key(item))
             self._run_item(item)
+
+    def _implementation_dependency_block_reason(self, item: ct.WorkItem) -> str | None:
+        """Return a reason when an implementation dependency is not complete."""
+        raw_dependencies = item.payload.get("dependencies", ())
+        if raw_dependencies is None:
+            return None
+        if not isinstance(raw_dependencies, (list, tuple, set, frozenset)):
+            return "dependency metadata is invalid"
+        dependencies: list[int] = []
+        for dependency in raw_dependencies:
+            if isinstance(dependency, bool) or not isinstance(dependency, int) or dependency <= 0:
+                return "dependency metadata is invalid"
+            dependencies.append(dependency)
+
+        for dependency in dependencies:
+            dependency_item = self._implementation_dependency_item(item, dependency)
+            if dependency_item is not None:
+                if (
+                    dependency_item.stage is ct.StageName.FINISHED
+                    and dependency_item.result is not None
+                    and dependency_item.result.passed
+                ):
+                    continue
+                if dependency_item.result is not None:
+                    return (
+                        f"dependency #{dependency} did not complete: "
+                        f"{dependency_item.result.reason}"
+                    )
+                return f"dependency #{dependency} is still in {dependency_item.stage.value}"
+
+            github = self._ctx_for_repo(item.repo).github
+            reason = _admission.dependency_block_reason([dependency], github)
+            if reason is not None:
+                return reason
+        return None
+
+    def _implementation_dependency_blocked(self, item: ct.WorkItem) -> bool:
+        """Record and report an implementation dependency hold."""
+        reason = self._implementation_dependency_block_reason(item)
+        if reason is None:
+            return False
+        item.payload["dependency_blocked_reason"] = reason
+        logger.info("implementation %s remains deferred: %s", self._item_key(item), reason)
+        return True
+
+    def _implementation_dependency_item(
+        self, item: ct.WorkItem, dependency: int
+    ) -> ct.WorkItem | None:
+        """Find the newest in-wave item for one same-repository dependency."""
+        matches = [
+            candidate
+            for candidate in self.items
+            if candidate is not item
+            and candidate.repo == item.repo
+            and candidate.issue == dependency
+        ]
+        for candidate in reversed(matches):
+            if candidate.stage is not ct.StageName.FINISHED or candidate.result is None:
+                return candidate
+        return matches[-1] if matches else None
 
     def _select_implementation_dispatch(
         self, items: list[ct.WorkItem]

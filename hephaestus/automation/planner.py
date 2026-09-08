@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from pathlib import Path
 
 from hephaestus.agents.runtime import resolve_agent
 from hephaestus.automation.role_selection import resolve_role_agents
@@ -39,7 +40,7 @@ from hephaestus.config.paths import resolve_projects_dir
 
 from ._review_utils import build_automation_parser
 from .agent_config import fallback_model, planner_model, reviewer_model
-from .git_utils import get_repo_info
+from .git_utils import get_repo_info, get_repo_root
 from .github_api import (
     GitHubRateLimitError,
     gh_list_open_issues,
@@ -184,6 +185,34 @@ def _resolve_repo() -> tuple[str, str]:
     return get_repo_info()
 
 
+def _caller_checkout_roots(
+    args: argparse.Namespace, org: str, repo: str, projects_dir: Path
+) -> dict[str, Path]:
+    """Return a noncanonical caller checkout as an explicit pipeline root.
+
+    The pipeline uses this root only as repository identity input.  Repo intake
+    creates the clean worktree that later stages use.  A conventional checkout
+    and an explicit ``--projects-dir`` retain their existing path semantics.
+    """
+    if args.projects_dir is not None:
+        return {}
+    checkout = get_repo_root()
+    if not checkout.is_dir():
+        return {}
+    try:
+        detected_org, detected_repo = get_repo_info(checkout)
+    except (OSError, RuntimeError):
+        return {}
+    if detected_org.casefold() != org.casefold() or detected_repo.casefold() != repo.casefold():
+        return {}
+    if checkout == projects_dir / repo:
+        return {}
+    if checkout.parent.name == ".worktrees" and checkout.parent.parent.name == "build":
+        base_checkout = checkout.parent.parent.parent
+        return {} if base_checkout == projects_dir / repo else {repo: base_checkout}
+    return {repo: checkout}
+
+
 def main() -> int:
     """Execute the issue planning workflow via the pipeline (planning scope).
 
@@ -263,6 +292,8 @@ def main() -> int:
     issues = list(dict.fromkeys(issues))
     log.info("Issues to plan: %s", issues)
 
+    projects_dir = resolve_projects_dir(args.projects_dir, prefer_cwd_parent=True)
+    caller_roots = _caller_checkout_roots(args, org, repo, projects_dir)
     config = PipelineConfig(
         org=org,
         repos=[repo],
@@ -294,7 +325,9 @@ def main() -> int:
         reviewer_timeout=args.reviewer_timeout,
         no_advise=args.no_advise,
         enable_learn=not args.no_learn,
-        projects_dir=resolve_projects_dir(args.projects_dir, prefer_cwd_parent=True),
+        projects_dir=projects_dir,
+        repo_roots=caller_roots,
+        repo_state_roots=dict(caller_roots),
         rate_guard_enabled=args.rate_guard_enabled,
         rate_guard_threshold=args.rate_guard_threshold,
         gh_timeout=args.gh_timeout,

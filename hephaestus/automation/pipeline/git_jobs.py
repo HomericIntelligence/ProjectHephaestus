@@ -15,6 +15,7 @@ from hephaestus.automation.worktree_snapshot import (
 GIT_OPS: frozenset[str] = frozenset(
     {
         "clone",
+        "prepare_intake",
         "sync_checkout",
         "verify_issue_wave_ancestry",
         "create_worktree",

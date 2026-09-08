@@ -185,6 +185,22 @@ def test_main_builds_planning_scope_and_dispatches() -> None:
     assert config.scope.stages == frozenset({StageName.PLANNING, StageName.PLAN_REVIEW})
 
 
+def test_main_passes_a_noncanonical_caller_checkout_to_pipeline(
+    tmp_path: Path,
+) -> None:
+    """A planner launched from a linked or renamed checkout preserves its root."""
+    caller = tmp_path / "caller-checkout"
+    caller.mkdir()
+    with (
+        patch.object(planner_mod, "_resolve_repo", return_value=("acme", "widget")),
+        patch.object(planner_mod, "get_repo_root", return_value=caller),
+        patch.object(planner_mod, "get_repo_info", return_value=("acme", "widget")),
+    ):
+        captured = _run_main_capturing_config(["--issues", "123", "--dry-run"])
+
+    assert captured["config"].repo_roots == {"widget": caller}
+
+
 def test_main_maps_parallel_to_worker_pool() -> None:
     """--parallel maps onto the pipeline worker-pool size."""
     captured = _run_main_capturing_config(["--issues", "5", "--parallel", "7", "--dry-run"])

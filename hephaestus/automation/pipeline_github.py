@@ -72,7 +72,6 @@ if _typing.TYPE_CHECKING:
 else:
     from .pipeline_github_transport import *
 from hephaestus.automation.github_api import gh_call
-from hephaestus.automation.state_labels import STATE_IMPLEMENTATION_BLOCKED
 from hephaestus.utils.file_lock import file_lock
 
 from ._review_utils import (

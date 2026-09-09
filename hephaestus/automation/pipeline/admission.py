@@ -6,6 +6,8 @@ Part of epic #1809. Provides:
   (:func:`_select_non_overlapping`, re-housed from ``loop_runner.py``, #1623)
 - Dependency-based execution ordering via
   ``DependencyResolver.topological_sort`` (:func:`order_for_implementation`)
+- Live dependency checks before implementation dispatch
+  (:func:`dependency_block_reason`)
 - Closed-issue filtering for explicit ``--issues`` lists
   (:func:`_filter_open_issues`, #1576)
 
@@ -25,7 +27,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from hephaestus.automation.comment_identity import has_marker_alias
 from hephaestus.automation.dependency_resolver import CyclicDependencyError, DependencyResolver
@@ -33,6 +35,7 @@ from hephaestus.automation.github_api import (
     fetch_issue_comments_metadata,
     gh_current_login,
     is_issue_closed,
+    parse_issue_dependencies as parse_issue_dependencies,
     prefetch_issue_states,
 )
 from hephaestus.automation.models import IssueInfo
@@ -48,11 +51,22 @@ from hephaestus.automation.review_journal import (
     discover_plan_from_comments,
     normalize_issue_comments,
 )
+from hephaestus.automation.state_labels import (
+    STATE_BLOCKED,
+    STATE_IMPLEMENTATION_NO_GO,
+    STATE_PLAN_BLOCKED,
+    STATE_PLAN_NO_GO,
+    STATE_SKIP,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 LOG = logging.getLogger(__name__)
+
+_UNSATISFIED_DEPENDENCY_LABELS = frozenset(
+    {STATE_BLOCKED, STATE_IMPLEMENTATION_NO_GO, STATE_PLAN_BLOCKED, STATE_PLAN_NO_GO, STATE_SKIP}
+)
 
 # Backticked repo-relative path inside a plan's Files sections, e.g.
 # `hephaestus/automation/pipeline/stages/pr_review.py`. Requires a slash so bare tokens
@@ -258,11 +272,10 @@ def order_for_implementation(issue_infos: Sequence[IssueInfo]) -> list[int]:
 
     Topological-order gating via ``DependencyResolver.topological_sort``:
     builds a graph over exactly the given issues, keeping only dependency
-    edges whose target is ALSO in the set — an edge to an issue outside the
-    implementation queue cannot be ordered here and is dropped (fail-open;
-    that dependency's own classification decides when it runs). Kahn's
-    algorithm preserves the input order among issues at equal depth, so the
-    result is deterministic.
+    edges whose target is also in the set. An edge to an issue outside the
+    implementation queue cannot be ordered here; :func:`dependency_block_reason`
+    checks that dependency before dispatch. Kahn's algorithm preserves the
+    input order among issues at equal depth, so the result is deterministic.
 
     On a dependency cycle the original order is returned unchanged with a
     warning (fail-open: never wedge the queue over bad metadata).
@@ -299,6 +312,60 @@ def order_for_implementation(issue_infos: Sequence[IssueInfo]) -> list[int]:
             sorted(in_set),
         )
         return [info.number for info in issue_infos]
+
+
+def dependency_block_reason(dependencies: Sequence[int], github: Any) -> str | None:
+    """Return a reason when a live dependency is not complete.
+
+    The implementation queue can contain an issue without its dependency. The
+    topological order cannot prove that dependency is complete, so this helper
+    reads the current issue and pull-request state before dispatch.
+
+    Args:
+        dependencies: Issue numbers required by the current item.
+        github: Repo-scoped GitHub read accessor.
+
+    Returns:
+        An actionable reason when a dependency is pending or failed, otherwise
+        ``None``.
+
+    """
+    for dependency in dependencies:
+        try:
+            issue = github.gh_issue_json(dependency)
+            if not isinstance(issue, dict):
+                raise TypeError("issue snapshot is not an object")
+            state = issue.get("state")
+            if not isinstance(state, str) or state.upper() not in {"OPEN", "CLOSED"}:
+                raise ValueError("issue snapshot state is invalid")
+            raw_labels = issue.get("labels")
+            if not isinstance(raw_labels, list) or any(
+                not isinstance(label, dict) or not isinstance(label.get("name"), str)
+                for label in raw_labels
+            ):
+                raise ValueError("issue snapshot labels are invalid")
+            labels = {label["name"] for label in raw_labels if label["name"]}
+            failed_labels = _UNSATISFIED_DEPENDENCY_LABELS.intersection(labels)
+            if failed_labels:
+                label = sorted(failed_labels)[0]
+                return f"dependency #{dependency} is not complete ({label})"
+            open_pr = github.find_pr_for_issue(dependency)
+            if open_pr is not None:
+                _has_go, has_no_go = github.pr_has_implementation_state_label(open_pr)
+                if has_no_go:
+                    return (
+                        f"dependency #{dependency} is not complete ({STATE_IMPLEMENTATION_NO_GO})"
+                    )
+                return f"dependency #{dependency} has an open pull request"
+            merged_pr = github.find_merged_pr_for_issue(dependency)
+        except Exception as exc:
+            LOG.warning("dependency #%s state could not be read: %s", dependency, exc)
+            return f"dependency #{dependency} state could not be verified"
+
+        if state.upper() == "CLOSED" or merged_pr is not None:
+            continue
+        return f"dependency #{dependency} is still open"
+    return None
 
 
 def _filter_open_issues(repo: tuple[str, str], issue_numbers: list[int]) -> list[int]:

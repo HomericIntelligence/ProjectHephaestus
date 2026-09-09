@@ -640,13 +640,7 @@ class CoordinatorRuntime(PendingHandoffCoordinator, _CoordinatorHost):
         )
 
     def _idle_wait(self) -> None:
-        """Block on the completion queue (the loop's only sleep).
-
-        Also breaks a theoretical no-progress stall: if a full tick made no
-        progress with nothing in flight and no timers pending, force-run the
-        most-downstream queued item ignoring admission (liveness guarantee —
-        admission can only defer while something else is running or parked).
-        """
+        """Block on completion and recover from idle stalls."""
         if self._progress:
             self._progress = False
             self._stalled_ticks = 0
@@ -666,21 +660,26 @@ class CoordinatorRuntime(PendingHandoffCoordinator, _CoordinatorHost):
             "force-run requires no in-flight work"
         )
         self._stalled_ticks = 0
+        implementation_stage = ct.StageName.IMPLEMENTATION
+        dependency_blocked = self._implementation_dependency_blocked
         for stage_name in ct._DRAIN_ORDER:
             q = self.queues[stage_name]
-            if len(q):
-                item = self._claim_item(stage_name)
-                if item is None:  # pragma: no cover - len/claim are coordinator-thread atomic
-                    continue
-                logger.error(
-                    "pipeline stalled with no in-flight work; "
-                    "force-running %s item %s; inflight_per_repo=%s",
-                    stage_name.value,
-                    self._item_key(item),
-                    dict(self.inflight_per_repo),
-                )
-                self._run_item(item)
-                return
+            if not len(q):
+                continue
+            if stage_name is implementation_stage and dependency_blocked(q.snapshot()[0]):
+                continue
+            item = self._claim_item(stage_name)
+            if item is None:  # pragma: no cover - len/claim are coordinator-thread atomic
+                continue
+            logger.error(
+                "pipeline stalled with no in-flight work; "
+                "force-running %s item %s; inflight_per_repo=%s",
+                stage_name.value,
+                self._item_key(item),
+                dict(self.inflight_per_repo),
+            )
+            self._run_item(item)
+            return
 
     def _timer_park(self, item: ct.WorkItem, delay_s: float) -> None:
         """Park *item* on the timer heap for ``delay_s`` seconds."""

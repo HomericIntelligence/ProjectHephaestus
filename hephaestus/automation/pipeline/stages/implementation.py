@@ -147,7 +147,7 @@ from hephaestus.automation.state_labels import (
 from hephaestus.automation.worktree_manager import BRANCH_WORKTREE_OWNED
 from hephaestus.prompts import PromptCatalog
 
-from ..admission import parse_publication_scope_files
+from ..admission import dependency_block_reason, parse_publication_scope_files
 from ..coordinator_sessions import agent_session_lifecycle
 from ..diagnostics import redact_diagnostic_text
 from ..git_jobs import (
@@ -521,6 +521,21 @@ def _commit_issue_metadata(item: WorkItem) -> tuple[str, str] | None:
     if not isinstance(title, str) or not title.strip() or not isinstance(body, str):
         return None
     return title, body
+
+
+def _item_dependency_block_reason(item: WorkItem, ctx: StageContext) -> str | None:
+    """Return a live dependency hold reason for an issue work item."""
+    raw_dependencies = item.payload.get("dependencies", ())
+    if raw_dependencies is None:
+        return None
+    if not isinstance(raw_dependencies, (list, tuple, set, frozenset)):
+        return "dependency metadata is invalid"
+    dependencies: list[int] = []
+    for dependency in raw_dependencies:
+        if isinstance(dependency, bool) or not isinstance(dependency, int) or dependency <= 0:
+            return "dependency metadata is invalid"
+        dependencies.append(dependency)
+    return dependency_block_reason(dependencies, ctx.github)
 
 
 #: Max CONSECUTIVE transient git failures (worktree creation / commit+push)
@@ -4484,6 +4499,12 @@ class ImplementationStage(Stage):
                 "issue is blocked pending external intervention",
             )
 
+        dependency_reason = _item_dependency_block_reason(item, ctx)
+        if dependency_reason is not None:
+            item.payload["dependency_blocked_reason"] = dependency_reason
+            return StageOutcome(Disposition.RETRY, dependency_reason)
+        item.payload.pop("dependency_blocked_reason", None)
+
         # Pop the fail-back marker unconditionally: on the fresh-implement
         # path below the budget is consumed by the implement job itself, so
         # the marker must never survive into a later GATE pass.
@@ -4670,6 +4691,11 @@ class ImplementationStage(Stage):
         if item.payload.get("no_commits"):
             # Preserve the external ownership gate for retained PRs. An empty
             # implementation does not prove that the issue is complete.
+            dependency_reason = _item_dependency_block_reason(item, ctx)
+            if dependency_reason is not None:
+                item.payload["dependency_blocked_reason"] = dependency_reason
+                return StageOutcome(Disposition.RETRY, dependency_reason)
+            item.payload.pop("dependency_blocked_reason", None)
             if item.pr is not None:
                 external_arm = self._external_arm_gate(item.pr, ctx)
                 if external_arm is not None:

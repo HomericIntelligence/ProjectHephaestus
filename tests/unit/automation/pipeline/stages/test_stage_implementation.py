@@ -6066,6 +6066,46 @@ class TestCommitPushAndPrCreate:
         )
         assert github.mutation_log == []
 
+    def test_dependency_blocked_no_commits_remains_resumable(
+        self, make_ctx: Any, make_work_item: Any
+    ) -> None:
+        """An unmet dependency keeps a no-commit result out of state:skip."""
+        stage = ImplementationStage()
+        github = FakeStageGitHub(issue_state="OPEN")
+        ctx = make_ctx(github=github)
+        item = make_work_item(
+            issue=9,
+            state="PR_CREATE",
+            payload={"no_commits": True, "dependencies": [10]},
+        )
+
+        result = stage.step(item, ctx)
+
+        assert result == StageOutcome(
+            Disposition.RETRY,
+            "dependency #10 is still open",
+        )
+        assert item.payload["no_commits"] is True
+        assert github.mutation_log == []
+        assert STATE_SKIP not in github.labels.get(9, set())
+
+    def test_skip_label_write_is_non_fatal(self, make_ctx: Any, make_work_item: Any) -> None:
+        """A failing state:skip write never turns the SKIP into a crash."""
+
+        class AddFailsGitHub(FakeStageGitHub):
+            def add_labels(self, issue_number: int, labels: list[str]) -> None:
+                raise RuntimeError("gh add failed")
+
+        stage = ImplementationStage()
+        ctx = make_ctx(github=AddFailsGitHub())
+        item = make_work_item(issue=9, state="PR_CREATE")
+        item.payload["no_commits"] = True
+
+        result = stage.step(item, ctx)  # must not raise
+
+        assert isinstance(result, StageOutcome)
+        assert result.disposition == Disposition.SKIP
+
     def test_push_failure_retries_without_pr(self, make_ctx: Any, make_work_item: Any) -> None:
         """A non-"no commits" push failure RETRYs with no PR created."""
         stage = ImplementationStage()

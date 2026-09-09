@@ -1341,12 +1341,19 @@ Architectural contract:
 - The implementation stage rebases and lease-publishes the writer branch before
   review; a rebase is never performed by a reviewer checkout.
 - When that host rebase conflicts, it remains paused under the captured base and
-  PR-head lease. A separately budgeted edit-only agent may modify only the
-  host-reported conflict paths and has no shell/Git tool. The host rejects a
-  no-op, unresolved markers, index mutation, remote-head drift, missing captured
-  base ancestry, or unsigned/non-DCO replayed commits. Only the host stages the
-  resolution, continues the policy-signing rebase, and exact-lease-publishes the
-  rewritten head; the result always returns to a fresh PR review.
+  PR-head lease. A dedicated prompt gives a separately budgeted edit-only agent
+  the allowed paths, bounded current conflict hunks, and the last host diagnosis.
+  The agent has no shell or Git tool. A successful process exit enters a
+  read-only host inspection state. The host classifies the result as no edit,
+  residual markers, an out-of-scope edit, or resolved content. A retryable result
+  resumes the same provider session with its classification and current hunk. A
+  missing retry session or an out-of-scope edit fails closed. The host also
+  rejects index mutation, remote-head drift, missing captured base ancestry, and
+  unsigned or non-DCO replayed commits. Only the host stages the resolution,
+  continues the policy-signing rebase, and exact-lease-publishes the rewritten
+  head. The result always returns to a fresh PR review. The event log keeps only
+  the bounded redacted summary and classification; it is not continuation
+  authority.
 - A post-push implementation-reply handoff is an exact, bounded host-only
   retry of one immutable response batch. A failed or partial PR-state read,
   including a per-thread read that temporarily lags the just-pushed head,

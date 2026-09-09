@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from hephaestus.agents.workspace import SourceLane
 from hephaestus.automation.arming_state import LearningJournalStore
 from hephaestus.automation.pipeline.athena_skill_jobs import (
     AthenaSkillJob,
@@ -26,11 +28,34 @@ from hephaestus.automation.pipeline.work_item import (
     LearningIntentKind,
 )
 from hephaestus.automation.review_journal import plan_fingerprint, render_current_plan
+from hephaestus.automation.source_worktree import SourceWorkspaceManager
 from hephaestus.automation.state_labels import STATE_PLAN_GO
 from tests.unit.automation.pipeline.stages.conftest import FakeStageGitHub
 
 _APPROVED_PLAN = "Use the approved plan."
 _APPROVED_FINGERPRINT = plan_fingerprint(_APPROVED_PLAN)
+
+
+def _git(path: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _repository(tmp_path: Path) -> tuple[Path, str]:
+    repo = tmp_path / "repository"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "Test User")
+    (repo / "tracked.txt").write_text("one\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-m", "initial")
+    return repo, _git(repo, "rev-parse", "HEAD")
 
 
 def _approved_github(issue: int = 2705, revision: int = 8) -> FakeStageGitHub:
@@ -199,7 +224,7 @@ def test_restored_direct_scope_learning_uses_captured_bootstrap_revision(
 ) -> None:
     """A restored direct item retains enough revision evidence for learning."""
     revision = "a" * 40
-    prepared: list[str] = []
+    prepared: list[tuple[str, SourceLane, str | None]] = []
 
     class SourceWorkspaces:
         def prepare(
@@ -210,8 +235,7 @@ def test_restored_direct_scope_learning_uses_captured_bootstrap_revision(
             *,
             branch: str | None = None,
         ) -> Any:
-            del branch
-            prepared.append(target)
+            prepared.append((target, _lane, branch))
             return SimpleNamespace(cwd=tmp_path, revision=target)
 
     journal = LearningJournalStore(lambda: tmp_path)
@@ -256,7 +280,57 @@ def test_restored_direct_scope_learning_uses_captured_bootstrap_revision(
     request = stage.step(item, ctx)
 
     assert isinstance(request, JobRequest)
-    assert prepared == [revision]
+    assert prepared == [(revision, SourceLane.REVIEW, None)]
+
+
+def test_approved_plan_learning_releases_direct_writer_lane(
+    tmp_path: Path, make_ctx: Any, make_work_item: Any
+) -> None:
+    """Learning preparation leaves the direct writer path available."""
+    repo, revision = _repository(tmp_path)
+    worktrees = tmp_path / "worktrees"
+    source_workspaces = SourceWorkspaceManager(
+        repo,
+        repository="test-org/test-repo",
+        base_dir=worktrees,
+    )
+    journal = LearningJournalStore(lambda: tmp_path / "learning")
+    ctx = make_ctx(
+        learning_journal=journal,
+        github=_approved_github(),
+        paths=SimpleNamespace(
+            repo_root=repo,
+            worktree=repo,
+            source_workspaces=source_workspaces,
+        ),
+    )
+    item = make_work_item(issue=2705, state="ENTER")
+    item.branch = "2705-auto-impl"
+    item.payload["_direct_scope_base_sha"] = revision
+    intent = LearningIntent.approved_plan(
+        repo=item.repo,
+        issue=2705,
+        plan_revision=8,
+        plan_fingerprint=_APPROVED_FINGERPRINT,
+    )
+    item.learning_intents.append(intent)
+    item.learning_resume_stage = StageName.IMPLEMENTATION
+
+    stage = LearningStage()
+    stage.on_enter(item, ctx)
+    item.state = "CLAIM"
+    request = stage.step(item, ctx)
+
+    assert isinstance(request, JobRequest)
+    workspace = request.job.request.workspace
+    assert workspace is not None
+    assert workspace.lane is SourceLane.REVIEW
+    assert workspace.cwd == source_workspaces.path_for(2705, SourceLane.REVIEW)
+
+    stage.on_job_done(item, JobResult(ok=False, error="learning failed"), ctx)
+
+    assert not workspace.cwd.exists()
+    assert not source_workspaces.path_for(2705, SourceLane.IMPLEMENTATION).exists()
 
 
 def _claimed_learning(

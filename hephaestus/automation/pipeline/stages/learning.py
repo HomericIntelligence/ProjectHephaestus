@@ -26,6 +26,7 @@ StepResult = Continue | JobRequest | StageOutcome
 ENTER = "ENTER"
 CLAIM = "CLAIM"
 RESULT = "RESULT"
+_LEARNING_WORKSPACE_KEY = "_learning_source_workspace"
 
 
 class LearningStage:
@@ -100,10 +101,11 @@ class LearningStage:
         workspace = source_workspace_binding(
             item,
             ctx,
-            SourceLane.IMPLEMENTATION,
+            SourceLane.REVIEW,
             revision=revision or None,
-            branch=item.branch or None,
         )
+        if workspace is not None:
+            item.payload[_LEARNING_WORKSPACE_KEY] = True
         return JobRequest(
             AthenaSkillJob(
                 request=AthenaSkillRequest(
@@ -141,7 +143,12 @@ class LearningStage:
             and result.value.ok
             and valid_delivery_receipt(result.value.delivery_receipt)
         )
+        workspace_released = self._release_workspace(item, ctx)
+        if not workspace_released:
+            succeeded = False
         error = "" if succeeded else (result.error or "invalid Athena learn result")
+        if not workspace_released:
+            error = "learning_workspace_cleanup_failed"
         receipt = result.value.delivery_receipt if succeeded else None
         journal = self._journal(ctx)
         record = journal.load(intent.key)
@@ -168,7 +175,27 @@ class LearningStage:
         """Return a claim to pending when the host provably did not run."""
         intent = self._locally_claimed_intent(item)
         if intent is not None:
-            self._journal(ctx).retry(intent.key, error="interrupted_before_start")
+            if self._release_workspace(item, ctx):
+                self._journal(ctx).retry(intent.key, error="interrupted_before_start")
+            else:
+                self._journal(ctx).retry(intent.key, error="learning_workspace_cleanup_failed")
+
+    @staticmethod
+    def _release_workspace(item: WorkItem, ctx: Any) -> bool:
+        """Release the auxiliary source lane after the host call ends."""
+        prepared = item.payload.pop(_LEARNING_WORKSPACE_KEY, False)
+        if prepared is not True:
+            return True
+        item_number = item.issue or item.pr
+        manager = getattr(ctx.paths, "source_workspaces", None)
+        cleanup = getattr(manager, "cleanup", None)
+        if not isinstance(item_number, int) or not callable(cleanup):
+            return True
+        try:
+            cleanup(item_number, SourceLane.REVIEW)
+        except (OSError, RuntimeError):
+            return False
+        return True
 
     @staticmethod
     def _journal(ctx: Any) -> LearningJournalStore:

@@ -177,10 +177,13 @@ def _check_files(file_paths: list[Path]) -> _BatchResult:
 
     files_to_check: list[Path] = []
     for path in file_paths:
-        if path.is_dir():
-            files_to_check.extend(path.rglob("*.py"))
-        elif path.suffix == ".py":
-            files_to_check.append(path)
+        try:
+            if path.is_dir():
+                files_to_check.extend(path.rglob("*.py"))
+            elif path.suffix == ".py":
+                files_to_check.append(path)
+        except OSError as error:
+            result.read_errors.append(f"Could not read {path}: {error}")
 
     for file_path in files_to_check:
         scan = _scan_file(file_path)

@@ -287,6 +287,60 @@ def test_read_diagnostics_json_consistency(
         assert cause in payload["read_errors"][0]
 
 
+@pytest.mark.parametrize("error", [PermissionError("search denied"), OSError("stat failed")])
+@pytest.mark.parametrize("with_violation", [False, True])
+def test_selection_error_diagnostics_consistency(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error: OSError,
+    with_violation: bool,
+) -> None:
+    """Report selection errors in both formats and scan later inputs."""
+    locked = tmp_path / "locked" / "input.py"
+    locked.parent.mkdir()
+    locked.write_text("x = 1\n", encoding="utf-8")
+    later = tmp_path / "later.py"
+    later.write_text("Result = DomainResult\n" if with_violation else "x = 1\n", encoding="utf-8")
+    paths = [locked, later]
+    real_is_dir = Path.is_dir
+
+    def controlled_is_dir(path: Path) -> bool:
+        if path == locked:
+            raise error
+        return real_is_dir(path)
+
+    with patch.object(Path, "is_dir", controlled_is_dir):
+        code, errors = check_files(paths)
+        monkeypatch.setattr("sys.argv", ["check-type-aliases", *map(str, paths)])
+        text_code = main()
+        text_output = capsys.readouterr()
+        monkeypatch.setattr(
+            "sys.argv", ["check-type-aliases", "--json", "--verbose", *map(str, paths)]
+        )
+        json_code = main()
+    json_output = capsys.readouterr()
+    payload = json.loads(json_output.out)
+    assert code == text_code == json_code == payload["exit_code"] == 1
+    assert text_output.out == json_output.err == ""
+    assert payload["paths"] == list(map(str, paths))
+    assert payload["passed"] is False
+    assert payload["scan_complete"] is False
+    assert payload["read_error_count"] == len(payload["read_errors"]) == 1
+    assert str(locked) in payload["read_errors"][0]
+    assert str(error) in payload["read_errors"][0]
+    assert payload["violation_count"] == len(payload["violations"]) == int(with_violation)
+    assert errors == payload["violations"] + payload["read_errors"]
+    assert all(item in text_output.err for item in errors)
+    assert "Scan incomplete: 1 read error(s)" in text_output.err
+    if with_violation:
+        assert str(later) in payload["violations"][0]
+        assert "DomainResult" in payload["violations"][0]
+        assert "Found 1 type alias shadowing violation(s)" in text_output.err
+    else:
+        assert "violation(s)" not in text_output.err
+
+
 @pytest.mark.parametrize(
     "error",
     [PermissionError("read denied"), UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte")],

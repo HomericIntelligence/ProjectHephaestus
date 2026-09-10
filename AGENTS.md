@@ -482,9 +482,19 @@ All utility functions must include comprehensive test coverage:
 4. **Cross-platform**: Ensure compatibility across supported environments
 
 Before an agent creates a pull request, it MUST run each new or changed test.
-The command MUST collect those tests and report success. Do not require a full
-local pytest suite before PR creation. Required CI/CD runs the full unit and
-integration suites and applies the coverage gate.
+The command MUST collect those tests and report success.
+
+For a manual contribution, finish the implementation and rebase the branch on
+the current `origin/main`. If the rebase or conflict resolution changes a file,
+run each affected test again. Run the full locked local suite after this final
+rebase and before the push. Test evidence must apply to the final pushed head.
+Run the suite again only if the branch head changes. Keep environment setup
+checks separate from change verification. Required CI/CD supplies separate
+head-bound evidence.
+
+The automation loop uses the rebase policy in ADR-0047. It prepares the branch
+before implementation and does not do a routine final rebase. An operator can
+request the explicit `--rebase` path.
 
 ```bash
 # Run all unit tests
@@ -495,6 +505,9 @@ uv run pytest tests/unit/utils/test_general_utils.py -v
 
 # Run with coverage
 uv run pytest tests/unit --cov=hephaestus --cov-report=html
+
+# Run the full locked local suite after the last rebase
+uv run --locked pytest tests/unit tests/integration --override-ini="addopts=" -v --strict-markers -m "not performance and not contract and not artifact and not codex_release_artifact"
 ```
 
 ## Environment Setup
@@ -540,7 +553,8 @@ uv run mypy hephaestus/ scripts/ tests/
 ### Pre-commit Hooks
 
 Pre-commit hooks automatically check code quality. They MUST NOT run pytest.
-Required CI/CD owns full-suite test execution.
+Run the required full locked local suite separately after the last rebase.
+Required CI/CD supplies separate test evidence for the pushed head.
 
 ```bash
 # Install pre-commit hooks (one-time setup)

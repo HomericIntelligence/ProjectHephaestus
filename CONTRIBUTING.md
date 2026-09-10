@@ -209,6 +209,24 @@ Use the paths for your changed tests. `just test` runs the fast selection used b
 CI. Nightly CI runs the remaining functional, package, shell, and coverage
 tests.
 
+For a manual contribution, finish the implementation and rebase the branch on
+the current `origin/main`. If the rebase or conflict resolution changes a file,
+run each affected test again. Run the full locked local suite after this final
+rebase and before you push:
+
+```bash
+uv run --locked pytest tests/unit tests/integration --override-ini="addopts=" -v --strict-markers -m "not performance and not contract and not artifact and not codex_release_artifact"
+```
+
+The test result must apply to the final pushed head. Run this suite again only
+if the branch head changes. The checks in [Your first day](#your-first-day)
+verify the development environment. They do not verify a later branch change.
+
+The automation loop uses the rebase policy in
+[ADR-0047](docs/adr/0047-automation-rebase-triggers.md). It prepares the branch
+before implementation and does not do a routine final rebase. An operator can
+request the explicit `--rebase` path.
+
 ### Test environment requirements
 
 The unit-test suite executes a small number of real subprocesses and therefore
